@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright 2026 devcontainer project authors.
+// Copyright 2026 devcontainer and container-engine-api project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,15 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import DevContainerModel
-import DevContainerRuntimeSPI
-@testable import DevContainerService
+import ContainerEngineWire
+@testable import ContainerUnixHTTPServer
 import Foundation
 import Testing
 
 @Test
-func `runtime input pump preserves bytes and EOF order`() async {
-    let session = RecordingProcessSession()
-    let pump = OrderedRuntimeInputPump(session: session)
+func `Docker input pump preserves bytes and EOF order`() async {
+    let session = RecordingHijackSession()
+    let pump = OrderedDockerInputPump(session: session)
 
     for value in UInt8(1) ... UInt8(8) {
         pump.write(Data([value]))
@@ -35,9 +34,9 @@ func `runtime input pump preserves bytes and EOF order`() async {
 }
 
 @Test
-func `runtime input pump ignores writes following EOF`() async {
-    let session = RecordingProcessSession()
-    let pump = OrderedRuntimeInputPump(session: session)
+func `Docker input pump ignores writes following EOF`() async {
+    let session = RecordingHijackSession()
+    let pump = OrderedDockerInputPump(session: session)
 
     pump.write(Data([42]))
     pump.close()
@@ -47,13 +46,13 @@ func `runtime input pump ignores writes following EOF`() async {
     #expect(session.operations == [.data(42), .close])
 }
 
-private final class RecordingProcessSession: RuntimeProcessSession, @unchecked Sendable {
+private final class RecordingHijackSession: DockerHijackSession, @unchecked Sendable {
     enum Operation: Equatable {
         case data(UInt8)
         case close
     }
 
-    let frames = AsyncThrowingStream<RuntimeIOFrame, any Error> { continuation in
+    let frames = AsyncThrowingStream<DockerStreamFrame, any Error> { continuation in
         continuation.finish()
     }
 
@@ -79,8 +78,6 @@ private final class RecordingProcessSession: RuntimeProcessSession, @unchecked S
             recorded.append(.close)
         }
     }
-
-    func resize(width _: UInt16, height _: UInt16) {}
 
     func wait() async throws -> Int32 {
         0

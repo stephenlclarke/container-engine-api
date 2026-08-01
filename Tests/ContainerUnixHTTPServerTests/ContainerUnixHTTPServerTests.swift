@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright 2026 devcontainer project authors.
+// Copyright 2026 devcontainer and container-engine-api project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,109 +14,81 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import DevContainerDockerAPI
-import DevContainerModel
-import DevContainerRuntimeSPI
-@testable import DevContainerService
-import DevContainerTestSupport
+import ContainerEngineWire
+import ContainerUnixHTTPServer
+import Darwin
 import Foundation
 import Logging
 import Testing
 
 @Suite(.serialized)
-struct EngineServerTests {
+struct ContainerUnixHTTPServerTests {
     @Test
-    func `server exposes byte stream and hijacked Docker responses`() async throws {
+    func `server exposes bytes streams and a half-close safe hijack`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
-        let runtime = InMemoryRuntime()
-        await runtime.seedImage(
-            ImageSnapshot(
-                id: "sha256:fixture",
-                references: ["alpine:3.22"],
-                createdAt: Date(timeIntervalSince1970: 1),
-                size: 42
-            )
-        )
-        let server = fixture.server(runtime: runtime)
-        try await server.start()
-        do {
-            try exerciseServer(fixture)
-        } catch {
-            try? await server.shutdown()
-            throw error
-        }
-        for _ in 0 ..< 100 where server.activeConnectionCount != 0 {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(server.activeConnectionCount == 0)
-        try await server.shutdown()
-
-        #expect(!FileManager.default.fileExists(atPath: fixture.socketPath))
-    }
-
-    @Test
-    func `server forwards an early client half close after hijack`() async throws {
-        let fixture = try ServerFixture()
-        defer { fixture.cleanup() }
-        let session = EOFProcessSession()
-        let runtime = InMemoryRuntime(execSession: session)
-        await runtime.seedImage(
-            ImageSnapshot(
-                id: "sha256:fixture",
-                references: ["alpine:3.22"],
-                createdAt: Date(timeIntervalSince1970: 1),
-                size: 42
-            )
-        )
-        let server = fixture.server(runtime: runtime)
+        let session = EchoHijackSession()
+        let server = fixture.server(responder: FixtureResponder(session: session))
         try await server.start()
 
         do {
-            let container = try fixture.createRunningContainer()
-            let exec = try fixture.createExec(container: container)
+            let ping = try fixture.curl("/_ping")
+            #expect(ping.status == 200)
+            #expect(ping.body == "OK")
+
+            let streamed = try fixture.curl("/stream")
+            #expect(streamed.status == 200)
+            #expect(streamed.body == "first-second")
+
+            let echo = try fixture.curl(
+                "/echo",
+                method: "POST",
+                body: "request-body"
+            )
+            #expect(echo.status == 200)
+            #expect(echo.body == "request-body")
+
+            let unsupported = try fixture.curl("/_ping", method: "OPTIONS")
+            #expect(unsupported.status == 405)
+            #expect(unsupported.body.contains("unsupported HTTP method"))
+
             let payload = Data("input-before-upgrade".utf8)
-            let process = try fixture.startEarlyHalfClose(
-                exec: exec,
-                payload: payload
-            )
-            defer {
-                if process.isRunning {
-                    process.terminate()
-                    process.waitUntilExit()
-                }
-            }
-
+            let process = try fixture.startEarlyHalfClose(payload: payload)
+            defer { stop(process) }
             for _ in 0 ..< 100 where !session.inputClosed {
                 try await Task.sleep(for: .milliseconds(10))
             }
             #expect(session.inputClosed)
             #expect(session.input == payload)
+
+            for _ in 0 ..< 100 where server.activeConnectionCount != 0 {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(server.activeConnectionCount == 0)
         } catch {
             try? await server.shutdown()
             throw error
         }
 
         try await server.shutdown()
+        #expect(!FileManager.default.fileExists(atPath: fixture.socketPath))
     }
 
     @Test
-    func `server serializes pipelined HTTP responses`() async throws {
+    func `server serializes pipelined responses`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
-        let server = fixture.server(runtime: InMemoryRuntime())
+        let server = fixture.server(responder: FixtureResponder())
         try await server.start()
 
         do {
             let response = try fixture.pipelined(
-                "GET /v1.53/version HTTP/1.1\r\n"
-                    + "Host: localhost\r\n\r\n"
-                    + "GET /_ping HTTP/1.1\r\n"
-                    + "Host: localhost\r\n\r\n"
+                "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                    + "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n"
             )
-            let version = try #require(response.range(of: "\"ApiVersion\""))
-            let ping = try #require(response.range(of: "\r\n\r\nOK"))
-            #expect(version.lowerBound < ping.lowerBound)
+            let slow = try #require(response.range(of: "slow-response"))
+            let fast = try #require(response.range(of: "fast-response"))
+            #expect(slow.lowerBound < fast.lowerBound)
             #expect(response.components(separatedBy: "HTTP/1.1 200 OK").count == 3)
         } catch {
             try? await server.shutdown()
@@ -130,20 +102,20 @@ struct EngineServerTests {
     func `server bounds request and pipeline buffering`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
-        let limits = EngineServerLimits(
+        let limits = ContainerUnixHTTPServerLimits(
             maximumRequestBodyBytes: 64,
             maximumBufferedRequestBodyBytes: 64,
             maximumPendingRequests: 1
         )
         let server = fixture.server(
-            runtime: InMemoryRuntime(),
+            responder: FixtureResponder(),
             limits: limits
         )
         try await server.start()
 
         do {
             let oversized = try fixture.curl(
-                "/_ping",
+                "/echo",
                 method: "POST",
                 body: String(repeating: "x", count: 65)
             )
@@ -151,77 +123,29 @@ struct EngineServerTests {
 
             let body = String(repeating: "x", count: 40)
             let boundedBodies = try fixture.pipelined(
-                "POST /_ping HTTP/1.1\r\n"
+                "POST /hold HTTP/1.1\r\n"
                     + "Host: localhost\r\n"
                     + "Content-Length: \(body.utf8.count)\r\n\r\n"
                     + body
-                    + "POST /_ping HTTP/1.1\r\n"
+                    + "POST /hold HTTP/1.1\r\n"
                     + "Host: localhost\r\n"
                     + "Content-Length: \(body.utf8.count)\r\n\r\n"
                     + body
             )
-            #expect(
-                boundedBodies.components(separatedBy: "HTTP/1.1").count < 3
-            )
+            #expect(boundedBodies.components(separatedBy: "HTTP/1.1").count < 3)
 
             let boundedQueue = try fixture.pipelined(
-                "GET /_ping HTTP/1.1\r\nHost: localhost\r\n\r\n"
-                    + "GET /_ping HTTP/1.1\r\nHost: localhost\r\n\r\n"
-                    + "GET /_ping HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                "GET /hold HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                    + "GET /hold HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                    + "GET /hold HTTP/1.1\r\nHost: localhost\r\n\r\n"
             )
-            #expect(
-                boundedQueue.components(separatedBy: "HTTP/1.1").count < 4
-            )
+            #expect(boundedQueue.components(separatedBy: "HTTP/1.1").count < 4)
         } catch {
             try? await server.shutdown()
             throw error
         }
 
         try await server.shutdown()
-    }
-
-    private func exerciseServer(_ fixture: ServerFixture) throws {
-        let ping = try fixture.curl("/_ping")
-        #expect(ping.status == 200)
-        #expect(ping.body == "OK")
-
-        let version = try fixture.curl("/v1.53/version")
-        #expect(version.status == 200)
-        #expect(version.body.contains("\"ApiVersion\":\"1.53\""))
-
-        let create = try fixture.curl(
-            "/v1.53/containers/create?name=service-fixture",
-            method: "POST",
-            body: """
-            {"Image":"alpine:3.22","Cmd":["printf","hello"]}
-            """
-        )
-        #expect(create.status == 201)
-        let created = try #require(
-            JSONSerialization.jsonObject(
-                with: Data(create.body.utf8)
-            ) as? [String: Any]
-        )
-        let identifier = try #require(created["Id"] as? String)
-
-        #expect(try fixture.curl(
-            "/v1.53/containers/\(identifier)/start",
-            method: "POST"
-        ).status == 204)
-        #expect(try fixture.curl(
-            "/v1.53/containers/\(identifier)/logs?stdout=1&stderr=1"
-        ).status == 200)
-        let events = try fixture.curl("/v1.53/events")
-        #expect(events.status == 200)
-        #expect(events.body.contains("\"Action\":\"create\""))
-        #expect(try fixture.curl(
-            "/v1.53/containers/\(identifier)/attach?stream=1&stdout=1&stderr=1",
-            method: "POST"
-        ).status == 200)
-
-        let unsupported = try fixture.curl("/_ping", method: "OPTIONS")
-        #expect(unsupported.status == 405)
-        #expect(unsupported.body.contains("unsupported HTTP method"))
     }
 
     @Test
@@ -231,21 +155,26 @@ struct EngineServerTests {
         try Data("not a socket".utf8).write(
             to: URL(fileURLWithPath: unsafeFixture.socketPath)
         )
-        let unsafeServer = unsafeFixture.server(runtime: InMemoryRuntime())
-        await #expect(throws: EngineServerError.self) {
-            try await unsafeServer.wait()
-        }
-        await #expect(throws: EngineServerError.self) {
+        let unsafeServer = unsafeFixture.server(responder: FixtureResponder())
+        await #expect(throws: ContainerUnixHTTPServerError.self) {
             try await unsafeServer.start()
         }
         try await unsafeServer.shutdown()
 
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
-        let first = fixture.server(runtime: InMemoryRuntime())
-        let second = fixture.server(runtime: InMemoryRuntime())
+        let first = fixture.server(responder: FixtureResponder())
+        let second = fixture.server(responder: FixtureResponder())
         try await first.start()
-        await #expect(throws: EngineServerError.self) {
+        let directoryAttributes = try FileManager.default.attributesOfItem(
+            atPath: fixture.root.path
+        )
+        let lockAttributes = try FileManager.default.attributesOfItem(
+            atPath: fixture.socketPath + ".lock"
+        )
+        #expect((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+        #expect((lockAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        await #expect(throws: ContainerUnixHTTPServerError.self) {
             try await second.start()
         }
         try await second.shutdown()
@@ -254,19 +183,87 @@ struct EngineServerTests {
     }
 
     @Test
-    func `default paths are user scoped and executable selection is absolute`() {
-        #expect(DefaultPaths.socket.hasSuffix("/devcontainer/docker.sock"))
-        #expect(DefaultPaths.stateDatabase.hasSuffix("/devcontainer/state.sqlite"))
-        #expect(DefaultPaths.containerExecutable.hasPrefix("/"))
-        if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/container") {
-            #expect(DefaultPaths.containerExecutable == "/usr/local/bin/container")
-        } else if FileManager.default.isExecutableFile(
-            atPath: "/opt/homebrew/bin/container"
-        ) {
-            #expect(DefaultPaths.containerExecutable == "/opt/homebrew/bin/container")
-        } else {
-            #expect(DefaultPaths.containerExecutable == "/usr/local/bin/container")
+    func `shutdown never unlinks a replaced socket inode`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let server = fixture.server(responder: FixtureResponder())
+        try await server.start()
+
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: fixture.socketPath
+        )
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+
+        let displaced = fixture.root.appendingPathComponent("displaced.sock").path
+        guard rename(fixture.socketPath, displaced) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+        let replacement = Data("replacement".utf8)
+        try replacement.write(to: URL(fileURLWithPath: fixture.socketPath))
+
+        await #expect(throws: ContainerUnixHTTPServerError.self) {
+            try await server.shutdown()
+        }
+        #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.socketPath)) == replacement)
+    }
+}
+
+private struct FixtureResponder: DockerHTTPResponder {
+    let session: EchoHijackSession
+
+    init(session: EchoHijackSession = EchoHijackSession()) {
+        self.session = session
+    }
+
+    func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
+        switch request.target {
+        case "/_ping":
+            .text("OK")
+        case "/echo":
+            DockerHTTPResponse(
+                status: 200,
+                body: .bytes(request.body)
+            )
+        case "/fast":
+            .text("fast-response")
+        case "/hijack":
+            DockerHTTPResponse(
+                status: 200,
+                headers: [
+                    "Connection": "Upgrade",
+                    "Content-Type": "application/vnd.docker.multiplexed-stream",
+                    "Upgrade": "tcp"
+                ],
+                body: .hijack(session, terminal: false)
+            )
+        case "/hold":
+            await delayed("held-response", milliseconds: 100)
+        case "/slow":
+            await delayed("slow-response", milliseconds: 40)
+        case "/stream":
+            DockerHTTPResponse(
+                status: 200,
+                headers: ["Content-Type": "application/json"],
+                body: .stream(
+                    AsyncThrowingStream { continuation in
+                        continuation.yield(Data("first-".utf8))
+                        continuation.yield(Data("second".utf8))
+                        continuation.finish()
+                    }
+                )
+            )
+        default:
+            (try? .json(DockerErrorEnvelope(message: "page not found"), status: 404))
+                ?? .text("page not found", status: 404)
+        }
+    }
+
+    private func delayed(
+        _ value: String,
+        milliseconds: Int64
+    ) async -> DockerHTTPResponse {
+        try? await Task.sleep(for: .milliseconds(milliseconds))
+        return .text(value)
     }
 }
 
@@ -277,10 +274,10 @@ private struct ServerFixture {
     init() throws {
         root = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent(
-                "dce-\(UUID().uuidString.prefix(8))",
+                "cea-\(UUID().uuidString.prefix(8))",
                 isDirectory: true
             )
-        socketPath = root.appendingPathComponent("docker.sock").path
+        socketPath = root.appendingPathComponent("engine.sock").path
         try FileManager.default.createDirectory(
             at: root,
             withIntermediateDirectories: false,
@@ -289,13 +286,13 @@ private struct ServerFixture {
     }
 
     func server(
-        runtime: InMemoryRuntime,
-        limits: EngineServerLimits = .production
-    ) -> EngineServer {
-        EngineServer(
-            router: DockerRouter(runtime: runtime),
+        responder: any DockerHTTPResponder,
+        limits: ContainerUnixHTTPServerLimits = .production
+    ) -> ContainerUnixHTTPServer {
+        ContainerUnixHTTPServer(
+            responder: responder,
             socketPath: socketPath,
-            logger: Logger(label: "devcontainer-engine-tests"),
+            logger: Logger(label: "container-engine-api-tests"),
             limits: limits
         )
     }
@@ -313,23 +310,25 @@ private struct ServerFixture {
         let output = Pipe()
         let error = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        process.arguments = [
+        var arguments = [
             "--silent",
             "--show-error",
-            "--verbose",
             "--unix-socket",
             socketPath,
             "--request",
             method,
             "--header",
-            "Content-Type: application/json",
+            "Content-Type: application/json"
+        ]
+        if let body {
+            arguments.append(contentsOf: ["--data-binary", body])
+        }
+        arguments.append(contentsOf: [
             "--write-out",
             "\n%{http_code}",
             "http://localhost\(path)"
-        ]
-        if let body {
-            process.arguments?.insert(contentsOf: ["--data-binary", body], at: 9)
-        }
+        ])
+        process.arguments = arguments
         process.standardOutput = output
         process.standardError = error
         try process.run()
@@ -337,7 +336,7 @@ private struct ServerFixture {
         let standardOutput = try output.fileHandleForReading.readToEnd() ?? Data()
         let standardError = try error.fileHandleForReading.readToEnd() ?? Data()
         guard process.terminationStatus == 0 else {
-            throw CurlError(
+            throw FixtureError(
                 "\(method) \(path): "
                     + (
                         String(data: standardError, encoding: .utf8)
@@ -352,36 +351,12 @@ private struct ServerFixture {
             omittingEmptySubsequences: false
         )
         guard let statusText = components.last, let status = Int(statusText) else {
-            throw CurlError("curl did not emit an HTTP status: \(value)")
+            throw FixtureError("curl did not emit an HTTP status: \(value)")
         }
         return (
             status,
             components.dropLast().joined(separator: "\n")
         )
-    }
-
-    func createRunningContainer() throws -> String {
-        let create = try curl(
-            "/v1.53/containers/create?name=half-close-fixture",
-            method: "POST",
-            body: """
-            {"Image":"alpine:3.22","Cmd":["sleep","30"]}
-            """
-        )
-        let decoded = try JSONSerialization.jsonObject(
-            with: Data(create.body.utf8)
-        ) as? [String: Any]
-        guard create.status == 201, let identifier = decoded?["Id"] as? String else {
-            throw CurlError("container create returned \(create.status): \(create.body)")
-        }
-        let start = try curl(
-            "/v1.53/containers/\(identifier)/start",
-            method: "POST"
-        )
-        guard start.status == 204 else {
-            throw CurlError("container start returned \(start.status): \(start.body)")
-        }
-        return identifier
     }
 
     func pipelined(_ request: String) throws -> String {
@@ -401,7 +376,7 @@ private struct ServerFixture {
         let standardOutput = try output.fileHandleForReading.readToEnd() ?? Data()
         let standardError = try error.fileHandleForReading.readToEnd() ?? Data()
         guard process.terminationStatus == 0 else {
-            throw CurlError(
+            throw FixtureError(
                 "pipelined request: "
                     + (
                         String(data: standardError, encoding: .utf8)
@@ -413,40 +388,17 @@ private struct ServerFixture {
             ?? "non-UTF-8 pipelined response"
     }
 
-    func createExec(container: String) throws -> String {
-        let create = try curl(
-            "/v1.53/containers/\(container)/exec",
-            method: "POST",
-            body: """
-            {"AttachStdin":true,"AttachStdout":true,"AttachStderr":true,"Cmd":["cat"]}
-            """
-        )
-        let decoded = try JSONSerialization.jsonObject(
-            with: Data(create.body.utf8)
-        ) as? [String: Any]
-        guard create.status == 201, let identifier = decoded?["Id"] as? String else {
-            throw CurlError("exec create returned \(create.status): \(create.body)")
-        }
-        return identifier
-    }
-
-    func startEarlyHalfClose(
-        exec: String,
-        payload: Data
-    ) throws -> Process {
-        let body = Data(#"{"Detach":false,"Tty":false}"#.utf8)
+    func startEarlyHalfClose(payload: Data) throws -> Process {
         let headers = Data(
             (
-                "POST /v1.53/exec/\(exec)/start HTTP/1.1\r\n"
+                "POST /hijack HTTP/1.1\r\n"
                     + "Host: localhost\r\n"
                     + "Connection: Upgrade\r\n"
                     + "Upgrade: tcp\r\n"
-                    + "Content-Type: application/json\r\n"
-                    + "Content-Length: \(body.count)\r\n\r\n"
+                    + "Content-Length: 0\r\n\r\n"
             ).utf8
         )
         var request = headers
-        request.append(body)
         request.append(payload)
 
         let input = Pipe()
@@ -463,21 +415,13 @@ private struct ServerFixture {
     }
 }
 
-private struct CurlError: Error {
-    let message: String
-
-    init(_ message: String) {
-        self.message = message
-    }
-}
-
-private final class EOFProcessSession: RuntimeProcessSession, @unchecked Sendable {
-    let frames: AsyncThrowingStream<RuntimeIOFrame, any Error>
+private final class EchoHijackSession: DockerHijackSession, @unchecked Sendable {
+    let frames: AsyncThrowingStream<DockerStreamFrame, any Error>
 
     private let frameContinuation:
-        AsyncThrowingStream<RuntimeIOFrame, any Error>.Continuation
-    private let completionContinuation: AsyncStream<Int32>.Continuation
+        AsyncThrowingStream<DockerStreamFrame, any Error>.Continuation
     private let completionTask: Task<Int32, Never>
+    private let completionContinuation: AsyncStream<Int32>.Continuation
     private let lock = NSLock()
     private var bytes = Data()
     private var closed = false
@@ -520,14 +464,12 @@ private final class EOFProcessSession: RuntimeProcessSession, @unchecked Sendabl
             return
         }
         frameContinuation.yield(
-            RuntimeIOFrame(channel: .standardOutput, data: output)
+            DockerStreamFrame(channel: .standardOutput, data: output)
         )
         frameContinuation.finish()
         completionContinuation.yield(0)
         completionContinuation.finish()
     }
-
-    func resize(width _: UInt16, height _: UInt16) {}
 
     func wait() async -> Int32 {
         await completionTask.value
@@ -537,4 +479,20 @@ private final class EOFProcessSession: RuntimeProcessSession, @unchecked Sendabl
         frameContinuation.finish()
         completionContinuation.finish()
     }
+}
+
+private struct FixtureError: Error {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+}
+
+private func stop(_ process: Process) {
+    guard process.isRunning else {
+        return
+    }
+    process.terminate()
+    process.waitUntilExit()
 }

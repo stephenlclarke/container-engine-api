@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright 2026 devcontainer project authors.
+// Copyright 2026 devcontainer and container-engine-api project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,18 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-struct EngineServerLimits: Sendable {
-    static let production = EngineServerLimits(
+public struct ContainerUnixHTTPServerLimits: Equatable, Sendable {
+    public static let production = ContainerUnixHTTPServerLimits(
         maximumRequestBodyBytes: 1_073_741_824,
         maximumBufferedRequestBodyBytes: 1_073_741_824,
         maximumPendingRequests: 32
     )
 
-    let maximumRequestBodyBytes: Int
-    let maximumBufferedRequestBodyBytes: Int
-    let maximumPendingRequests: Int
+    public let maximumRequestBodyBytes: Int
+    public let maximumBufferedRequestBodyBytes: Int
+    public let maximumPendingRequests: Int
 
-    init(
+    public init(
         maximumRequestBodyBytes: Int,
         maximumBufferedRequestBodyBytes: Int,
         maximumPendingRequests: Int

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright 2026 devcontainer project authors.
+// Copyright 2026 devcontainer and container-engine-api project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,9 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
+import ContainerEngineWire
 import Darwin
 import DequeModule
-import DevContainerDockerAPI
-import DevContainerModel
-import DevContainerRuntimeSPI
 import Foundation
 import Logging
 import NIOCore
@@ -26,31 +24,34 @@ import NIOFoundationCompat
 import NIOHTTP1
 import NIOPosix
 
-final class EngineServer: @unchecked Sendable {
+public final class ContainerUnixHTTPServer: @unchecked Sendable {
     private let group: MultiThreadedEventLoopGroup
-    private let router: DockerRouter
+    private let responder: any DockerHTTPResponder
     private let socketPath: String
     private let logger: Logger
-    private let limits: EngineServerLimits
+    private let limits: ContainerUnixHTTPServerLimits
     private let connections = EngineConnectionTracker()
     private var channel: Channel?
     private var lockFileDescriptor: Int32 = -1
-    private var ownsSocket = false
+    private var boundSocketIdentity: SocketIdentity?
 
-    init(
-        router: DockerRouter,
+    public init(
+        responder: any DockerHTTPResponder,
         socketPath: String,
         logger: Logger,
-        limits: EngineServerLimits = .production
+        limits: ContainerUnixHTTPServerLimits = .production
     ) {
         group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-        self.router = router
+        self.responder = responder
         self.socketPath = socketPath
         self.logger = logger
         self.limits = limits
     }
 
-    func start() async throws {
+    public func start() async throws {
+        guard channel == nil, boundSocketIdentity == nil else {
+            throw ContainerUnixHTTPServerError.alreadyStarted
+        }
         try prepareSocketDirectory()
         try acquireInstanceLock()
         do {
@@ -59,27 +60,88 @@ final class EngineServer: @unchecked Sendable {
             releaseInstanceLock()
             throw error
         }
-        let bootstrap = makeBootstrap()
 
+        let boundChannel: any Channel
         do {
-            channel = try await bootstrap.bind(unixDomainSocketPath: socketPath).get()
-            ownsSocket = true
+            boundChannel = try await makeBootstrap()
+                .bind(unixDomainSocketPath: socketPath)
+                .get()
         } catch {
             releaseInstanceLock()
             throw error
         }
-        guard chmod(socketPath, S_IRUSR | S_IWUSR) == 0 else {
-            try? await channel?.close()
+        channel = boundChannel
+
+        do {
+            boundSocketIdentity = try socketIdentity(at: socketPath)
+            guard chmod(socketPath, S_IRUSR | S_IWUSR) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let securedIdentity = try socketIdentity(at: socketPath)
+            guard securedIdentity == boundSocketIdentity else {
+                throw ContainerUnixHTTPServerError.socketIdentityChanged(socketPath)
+            }
+            var status = stat()
+            guard
+                lstat(socketPath, &status) == 0,
+                status.st_mode & (S_IRWXG | S_IRWXO) == 0
+            else {
+                throw ContainerUnixHTTPServerError.unsafeExistingSocket(socketPath)
+            }
+        } catch {
+            try? await boundChannel.close()
             try? removeOwnedSocket()
-            ownsSocket = false
+            channel = nil
             releaseInstanceLock()
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw error
         }
-        logger.info("Engine API listening", metadata: ["socket": .string(socketPath)])
+
+        logger.info("Container Engine API listening", metadata: ["socket": .string(socketPath)])
+    }
+
+    public func wait() async throws {
+        guard let channel else {
+            throw ContainerUnixHTTPServerError.notStarted
+        }
+        try await channel.closeFuture.get()
+    }
+
+    public var activeConnectionCount: Int {
+        connections.count
+    }
+
+    public func shutdown() async throws {
+        defer { releaseInstanceLock() }
+        var firstError: (any Error)?
+        if let channel {
+            do {
+                try await channel.close()
+            } catch {
+                firstError = error
+            }
+            self.channel = nil
+        }
+        do {
+            try await group.shutdownGracefully()
+        } catch {
+            if firstError == nil {
+                firstError = error
+            }
+        }
+        do {
+            try removeOwnedSocket()
+        } catch {
+            // Prefer the path-identity failure: it is the security-relevant
+            // reason cleanup deliberately left the replacement untouched.
+            firstError = error
+        }
+        if let firstError {
+            throw firstError
+        }
     }
 
     private func makeBootstrap() -> ServerBootstrap {
-        let router = router
+        let responder = responder
         let logger = logger
         let connections = connections
         let limits = limits
@@ -97,7 +159,7 @@ final class EngineServer: @unchecked Sendable {
                     inputCloseBarrier: DockerInputCloseBarrier(state: upgradeState)
                 )
                 let handler = DockerHTTPHandler(
-                    router: router,
+                    responder: responder,
                     logger: logger,
                     connections: connections,
                     pipeline: pipeline,
@@ -116,30 +178,10 @@ final class EngineServer: @unchecked Sendable {
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
             .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
-            .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
-    }
-
-    func wait() async throws {
-        guard let channel else {
-            throw EngineServerError.notStarted
-        }
-        try await channel.closeFuture.get()
-    }
-
-    var activeConnectionCount: Int {
-        connections.count
-    }
-
-    func shutdown() async throws {
-        defer { releaseInstanceLock() }
-        if let channel {
-            try await channel.close()
-        }
-        try await group.shutdownGracefully()
-        if ownsSocket {
-            try removeOwnedSocket()
-            ownsSocket = false
-        }
+            .childChannelOption(
+                ChannelOptions.recvAllocator,
+                value: AdaptiveRecvByteBufferAllocator()
+            )
     }
 
     private func prepareSocketDirectory() throws {
@@ -157,7 +199,7 @@ final class EngineServer: @unchecked Sendable {
             parentStatus.st_mode & S_IFMT == S_IFDIR,
             parentStatus.st_mode & (S_IWGRP | S_IWOTH) == 0
         else {
-            throw EngineServerError.unsafeSocketDirectory(parent.path)
+            throw ContainerUnixHTTPServerError.unsafeSocketDirectory(parent.path)
         }
         guard chmod(parent.path, S_IRWXU) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -171,7 +213,7 @@ final class EngineServer: @unchecked Sendable {
                 status.st_uid == getuid(),
                 status.st_mode & S_IFMT == S_IFSOCK
             else {
-                throw EngineServerError.unsafeExistingSocket(socketPath)
+                throw ContainerUnixHTTPServerError.unsafeExistingSocket(socketPath)
             }
             try FileManager.default.removeItem(atPath: socketPath)
         } else if errno != ENOENT {
@@ -193,16 +235,18 @@ final class EngineServer: @unchecked Sendable {
         guard
             fstat(descriptor, &status) == 0,
             status.st_uid == getuid(),
-            status.st_mode & S_IFMT == S_IFREG
+            status.st_mode & S_IFMT == S_IFREG,
+            status.st_nlink == 1,
+            fchmod(descriptor, S_IRUSR | S_IWUSR) == 0
         else {
             close(descriptor)
-            throw EngineServerError.unsafeInstanceLock(lockPath)
+            throw ContainerUnixHTTPServerError.unsafeInstanceLock(lockPath)
         }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             let code = errno
             close(descriptor)
             if code == EWOULDBLOCK {
-                throw EngineServerError.alreadyRunning
+                throw ContainerUnixHTTPServerError.alreadyRunning
             }
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
@@ -218,46 +262,77 @@ final class EngineServer: @unchecked Sendable {
         lockFileDescriptor = -1
     }
 
+    private func socketIdentity(at path: String) throws -> SocketIdentity {
+        var status = stat()
+        guard
+            lstat(path, &status) == 0,
+            status.st_uid == getuid(),
+            status.st_mode & S_IFMT == S_IFSOCK
+        else {
+            throw ContainerUnixHTTPServerError.unsafeExistingSocket(path)
+        }
+        return SocketIdentity(device: status.st_dev, inode: status.st_ino)
+    }
+
     private func removeOwnedSocket() throws {
+        guard let boundSocketIdentity else {
+            return
+        }
         var status = stat()
         guard lstat(socketPath, &status) == 0 else {
             if errno == ENOENT {
+                self.boundSocketIdentity = nil
                 return
             }
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        guard status.st_uid == getuid(), status.st_mode & S_IFMT == S_IFSOCK else {
-            throw EngineServerError.unsafeExistingSocket(socketPath)
+        let current = SocketIdentity(device: status.st_dev, inode: status.st_ino)
+        guard
+            current == boundSocketIdentity,
+            status.st_uid == getuid(),
+            status.st_mode & S_IFMT == S_IFSOCK
+        else {
+            throw ContainerUnixHTTPServerError.socketIdentityChanged(socketPath)
         }
         try FileManager.default.removeItem(atPath: socketPath)
+        self.boundSocketIdentity = nil
     }
 }
 
-enum EngineServerError: Error, CustomStringConvertible {
-    case notStarted
+public enum ContainerUnixHTTPServerError: Error, CustomStringConvertible, Sendable {
     case alreadyRunning
+    case alreadyStarted
+    case notStarted
+    case socketIdentityChanged(String)
     case unsafeExistingSocket(String)
     case unsafeInstanceLock(String)
     case unsafeSocketDirectory(String)
 
-    var description: String {
+    public var description: String {
         switch self {
-        case .notStarted:
-            "Engine server is not started"
         case .alreadyRunning:
-            "another devcontainer engine owns this socket"
+            "another Container Engine server owns this socket"
+        case .alreadyStarted:
+            "Container Engine server is already started"
+        case .notStarted:
+            "Container Engine server is not started"
+        case let .socketIdentityChanged(path):
+            "refusing to remove replaced Container Engine socket at \(path)"
         case let .unsafeExistingSocket(path):
             "refusing to replace non-owned or non-socket path at \(path)"
         case let .unsafeInstanceLock(path):
-            "instance lock is not a current-user regular file: \(path)"
+            "instance lock is not a safe current-user regular file: \(path)"
         case let .unsafeSocketDirectory(path):
             "socket directory must be owned by the current user and not group/world writable: \(path)"
         }
     }
 }
 
-/// Holds the connection state needed to preserve an input half-close that
-/// arrives while an HTTP upgrade response is being prepared.
+private struct SocketIdentity: Equatable {
+    let device: dev_t
+    let inode: ino_t
+}
+
 private final class DockerUpgradeState: @unchecked Sendable {
     var upgradeCandidate = false
     var inputClosed = false
@@ -267,8 +342,6 @@ private final class DockerUpgradeState: @unchecked Sendable {
     }
 }
 
-/// Prevents the HTTP decoder from consuming upgraded-protocol bytes as a
-/// truncated HTTP message when the client sends its input and EOF eagerly.
 private final class DockerInputCloseBarrier:
     ChannelInboundHandler,
     RemovableChannelHandler,
@@ -329,14 +402,14 @@ private final class DockerHTTPHandler:
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
-    private let router: DockerRouter
+    private let responder: any DockerHTTPResponder
     private let logger: Logger
     private let connections: EngineConnectionTracker
     private let responseEncoder: HTTPResponseEncoder
     private let requestDecoder: ByteToMessageHandler<HTTPRequestDecoder>
     private let upgradeState: DockerUpgradeState
     private let inputCloseBarrier: DockerInputCloseBarrier
-    private let limits: EngineServerLimits
+    private let limits: ContainerUnixHTTPServerLimits
     private var requestHead: HTTPRequestHead?
     private var requestBody = ByteBuffer()
     private var activeRequestHead: HTTPRequestHead?
@@ -347,13 +420,13 @@ private final class DockerHTTPHandler:
     private var closeAfterResponse = false
 
     init(
-        router: DockerRouter,
+        responder: any DockerHTTPResponder,
         logger: Logger,
         connections: EngineConnectionTracker,
         pipeline: DockerHTTPPipeline,
-        limits: EngineServerLimits
+        limits: ContainerUnixHTTPServerLimits
     ) {
-        self.router = router
+        self.responder = responder
         self.logger = logger
         self.connections = connections
         responseEncoder = pipeline.responseEncoder
@@ -400,17 +473,12 @@ private final class DockerHTTPHandler:
             if responseInFlight,
                activeRequestHead?.headers.contains(name: "Upgrade") == true
             {
-                // The active response is about to replace the HTTP pipeline
-                // with a raw Docker stream, so no later HTTP request can be
-                // represented safely on this connection.
                 context.close(promise: nil)
                 return
             }
             if head.headers.contains(name: "Upgrade"),
                responseInFlight || !pendingRequests.isEmpty
             {
-                // An HTTP upgrade consumes the connection. It cannot be queued
-                // behind or ahead of another HTTP response safely.
                 context.close(promise: nil)
                 return
             }
@@ -420,8 +488,6 @@ private final class DockerHTTPHandler:
         case var .body(buffer):
             guard canBufferRequestBody(buffer.readableBytes) else {
                 guard !responseInFlight, pendingRequests.isEmpty else {
-                    // A standalone error response would overtake an earlier
-                    // pipelined response, so reject this connection instead.
                     context.close(promise: nil)
                     return
                 }
@@ -440,7 +506,10 @@ private final class DockerHTTPHandler:
     }
 
     func errorCaught(context: ChannelHandlerContext, error: any Error) {
-        logger.error("Engine connection failed", metadata: ["error": .string(String(describing: error))])
+        logger.error(
+            "Container Engine connection failed",
+            metadata: ["error": .string(String(describing: error))]
+        )
         context.close(promise: nil)
     }
 
@@ -518,7 +587,7 @@ private final class DockerHTTPHandler:
         let promise = context.eventLoop.makePromise(of: DockerHTTPResponse.self)
         let sendableContext = SendableChannelHandlerContext(context)
         promise.completeWithTask {
-            await self.router.respond(to: request)
+            await self.responder.respond(to: request)
         }
         promise.futureResult.whenComplete { result in
             let context = sendableContext.value
@@ -541,7 +610,10 @@ private final class DockerHTTPHandler:
         activeRequestBodyBytes = 0
     }
 
-    private func write(_ response: DockerHTTPResponse, context: ChannelHandlerContext) {
+    private func write(
+        _ response: DockerHTTPResponse,
+        context: ChannelHandlerContext
+    ) {
         closeAfterResponse = closeAfterResponse || upgradeState.inputClosed
         var headers = HTTPHeaders(response.headers.map { ($0.key, $0.value) })
         let status = HTTPResponseStatus(statusCode: response.status)
@@ -566,6 +638,7 @@ private final class DockerHTTPHandler:
         status: HTTPResponseStatus,
         context: ChannelHandlerContext
     ) {
+        headers.remove(name: "Transfer-Encoding")
         headers.replaceOrAdd(name: "Content-Length", value: String(data.count))
         context.write(
             wrapOutboundOut(
@@ -579,10 +652,7 @@ private final class DockerHTTPHandler:
             context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
         }
         let promise = context.eventLoop.makePromise(of: Void.self)
-        context.writeAndFlush(
-            wrapOutboundOut(.end(nil)),
-            promise: promise
-        )
+        context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: promise)
         finishResponse(promise.futureResult, context: context)
     }
 
@@ -592,6 +662,7 @@ private final class DockerHTTPHandler:
         status: HTTPResponseStatus,
         context: ChannelHandlerContext
     ) {
+        headers.remove(name: "Content-Length")
         headers.replaceOrAdd(name: "Transfer-Encoding", value: "chunked")
         context.writeAndFlush(
             wrapOutboundOut(
@@ -603,14 +674,14 @@ private final class DockerHTTPHandler:
     }
 
     private func writeHijack(
-        session: any RuntimeProcessSession,
+        session: any DockerHijackSession,
         terminal: Bool,
         headers: inout HTTPHeaders,
         context: ChannelHandlerContext
     ) {
         let requestedUpgrade = activeRequestHead?.headers.contains(name: "Upgrade") ?? false
         logger.debug(
-            "Engine connection takeover requested",
+            "Container Engine connection takeover requested",
             metadata: [
                 "request-target": .string(activeRequestHead?.uri ?? "unknown"),
                 "upgrade": .stringConvertible(requestedUpgrade)
@@ -619,7 +690,6 @@ private final class DockerHTTPHandler:
         if !requestedUpgrade {
             headers.replaceOrAdd(name: "Connection", value: "close")
             headers.remove(name: "Upgrade")
-            // HTTP/1.0 makes connection close delimit the raw Docker bytes.
             headers.remove(name: "Transfer-Encoding")
             headers.remove(name: "Content-Length")
         }
@@ -682,7 +752,7 @@ private final class DockerHTTPHandler:
                         }
                     case let .failure(error):
                         self.logger.error(
-                            "Engine connection takeover failed",
+                            "Container Engine connection takeover failed",
                             metadata: ["error": .string(String(describing: error))]
                         )
                         context.close(promise: nil)
@@ -690,7 +760,7 @@ private final class DockerHTTPHandler:
                 }
         } catch {
             logger.error(
-                "Engine connection takeover failed",
+                "Container Engine connection takeover failed",
                 metadata: ["error": .string(String(describing: error))]
             )
             context.close(promise: nil)
@@ -723,19 +793,15 @@ private final class DockerHTTPHandler:
                         self.wrapOutboundOut(.end(nil)),
                         promise: promise
                     )
-                    self.finishResponse(
-                        promise.futureResult,
-                        context: context
-                    )
+                    self.finishResponse(promise.futureResult, context: context)
                 }
             } catch {
                 self.logger.error(
-                    "Engine stream failed",
+                    "Container Engine stream failed",
                     metadata: ["error": .string(String(describing: error))]
                 )
                 sendableContext.value.eventLoop.execute {
-                    let context = sendableContext.value
-                    context.close(promise: nil)
+                    sendableContext.value.close(promise: nil)
                 }
             }
         }
@@ -746,7 +812,8 @@ private final class DockerHTTPHandler:
         status: HTTPResponseStatus,
         message: String
     ) {
-        let data = Data("{\"message\":\"\(message)\"}".utf8)
+        let data = (try? DockerJSON.encoder.encode(DockerErrorEnvelope(message: message)))
+            ?? Data(#"{"message":"Engine request failed"}"#.utf8)
         var headers = HTTPHeaders()
         headers.add(name: "Content-Type", value: "application/json")
         headers.add(name: "Content-Length", value: String(data.count))
@@ -760,10 +827,7 @@ private final class DockerHTTPHandler:
         buffer.writeBytes(data)
         context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
         let promise = context.eventLoop.makePromise(of: Void.self)
-        context.writeAndFlush(
-            wrapOutboundOut(.end(nil)),
-            promise: promise
-        )
+        context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: promise)
         finishResponse(promise.futureResult, context: context)
     }
 
@@ -787,17 +851,17 @@ private final class DockerHTTPHandler:
 private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
-    private let session: any RuntimeProcessSession
+    private let session: any DockerHijackSession
     private let terminal: Bool
     private let logger: Logger
     private let connections: EngineConnectionTracker
-    private let inputPump: OrderedRuntimeInputPump
+    private let inputPump: OrderedDockerInputPump
     private var outputTask: Task<Void, Never>?
     private let stateLock = NSLock()
     private var finishedNormally = false
 
     init(
-        session: any RuntimeProcessSession,
+        session: any DockerHijackSession,
         terminal: Bool,
         logger: Logger,
         connections: EngineConnectionTracker
@@ -806,14 +870,14 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
         self.terminal = terminal
         self.logger = logger
         self.connections = connections
-        inputPump = OrderedRuntimeInputPump(session: session)
+        inputPump = OrderedDockerInputPump(session: session)
     }
 
     func start(channel: any Channel) {
         outputTask = Task {
             do {
                 for try await frame in session.frames {
-                    let data = DockerStreamFraming.encode(frame, terminal: terminal)
+                    let data = try DockerStreamFraming.encode(frame, terminal: terminal)
                     var buffer = channel.allocator.buffer(capacity: data.count)
                     buffer.writeBytes(data)
                     try await channel.writeAndFlush(buffer).get()
@@ -825,7 +889,7 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
                 try await channel.close().get()
             } catch {
                 logger.error(
-                    "Engine raw stream failed",
+                    "Container Engine raw stream failed",
                     metadata: ["error": .string(String(describing: error))]
                 )
                 channel.eventLoop.execute {
@@ -891,11 +955,7 @@ private final class EngineConnectionTracker: @unchecked Sendable {
     }
 }
 
-/// Serializes bytes and EOF from a hijacked Docker connection before forwarding
-/// them to the runtime process. NIO invokes the synchronous enqueue methods in
-/// channel order; the single consumer task preserves that order across the
-/// asynchronous runtime boundary.
-final class OrderedRuntimeInputPump: @unchecked Sendable {
+final class OrderedDockerInputPump: @unchecked Sendable {
     private enum Event: Sendable {
         case data(Data)
         case close
@@ -906,7 +966,7 @@ final class OrderedRuntimeInputPump: @unchecked Sendable {
     private let stateLock = NSLock()
     private var finished = false
 
-    init(session: any RuntimeProcessSession) {
+    init(session: any DockerHijackSession) {
         let (stream, continuation) = AsyncStream<Event>.makeStream()
         self.continuation = continuation
         worker = Task {

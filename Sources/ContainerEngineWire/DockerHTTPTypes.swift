@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright 2026 devcontainer project authors.
+// Copyright 2026 devcontainer and container-engine-api project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,9 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import DevContainerModel
-import DevContainerRuntimeSPI
 import Foundation
 
-public enum DockerHTTPMethod: String, Sendable {
+public enum DockerHTTPMethod: String, CaseIterable, Codable, Sendable {
     case delete = "DELETE"
     case get = "GET"
     case head = "HEAD"
@@ -50,10 +48,14 @@ public struct DockerHTTPRequest: Sendable {
     }
 }
 
+public protocol DockerHTTPResponder: Sendable {
+    func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse
+}
+
 public enum DockerHTTPBody: Sendable {
     case bytes(Data)
     case stream(AsyncThrowingStream<Data, any Error>)
-    case hijack(any RuntimeProcessSession, terminal: Bool)
+    case hijack(any DockerHijackSession, terminal: Bool)
 }
 
 public struct DockerHTTPResponse: Sendable {
@@ -100,6 +102,14 @@ public struct DockerHTTPResponse: Sendable {
     }
 }
 
+public struct DockerErrorEnvelope: Codable, Equatable, Sendable {
+    public var message: String
+
+    public init(message: String) {
+        self.message = message
+    }
+}
+
 public enum DockerJSON {
     public static var encoder: JSONEncoder {
         let encoder = JSONEncoder()
@@ -115,12 +125,47 @@ public enum DockerJSON {
     }
 }
 
+public enum DockerStreamChannel: UInt8, Codable, Sendable {
+    case standardInput = 0
+    case standardOutput = 1
+    case standardError = 2
+}
+
+public struct DockerStreamFrame: Equatable, Sendable {
+    public var channel: DockerStreamChannel
+    public var data: Data
+
+    public init(channel: DockerStreamChannel, data: Data) {
+        self.channel = channel
+        self.data = data
+    }
+}
+
+public protocol DockerHijackSession: Sendable {
+    var frames: AsyncThrowingStream<DockerStreamFrame, any Error> { get }
+
+    func write(_ data: Data) async throws
+    func closeStandardInput() async throws
+    func wait() async throws -> Int32
+    func cancel() async
+}
+
 public enum DockerStreamFraming {
-    public static func encode(_ frame: RuntimeIOFrame, terminal: Bool) -> Data {
+    public enum FramingError: Error, Equatable, Sendable {
+        case payloadTooLarge(Int)
+    }
+
+    public static func encode(
+        _ frame: DockerStreamFrame,
+        terminal: Bool
+    ) throws -> Data {
         if terminal {
             return frame.data
         }
 
+        guard frame.data.count <= UInt32.max else {
+            throw FramingError.payloadTooLarge(frame.data.count)
+        }
         var result = Data(capacity: frame.data.count + 8)
         result.append(frame.channel.rawValue)
         result.append(contentsOf: [0, 0, 0])
