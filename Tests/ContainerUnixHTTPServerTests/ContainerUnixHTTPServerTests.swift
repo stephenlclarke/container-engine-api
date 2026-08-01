@@ -28,7 +28,13 @@ struct ContainerUnixHTTPServerTests {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
         let session = EchoHijackSession()
-        let server = fixture.server(responder: FixtureResponder(session: session))
+        let managedStream = ManagedFixtureStream(chunks: ["managed-", "stream"])
+        let server = fixture.server(
+            responder: FixtureResponder(
+                session: session,
+                managedStream: managedStream
+            )
+        )
         try await server.start()
 
         do {
@@ -39,6 +45,12 @@ struct ContainerUnixHTTPServerTests {
             let streamed = try fixture.curl("/stream")
             #expect(streamed.status == 200)
             #expect(streamed.body == "first-second")
+
+            let managed = try fixture.curl("/managed-stream")
+            #expect(managed.status == 200)
+            #expect(managed.body == "managed-stream")
+            #expect(await managedStream.closeCount == 1)
+            #expect(await managedStream.cancelCount == 0)
 
             let echo = try fixture.curl(
                 "/echo",
@@ -73,6 +85,29 @@ struct ContainerUnixHTTPServerTests {
 
         try await server.shutdown()
         #expect(!FileManager.default.fileExists(atPath: fixture.socketPath))
+    }
+
+    @Test
+    func `managed stream cancels its source when its connection is forced closed`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let managedStream = ManagedFixtureStream(blocks: true)
+        let server = fixture.server(
+            responder: FixtureResponder(managedStream: managedStream),
+            limits: testLimits(
+                aggregateBytes: 256,
+                gracefulDrainTimeout: .milliseconds(20)
+            )
+        )
+        try await server.start()
+
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        try client.write("GET /managed-stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        #expect(await eventuallyAsync { await managedStream.started })
+        try await server.shutdown()
+        #expect(await eventuallyAsync { await managedStream.cancelCount == 1 })
+        #expect(await managedStream.closeCount == 0)
+        client.close()
     }
 
     @Test
@@ -710,9 +745,14 @@ private final class StartFailureGate: @unchecked Sendable {
 
 private struct FixtureResponder: DockerHTTPResponder {
     let session: any DockerHijackSession
+    let managedStream: any DockerHTTPStreamSession
 
-    init(session: any DockerHijackSession = EchoHijackSession()) {
+    init(
+        session: any DockerHijackSession = EchoHijackSession(),
+        managedStream: any DockerHTTPStreamSession = ManagedFixtureStream()
+    ) {
         self.session = session
+        self.managedStream = managedStream
     }
 
     func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
@@ -759,6 +799,12 @@ private struct FixtureResponder: DockerHTTPResponder {
                     }
                 )
             )
+        case "/managed-stream":
+            DockerHTTPResponse(
+                status: 200,
+                headers: ["Content-Type": "application/octet-stream"],
+                body: .managedStream(managedStream)
+            )
         default:
             (try? .json(DockerErrorEnvelope(message: "page not found"), status: 404))
                 ?? .text("page not found", status: 404)
@@ -771,6 +817,42 @@ private struct FixtureResponder: DockerHTTPResponder {
     ) async -> DockerHTTPResponse {
         try? await Task.sleep(for: .milliseconds(milliseconds))
         return .text(value)
+    }
+}
+
+private actor ManagedFixtureStream: DockerHTTPStreamSession {
+    private var chunks: [Data]
+    private let blocks: Bool
+    private(set) var started = false
+    private(set) var closeCount = 0
+    private(set) var cancelCount = 0
+
+    init(chunks: [String] = [], blocks: Bool = false) {
+        self.chunks = chunks.map { Data($0.utf8) }
+        self.blocks = blocks
+    }
+
+    func nextChunk() async throws -> Data? {
+        started = true
+        if blocks {
+            try await Task.sleep(for: .seconds(60))
+            return nil
+        }
+        guard !chunks.isEmpty else {
+            return nil
+        }
+        return chunks.removeFirst()
+    }
+
+    func close() {
+        closeCount += 1
+    }
+
+    func cancel() {
+        guard cancelCount == 0 else {
+            return
+        }
+        cancelCount = 1
     }
 }
 
@@ -1217,6 +1299,21 @@ private func eventually(
         try? await Task.sleep(for: .milliseconds(5))
     }
     return condition()
+}
+
+private func eventuallyAsync(
+    timeout: Duration = .seconds(2),
+    condition: () async -> Bool
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if await condition() {
+            return true
+        }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return await condition()
 }
 
 private func stop(_ process: Process) {

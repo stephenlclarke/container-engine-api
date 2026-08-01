@@ -25,6 +25,7 @@ let package = Package(
     products: [
         .library(name: "ContainerEngineWire", targets: ["ContainerEngineWire"]),
         .library(name: "ContainerEngineRouter", targets: ["ContainerEngineRouter"]),
+        .library(name: "ContainerEngineLogging", targets: ["ContainerEngineLogging"]),
         .library(name: "ContainerUnixHTTPServer", targets: ["ContainerUnixHTTPServer"])
     ],
     dependencies: [
@@ -37,6 +38,13 @@ let package = Package(
         .target(
             name: "ContainerEngineRouter",
             dependencies: ["ContainerEngineWire"]
+        ),
+        .target(
+            name: "ContainerEngineLogging",
+            dependencies: [
+                "ContainerEngineRouter",
+                "ContainerEngineWire"
+            ]
         ),
         .target(
             name: "ContainerUnixHTTPServer",
@@ -57,6 +65,14 @@ let package = Package(
         .testTarget(
             name: "ContainerEngineRouterTests",
             dependencies: [
+                "ContainerEngineRouter",
+                "ContainerEngineWire"
+            ]
+        ),
+        .testTarget(
+            name: "ContainerEngineLoggingTests",
+            dependencies: [
+                "ContainerEngineLogging",
                 "ContainerEngineRouter",
                 "ContainerEngineWire"
             ]

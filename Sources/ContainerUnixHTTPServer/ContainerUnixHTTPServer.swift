@@ -1097,6 +1097,13 @@ private final class DockerHTTPHandler:
         switch response.body {
         case let .bytes(data):
             writeBytes(data, headers: &headers, status: status, context: context)
+        case let .managedStream(session):
+            writeManagedStream(
+                session,
+                headers: &headers,
+                status: status,
+                context: context
+            )
         case let .stream(stream):
             writeStream(stream, headers: &headers, status: status, context: context)
         case let .hijack(session, terminal):
@@ -1148,6 +1155,23 @@ private final class DockerHTTPHandler:
             promise: nil
         )
         streamBody(stream, context: context)
+    }
+
+    private func writeManagedStream(
+        _ session: any DockerHTTPStreamSession,
+        headers: inout HTTPHeaders,
+        status: HTTPResponseStatus,
+        context: ChannelHandlerContext
+    ) {
+        headers.remove(name: "Content-Length")
+        headers.replaceOrAdd(name: "Transfer-Encoding", value: "chunked")
+        context.writeAndFlush(
+            wrapOutboundOut(
+                .head(HTTPResponseHead(version: .http1_1, status: status, headers: headers))
+            ),
+            promise: nil
+        )
+        managedStreamBody(session, context: context)
     }
 
     private func writeHijack(
@@ -1358,6 +1382,99 @@ private final class DockerHTTPHandler:
                 }
             }
         }
+    }
+
+    private func managedStreamBody(
+        _ session: any DockerHTTPStreamSession,
+        context: ChannelHandlerContext
+    ) {
+        let sendableContext = SendableChannelHandlerContext(context)
+        let channel = context.channel
+        streamTask = Task {
+            await withTaskCancellationHandler {
+                do {
+                    while let data = try await session.nextChunk() {
+                        try Task.checkCancellation()
+                        guard channel.isActive else {
+                            await session.cancel()
+                            return
+                        }
+                        try await self.writeManagedChunk(
+                            data,
+                            context: sendableContext.value
+                        )
+                    }
+                    await session.close()
+                    try Task.checkCancellation()
+                    guard channel.isActive else {
+                        return
+                    }
+                    try await self.finishManagedStream(
+                        context: sendableContext.value
+                    )
+                } catch is CancellationError {
+                    await session.cancel()
+                } catch {
+                    await session.cancel()
+                    guard !Task.isCancelled else {
+                        return
+                    }
+                    self.logger.error(
+                        "Container Engine managed stream failed",
+                        metadata: ["error": .string(String(describing: error))]
+                    )
+                    if channel.isActive {
+                        channel.close(promise: nil)
+                    }
+                }
+            } onCancel: {
+                Task {
+                    await session.cancel()
+                }
+            }
+        }
+    }
+
+    private func writeManagedChunk(
+        _ data: Data,
+        context: ChannelHandlerContext
+    ) async throws {
+        let sendableContext = SendableChannelHandlerContext(context)
+        let promise = context.eventLoop.makePromise(of: Void.self)
+        context.eventLoop.execute {
+            let context = sendableContext.value
+            guard context.channel.isActive else {
+                promise.fail(ChannelError.ioOnClosedChannel)
+                return
+            }
+            var buffer = context.channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            context.writeAndFlush(
+                self.wrapOutboundOut(.body(.byteBuffer(buffer))),
+                promise: promise
+            )
+        }
+        try await promise.futureResult.get()
+    }
+
+    private func finishManagedStream(
+        context: ChannelHandlerContext
+    ) async throws {
+        let sendableContext = SendableChannelHandlerContext(context)
+        let promise = context.eventLoop.makePromise(of: Void.self)
+        context.eventLoop.execute {
+            let context = sendableContext.value
+            guard context.channel.isActive else {
+                promise.fail(ChannelError.ioOnClosedChannel)
+                return
+            }
+            context.writeAndFlush(
+                self.wrapOutboundOut(.end(nil)),
+                promise: promise
+            )
+        }
+        try await promise.futureResult.get()
+        finishResponse(promise.futureResult, context: context)
     }
 }
 

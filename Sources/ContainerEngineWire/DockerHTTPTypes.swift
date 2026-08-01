@@ -71,8 +71,21 @@ public protocol DockerHTTPResponder: Sendable {
 
 public enum DockerHTTPBody: Sendable {
     case bytes(Data)
+    /// A pull-based stream whose producer is closed or cancelled with the HTTP request.
+    case managedStream(any DockerHTTPStreamSession)
     case stream(AsyncThrowingStream<Data, any Error>)
     case hijack(any DockerHijackSession, terminal: Bool)
+}
+
+/// A bounded, cancellation-aware source for one streaming HTTP response.
+///
+/// The server requests at most one chunk at a time and does not request the
+/// next chunk until the previous channel write completes. Implementations
+/// therefore do not need an additional unbounded producer queue.
+public protocol DockerHTTPStreamSession: Sendable {
+    func nextChunk() async throws -> Data?
+    func close() async
+    func cancel() async
 }
 
 public struct DockerHTTPResponse: Sendable {
@@ -146,6 +159,7 @@ public enum DockerStreamChannel: UInt8, Codable, Sendable {
     case standardInput = 0
     case standardOutput = 1
     case standardError = 2
+    case systemError = 3
 }
 
 public struct DockerStreamFrame: Equatable, Sendable {

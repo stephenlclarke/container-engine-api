@@ -86,13 +86,16 @@ public struct DockerRequestTarget: Equatable, Sendable {
     public let query: [String: [String]]
 
     public init(_ target: String) throws {
+        let queryMarker = target.firstIndex(of: "?")
+        let rawPath = String(target[..<(queryMarker ?? target.endIndex)])
         guard
             target.hasPrefix("/"),
             let components = URLComponents(string: target),
             components.scheme == nil,
             components.host == nil,
             components.fragment == nil,
-            !components.percentEncodedPath.isEmpty
+            !components.percentEncodedPath.isEmpty,
+            Self.invalidPercentEscape(in: rawPath) == nil
         else {
             throw DockerRoutingError.invalidRequestTarget(target)
         }
@@ -120,16 +123,91 @@ public struct DockerRequestTarget: Equatable, Sendable {
             }
             return decoded
         }
-        query = Dictionary(
-            grouping: components.queryItems ?? [],
-            by: \.name
-        ).mapValues { values in
-            values.map { $0.value ?? "" }
+        let encodedQuery = queryMarker.map { queryMarker in
+            String(target[target.index(after: queryMarker)...])
         }
+        query = try Self.parseFormQuery(encodedQuery)
     }
 
     public func first(_ name: String) -> String? {
         query[name]?.first
+    }
+
+    private static func parseFormQuery(
+        _ encodedQuery: String?
+    ) throws -> [String: [String]] {
+        guard let encodedQuery, !encodedQuery.isEmpty else {
+            return [:]
+        }
+        var result: [String: [String]] = [:]
+        for field in encodedQuery.split(
+            separator: "&",
+            omittingEmptySubsequences: true
+        ) {
+            guard !field.contains(";") else {
+                throw DockerRoutingError.invalidQuery(
+                    "invalid semicolon separator in query"
+                )
+            }
+            let parts = field.split(
+                separator: "=",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            )
+            let name = try formDecode(String(parts[0]))
+            let value = try formDecode(parts.count == 2 ? String(parts[1]) : "")
+            result[name, default: []].append(value)
+        }
+        return result
+    }
+
+    private static func formDecode(_ value: String) throws -> String {
+        if let escape = invalidPercentEscape(in: value) {
+            throw DockerRoutingError.invalidQuery(
+                "invalid URL escape \"\(escape)\""
+            )
+        }
+        guard
+            let decoded = value.replacingOccurrences(
+                of: "+",
+                with: " "
+            ).removingPercentEncoding
+        else {
+            throw DockerRoutingError.invalidQuery("invalid UTF-8 in query")
+        }
+        return decoded
+    }
+
+    private static func invalidPercentEscape(in value: String) -> String? {
+        let bytes = Array(value.utf8)
+        var index = 0
+        while index < bytes.count {
+            if bytes[index] == UInt8(ascii: "%") {
+                guard
+                    index + 2 < bytes.count,
+                    isHexadecimal(bytes[index + 1]),
+                    isHexadecimal(bytes[index + 2])
+                else {
+                    let end = min(index + 3, bytes.count)
+                    return String(decoding: bytes[index ..< end], as: UTF8.self)
+                }
+                index += 3
+            } else {
+                index += 1
+            }
+        }
+        return nil
+    }
+
+    private static func isHexadecimal(_ byte: UInt8) -> Bool {
+        switch byte {
+        case UInt8(ascii: "0") ... UInt8(ascii: "9"),
+             UInt8(ascii: "A") ... UInt8(ascii: "F"),
+             UInt8(ascii: "a") ... UInt8(ascii: "f"):
+            true
+        default:
+            false
+        }
     }
 }
 
@@ -249,6 +327,7 @@ public enum DockerRoutingError: Error, Equatable, CustomStringConvertible, Senda
     case duplicateRouteSignature(DockerHTTPMethod, String)
     case invalidAPIVersion(String)
     case invalidLedgerVersionRange
+    case invalidQuery(String)
     case invalidRequestTarget(String)
     case invalidRouteIdentifier(String)
     case invalidRoutePattern(String)
@@ -267,6 +346,8 @@ public enum DockerRoutingError: Error, Equatable, CustomStringConvertible, Senda
             "invalid Docker API version \(value)"
         case .invalidLedgerVersionRange:
             "Docker route ledger minimum version exceeds its maximum version"
+        case let .invalidQuery(message):
+            message
         case let .invalidRequestTarget(target):
             "invalid Docker request target \(target)"
         case let .invalidRouteIdentifier(identifier):

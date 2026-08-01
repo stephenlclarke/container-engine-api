@@ -33,6 +33,27 @@ func `request target separates API version path parameters and repeated query va
 }
 
 @Test
+func `request target uses Docker form query decoding`() throws {
+    let target = try DockerRequestTarget(
+        "/containers/example/logs?value=a+b&value=a%2Bb&empty=&flag"
+    )
+
+    #expect(target.query["value"] == ["a b", "a+b"])
+    #expect(target.query["empty"] == [""])
+    #expect(target.query["flag"] == [""])
+    #expect(throws: DockerRoutingError.invalidQuery(
+        "invalid URL escape \"%ZZ\""
+    )) {
+        try DockerRequestTarget("/containers/example/logs?bad=%ZZ")
+    }
+    #expect(throws: DockerRoutingError.invalidQuery(
+        "invalid semicolon separator in query"
+    )) {
+        try DockerRequestTarget("/containers/example/logs?one=1;two=2")
+    }
+}
+
+@Test
 func `route ledger matches versioned and unversioned requests`() throws {
     let metadata = try DockerRouteMetadata(
         identifier: "container.inspect",
