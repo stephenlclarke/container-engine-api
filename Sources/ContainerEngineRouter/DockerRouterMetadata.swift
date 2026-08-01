@@ -33,6 +33,8 @@ public struct DockerRouteMetadata: Codable, Hashable, Sendable {
     public var method: DockerHTTPMethod
     public var pattern: DockerRoutePattern
     public var introduced: DockerAPIVersion
+    /// The first API version where the route is no longer available.
+    public var removed: DockerAPIVersion?
     public var responseMode: DockerRouteResponseMode
     public var disposition: DockerRouteDisposition
 
@@ -41,6 +43,7 @@ public struct DockerRouteMetadata: Codable, Hashable, Sendable {
         method: DockerHTTPMethod,
         pattern: DockerRoutePattern,
         introduced: DockerAPIVersion,
+        removed: DockerAPIVersion? = nil,
         responseMode: DockerRouteResponseMode,
         disposition: DockerRouteDisposition
     ) {
@@ -48,8 +51,13 @@ public struct DockerRouteMetadata: Codable, Hashable, Sendable {
         self.method = method
         self.pattern = pattern
         self.introduced = introduced
+        self.removed = removed
         self.responseMode = responseMode
         self.disposition = disposition
+    }
+
+    public func isAvailable(in version: DockerAPIVersion) -> Bool {
+        introduced <= version && removed.map { version < $0 } != false
     }
 }
 
@@ -70,12 +78,13 @@ public struct DockerRouteMatch: Sendable {
 }
 
 public struct DockerRouteLedger: Codable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public let schemaVersion: Int
     public let minimumAPIVersion: DockerAPIVersion
     public let maximumAPIVersion: DockerAPIVersion
     public let routes: [DockerRouteMetadata]
+    private let matchingRouteIndexes: [Int]
 
     public init(
         minimumAPIVersion: DockerAPIVersion,
@@ -112,12 +121,27 @@ public struct DockerRouteLedger: Codable, Sendable {
             guard route.introduced <= maximumAPIVersion else {
                 throw DockerRoutingError.routeIntroducedAfterMaximum(route.identifier)
             }
+            if let removed = route.removed {
+                guard route.introduced < removed else {
+                    throw DockerRoutingError.invalidRouteVersionInterval(
+                        route.identifier
+                    )
+                }
+                guard removed > minimumAPIVersion else {
+                    throw DockerRoutingError.routeRemovedAtOrBeforeMinimum(
+                        route.identifier
+                    )
+                }
+            }
         }
 
         schemaVersion = Self.currentSchemaVersion
         self.minimumAPIVersion = minimumAPIVersion
         self.maximumAPIVersion = maximumAPIVersion
         self.routes = routes
+        matchingRouteIndexes = routes.indices.sorted { lhs, rhs in
+            Self.hasMatchingPriority(routes[lhs], over: routes[rhs])
+        }
     }
 
     public func match(_ request: DockerHTTPRequest) throws -> DockerRouteMatch? {
@@ -128,9 +152,11 @@ public struct DockerRouteLedger: Codable, Sendable {
             throw DockerRoutingError.unsupportedAPIVersion(version)
         }
         let requestedVersion = target.apiVersion ?? maximumAPIVersion
-        for route in routes where route.method == request.method {
+        for index in matchingRouteIndexes {
+            let route = routes[index]
             guard
-                route.introduced <= requestedVersion,
+                route.method == request.method,
+                route.isAvailable(in: requestedVersion),
                 let parameters = route.pattern.match(target)
             else {
                 continue
@@ -185,6 +211,25 @@ public struct DockerRouteLedger: Codable, Sendable {
                 debugDescription: String(describing: error)
             )
         }
+    }
+
+    private static func hasMatchingPriority(
+        _ candidate: DockerRouteMetadata,
+        over other: DockerRouteMetadata
+    ) -> Bool {
+        if candidate.pattern.isMoreSpecific(than: other.pattern) {
+            return true
+        }
+        if other.pattern.isMoreSpecific(than: candidate.pattern) {
+            return false
+        }
+        if candidate.method != other.method {
+            return candidate.method.rawValue < other.method.rawValue
+        }
+        if candidate.pattern.template != other.pattern.template {
+            return candidate.pattern.template < other.pattern.template
+        }
+        return candidate.identifier < other.identifier
     }
 }
 

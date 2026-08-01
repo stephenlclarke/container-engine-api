@@ -211,6 +211,20 @@ public struct DockerRoutePattern: Codable, Hashable, Sendable {
         return parameters
     }
 
+    func isMoreSpecific(than other: DockerRoutePattern) -> Bool {
+        for (candidate, current) in zip(segments, other.segments) {
+            switch (candidate, current) {
+            case (.literal, .parameter):
+                return true
+            case (.parameter, .literal):
+                return false
+            case (.literal, .literal), (.parameter, .parameter):
+                continue
+            }
+        }
+        return segments.count > other.segments.count
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
         let value = try container.decode(String.self)
@@ -238,7 +252,9 @@ public enum DockerRoutingError: Error, Equatable, CustomStringConvertible, Senda
     case invalidRequestTarget(String)
     case invalidRouteIdentifier(String)
     case invalidRoutePattern(String)
+    case invalidRouteVersionInterval(String)
     case routeIntroducedAfterMaximum(String)
+    case routeRemovedAtOrBeforeMinimum(String)
     case unsupportedAPIVersion(DockerAPIVersion)
 
     public var description: String {
@@ -257,8 +273,12 @@ public enum DockerRoutingError: Error, Equatable, CustomStringConvertible, Senda
             "invalid Docker route identifier \(identifier)"
         case let .invalidRoutePattern(pattern):
             "invalid Docker route pattern \(pattern)"
+        case let .invalidRouteVersionInterval(identifier):
+            "Docker route \(identifier) has an empty or reversed API version interval"
         case let .routeIntroducedAfterMaximum(identifier):
             "Docker route \(identifier) was introduced after the ledger maximum version"
+        case let .routeRemovedAtOrBeforeMinimum(identifier):
+            "Docker route \(identifier) was removed at or before the ledger minimum version"
         case let .unsupportedAPIVersion(version):
             "unsupported Docker API version \(version)"
         }

@@ -27,13 +27,13 @@ public enum DockerHTTPMethod: String, CaseIterable, Codable, Sendable {
 public struct DockerHTTPRequest: Sendable {
     public var method: DockerHTTPMethod
     public var target: String
-    public var headers: [String: String]
+    public var headers: DockerHTTPHeaders
     public var body: Data
 
     public init(
         method: DockerHTTPMethod,
         target: String,
-        headers: [String: String] = [:],
+        headers: DockerHTTPHeaders = DockerHTTPHeaders(),
         body: Data = Data()
     ) {
         self.method = method
@@ -42,9 +42,26 @@ public struct DockerHTTPRequest: Sendable {
         self.body = body
     }
 
-    public func header(_ name: String) -> String? {
-        let lowercased = name.lowercased()
-        return headers.first { $0.key.lowercased() == lowercased }?.value
+    public init(
+        method: DockerHTTPMethod,
+        target: String,
+        uniqueHeaders: [String: String],
+        body: Data = Data()
+    ) throws {
+        try self.init(
+            method: method,
+            target: target,
+            headers: DockerHTTPHeaders(uniqueFields: uniqueHeaders),
+            body: body
+        )
+    }
+
+    public func headerValues(_ name: String) -> [String] {
+        headers.values(for: name)
+    }
+
+    public func uniqueHeader(_ name: String) throws -> String? {
+        try headers.uniqueValue(for: name)
     }
 }
 

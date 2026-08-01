@@ -8,7 +8,7 @@ Before extraction, both `git status --porcelain=v2` and the index/worktree diffs
 
 Extraction used `/opt/homebrew/bin/git-filter-repo` version `a40bce548d2c` with separate `--source` and `--target` repositories. The target was initialized without a remote and still has no configured remote. Only `refs/heads/main` and the paths listed below were selected. File renames were performed by `git-filter-repo --path-rename`, so the filtered commits retain the original authors, dates, messages, and per-file ancestry.
 
-The filtered baseline tip is `fe15f77ffb3711bcb8ae3b83dd9cca1b394bb618`, mapping source commit `e047fb7070599dd995fc12feba1434c80dbb3f70`. The accepted source tip itself touched none of the selected paths and was therefore pruned as an empty filtered commit; its exact revision and tree remain the extraction authority recorded above. No post-extraction commit has been created yet.
+The filtered baseline tip is `fe15f77ffb3711bcb8ae3b83dd9cca1b394bb618`, mapping source commit `e047fb7070599dd995fc12feba1434c80dbb3f70`. The accepted source tip itself touched none of the selected paths and was therefore pruned as an empty filtered commit; its exact revision and tree remain the extraction authority recorded above. Post-extraction package assembly is recorded in `cb4311e8cf103bd21a4473356382e70639996b58`; the filtered commits retain their original attribution beneath that local commit.
 
 ## Source Path Mapping
 
@@ -23,7 +23,7 @@ The filtered baseline tip is `fe15f77ffb3711bcb8ae3b83dd9cca1b394bb618`, mapping
 | `Tests/DevContainerServiceTests/EngineServerTests.swift` | `7d83a25f22360b14ab3e9715a3f78ad3875e3614` | `Tests/ContainerUnixHTTPServerTests/ContainerUnixHTTPServerTests.swift` |
 | `Tests/DevContainerServiceTests/OrderedRuntimeInputPumpTests.swift` | `481029efca1a315d44ab8fa3c8a12769091914c8` | `Tests/ContainerUnixHTTPServerTests/OrderedRuntimeInputPumpTests.swift` |
 
-The root `Package.swift`, `Package.resolved`, `LICENSE`, `NOTICE.md`, `.gitignore`, `.swiftformat`, and `.markdownlint.json` histories were selected as supporting package provenance. The manifest, notice, extracted implementation, and tests are intentionally modified but uncommitted on top of the filtered baseline.
+The root `Package.swift`, `Package.resolved`, `LICENSE`, `NOTICE.md`, `.gitignore`, `.swiftformat`, and `.markdownlint.json` histories were selected as supporting package provenance. Package assembly, notice updates, runtime-neutral adaptation, and extracted tests were committed together in the post-extraction checkpoint identified above; later hardening commits retain the filtered history and source mapping.
 
 ## Deliberate Exclusions
 
@@ -35,11 +35,11 @@ The raw session interface and stream-frame types were moved to `ContainerEngineW
 
 ### Docker Engine API 1.53 completeness
 
-This slice provides versioned route metadata and collision-safe matching primitives, not the generated Docker Engine API 1.53 route and field ledger. It does not contain the complete API 1.53 DTO set or handlers, and it does not advertise API 1.53 compatibility. Registry authentication, image push, BuildKit `/session`, complete archive/build semantics, exact duplicate-header behavior, and every route's pinned success/failure disposition remain future conformance work.
+This slice provides versioned route metadata and collision-safe matching primitives, not the generated Docker Engine API 1.53 route and field ledger. It does not contain the complete API 1.53 DTO set or handlers, and it does not advertise API 1.53 compatibility. Request headers now preserve original spelling, order, duplicates, and mixed-case duplicates through the NIO boundary, with all-value access and fail-closed unique lookup. Registry authentication, image push, BuildKit `/session`, complete archive/build semantics, and every route's pinned success/failure disposition remain future conformance work.
 
 ### Bounded streaming
 
-Inbound request bodies are still materialized in memory, subject to per-request, aggregate-buffer, and pending-request caps. Outbound `AsyncThrowingStream<Data>` responses are chunked but are not yet suspended on NIO channel writability, so a producer can outrun a slow client. The ordered raw-hijack input pump also uses an unbounded queue when its session consumer is slower than the client. Large uploads require incremental delivery or inode-safe private-file spooling, large downloads require watermarked backpressure and cancellation tests, and raw input needs a bounded backpressure or fail-closed policy before their routes can be advertised. Raw hijack output awaits each channel write, but that does not close the remaining streaming gaps.
+Each inbound request body is still materialized as one `Foundation.Data` value, subject to per-request, aggregate-buffer, and pending-request caps. The header hardening in this slice does not change that body contract. Outbound `AsyncThrowingStream<Data>` responses are chunked but are not yet suspended on NIO channel writability, so a producer can outrun a slow client. The ordered raw-hijack input pump also uses an unbounded queue when its session consumer is slower than the client. Large uploads require incremental delivery or inode-safe private-file spooling, large downloads require watermarked backpressure and cancellation tests, and raw input needs a bounded backpressure or fail-closed policy before their routes can be advertised. Raw hijack output awaits each channel write, but that does not close the remaining streaming gaps.
 
 ### Remaining server hardening
 

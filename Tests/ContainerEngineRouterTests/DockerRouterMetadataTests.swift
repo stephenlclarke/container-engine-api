@@ -100,11 +100,129 @@ func `ledger rejects ambiguous metadata`() throws {
 }
 
 @Test
-func `ledger enforces its version range and schema`() throws {
+func `literal routes win independently of declaration order`() throws {
+    let parameter = try DockerRouteMetadata(
+        identifier: "container.inspect",
+        method: .get,
+        pattern: DockerRoutePattern("/containers/{identifier}"),
+        introduced: DockerAPIVersion("1.24"),
+        responseMode: .bytes,
+        disposition: .implemented
+    )
+    let literal = try DockerRouteMetadata(
+        identifier: "container.list-special",
+        method: .get,
+        pattern: DockerRoutePattern("/containers/json"),
+        introduced: DockerAPIVersion("1.24"),
+        responseMode: .bytes,
+        disposition: .implemented
+    )
+    let request = DockerHTTPRequest(method: .get, target: "/containers/json")
+
+    for routes in [[parameter, literal], [literal, parameter]] {
+        let ledger = try DockerRouteLedger(
+            minimumAPIVersion: DockerAPIVersion("1.24"),
+            maximumAPIVersion: DockerAPIVersion("1.53"),
+            routes: routes
+        )
+        #expect(try ledger.match(request)?.metadata.identifier == literal.identifier)
+    }
+}
+
+@Test
+func `route removal is an exclusive version bound`() throws {
+    let metadata = try DockerRouteMetadata(
+        identifier: "legacy.inspect",
+        method: .get,
+        pattern: DockerRoutePattern("/legacy/{identifier}"),
+        introduced: DockerAPIVersion("1.30"),
+        removed: DockerAPIVersion("1.40"),
+        responseMode: .bytes,
+        disposition: .implemented
+    )
     let ledger = try DockerRouteLedger(
         minimumAPIVersion: DockerAPIVersion("1.24"),
         maximumAPIVersion: DockerAPIVersion("1.53"),
-        routes: []
+        routes: [metadata]
+    )
+
+    #expect(try ledger.match(
+        DockerHTTPRequest(method: .get, target: "/v1.29/legacy/example")
+    )?.metadata.identifier == nil)
+    #expect(try ledger.match(
+        DockerHTTPRequest(method: .get, target: "/v1.30/legacy/example")
+    )?.metadata.identifier == metadata.identifier)
+    #expect(try ledger.match(
+        DockerHTTPRequest(method: .get, target: "/v1.39/legacy/example")
+    )?.metadata.identifier == metadata.identifier)
+    #expect(try ledger.match(
+        DockerHTTPRequest(method: .get, target: "/v1.40/legacy/example")
+    )?.metadata.identifier == nil)
+    #expect(try ledger.match(
+        DockerHTTPRequest(method: .get, target: "/legacy/example")
+    )?.metadata.identifier == nil)
+}
+
+@Test
+func `ledger rejects empty and nonintersecting route version intervals`() throws {
+    let introduced = try DockerAPIVersion("1.30")
+
+    for removed in try [introduced, DockerAPIVersion("1.29")] {
+        let metadata = try DockerRouteMetadata(
+            identifier: "legacy.inspect",
+            method: .get,
+            pattern: DockerRoutePattern("/legacy/{identifier}"),
+            introduced: introduced,
+            removed: removed,
+            responseMode: .bytes,
+            disposition: .implemented
+        )
+        #expect(throws: DockerRoutingError.invalidRouteVersionInterval(
+            metadata.identifier
+        )) {
+            try DockerRouteLedger(
+                minimumAPIVersion: DockerAPIVersion("1.24"),
+                maximumAPIVersion: DockerAPIVersion("1.53"),
+                routes: [metadata]
+            )
+        }
+    }
+
+    let alreadyRemoved = try DockerRouteMetadata(
+        identifier: "removed.inspect",
+        method: .get,
+        pattern: DockerRoutePattern("/removed/{identifier}"),
+        introduced: DockerAPIVersion("1.20"),
+        removed: DockerAPIVersion("1.24"),
+        responseMode: .bytes,
+        disposition: .implemented
+    )
+    #expect(throws: DockerRoutingError.routeRemovedAtOrBeforeMinimum(
+        alreadyRemoved.identifier
+    )) {
+        try DockerRouteLedger(
+            minimumAPIVersion: DockerAPIVersion("1.24"),
+            maximumAPIVersion: DockerAPIVersion("1.53"),
+            routes: [alreadyRemoved]
+        )
+    }
+}
+
+@Test
+func `ledger enforces its version range and schema`() throws {
+    let metadata = try DockerRouteMetadata(
+        identifier: "legacy.inspect",
+        method: .get,
+        pattern: DockerRoutePattern("/legacy/{identifier}"),
+        introduced: DockerAPIVersion("1.24"),
+        removed: DockerAPIVersion("1.40"),
+        responseMode: .bytes,
+        disposition: .implemented
+    )
+    let ledger = try DockerRouteLedger(
+        minimumAPIVersion: DockerAPIVersion("1.24"),
+        maximumAPIVersion: DockerAPIVersion("1.53"),
+        routes: [metadata]
     )
 
     #expect(throws: DockerRoutingError.self) {
@@ -112,15 +230,29 @@ func `ledger enforces its version range and schema`() throws {
             DockerHTTPRequest(method: .get, target: "/v1.54/_ping")
         )
     }
+    #expect(throws: DockerRoutingError.self) {
+        try ledger.match(
+            DockerHTTPRequest(method: .get, target: "/v1.23/_ping")
+        )
+    }
 
     let encoded = try DockerJSON.encoder.encode(ledger)
+    let decoded = try DockerJSON.decoder.decode(DockerRouteLedger.self, from: encoded)
+    #expect(decoded.schemaVersion == DockerRouteLedger.currentSchemaVersion)
+    #expect(decoded.minimumAPIVersion == ledger.minimumAPIVersion)
+    #expect(decoded.maximumAPIVersion == ledger.maximumAPIVersion)
+    #expect(decoded.routes == ledger.routes)
+    #expect(decoded.routes.first?.removed == metadata.removed)
+
     var object = try #require(
         JSONSerialization.jsonObject(with: encoded) as? [String: Any]
     )
-    object["schemaVersion"] = 2
-    let unsupported = try JSONSerialization.data(withJSONObject: object)
-    #expect(throws: DecodingError.self) {
-        try DockerJSON.decoder.decode(DockerRouteLedger.self, from: unsupported)
+    for schemaVersion in [1, DockerRouteLedger.currentSchemaVersion + 1] {
+        object["schemaVersion"] = schemaVersion
+        let unsupported = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            try DockerJSON.decoder.decode(DockerRouteLedger.self, from: unsupported)
+        }
     }
 }
 

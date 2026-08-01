@@ -529,9 +529,10 @@ private final class DockerHTTPHandler:
         ) ?? Data()
         requestBody = ByteBuffer()
         retainedRequestBodyBytes += body.count
-        let headers = Dictionary(
-            head.headers.map { ($0.name, $0.value) },
-            uniquingKeysWith: { _, latest in latest }
+        let headers = DockerHTTPHeaders(
+            head.headers.map {
+                DockerHTTPHeaders.Field(name: $0.name, value: $0.value)
+            }
         )
         let request = DockerHTTPMethod(rawValue: head.method.rawValue).map {
             DockerHTTPRequest(

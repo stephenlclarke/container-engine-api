@@ -19,14 +19,51 @@ import Foundation
 import Testing
 
 @Test
-func `request headers are case insensitive`() {
+func `request headers preserve order spelling and case-insensitive duplicates`() throws {
     let request = DockerHTTPRequest(
         method: .get,
         target: "/_ping",
-        headers: ["X-Registry-Auth": "fixture"]
+        headers: DockerHTTPHeaders([
+            .init(name: "X-Registry-Auth", value: "first"),
+            .init(name: "x-registry-auth", value: "second"),
+            .init(name: "X-Other", value: "fixture")
+        ])
     )
 
-    #expect(request.header("x-registry-auth") == "fixture")
+    #expect(request.headers.map(\.name) == [
+        "X-Registry-Auth",
+        "x-registry-auth",
+        "X-Other"
+    ])
+    #expect(request.headerValues("X-REGISTRY-AUTH") == ["first", "second"])
+    #expect(throws: DockerHTTPHeaderError.ambiguousValue(
+        name: "x-registry-auth",
+        count: 2
+    )) {
+        try request.uniqueHeader("x-registry-auth")
+    }
+    #expect(try request.uniqueHeader("x-other") == "fixture")
+    #expect(try request.uniqueHeader("missing") == nil)
+}
+
+@Test
+func `dictionary header convenience rejects case-insensitive duplicates`() throws {
+    #expect(throws: DockerHTTPHeaderError.duplicateUniqueName("x-request-id")) {
+        try DockerHTTPHeaders(uniqueFields: [
+            "X-Request-ID": "first",
+            "x-request-id": "second"
+        ])
+    }
+
+    let request = try DockerHTTPRequest(
+        method: .get,
+        target: "/_ping",
+        uniqueHeaders: [
+            "X-Zeta": "last",
+            "X-Alpha": "first"
+        ]
+    )
+    #expect(request.headers.map(\.name) == ["X-Alpha", "X-Zeta"])
 }
 
 @Test

@@ -99,6 +99,29 @@ struct ContainerUnixHTTPServerTests {
     }
 
     @Test
+    func `server preserves duplicate request header spelling and order`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let server = fixture.server(responder: FixtureResponder())
+        try await server.start()
+
+        do {
+            let response = try fixture.pipelined(
+                "GET /headers HTTP/1.1\r\n"
+                    + "Host: localhost\r\n"
+                    + "X-Order: first\r\n"
+                    + "x-order: second\r\n\r\n"
+            )
+            #expect(response.contains("\r\n\r\nX-Order=first\nx-order=second"))
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+
+        try await server.shutdown()
+    }
+
+    @Test
     func `server bounds request and pipeline buffering`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
@@ -235,6 +258,13 @@ private struct FixtureResponder: DockerHTTPResponder {
                     "Upgrade": "tcp"
                 ],
                 body: .hijack(session, terminal: false)
+            )
+        case "/headers":
+            .text(
+                request.headers
+                    .filter { $0.name.lowercased() == "x-order" }
+                    .map { "\($0.name)=\($0.value)" }
+                    .joined(separator: "\n")
             )
         case "/hold":
             await delayed("held-response", milliseconds: 100)
