@@ -29,13 +29,17 @@ The root `Package.swift`, `Package.resolved`, `LICENSE`, `NOTICE.md`, `.gitignor
 
 The Dev Container-specific router handlers, runtime registries, resource DTO projections, state, CLI, service command, and Apple runtime modules were not extracted. In particular, the package imports neither `DevContainerCore`, `DevContainerModel`, `DevContainerRuntimeSPI`, `ComposeCore`, `apple/container`, nor `apple/containerization`. The later `ContainerEngineLogging` target remains runtime-neutral and depends only on the extracted wire and router products.
 
-The raw session interface and stream-frame types were moved to `ContainerEngineWire` so the Unix server depends on a neutral protocol rather than the former Dev Container runtime SPI. `ContainerUnixHTTPServer` now accepts any `DockerHTTPResponder`; provider selection and endpoint policy belong in later gateway/adaptor work.
+The raw session interface and stream-frame types were moved to `ContainerEngineWire` so the Unix server depends on a neutral protocol rather than the former Dev Container runtime SPI. `ContainerUnixHTTPServer` now accepts any `DockerHTTPResponder`. `ContainerEngineRuntimeSPI` supplies restart-stable stock/enhanced provider declarations, versioned capabilities, immutable state-root UUIDs, canonical fingerprints, and fail-closed selection persistence. Endpoint policy, the provider-session transport, and explicit handoff remain later gateway/adaptor work.
 
 ## Known Gaps And Non-Claims
 
 ### Docker Engine API 1.53 completeness
 
 This package provides versioned route metadata and collision-safe matching primitives plus the logging-specific `/info`, inspect, logs, and attach routes for Docker Engine 29.2.1 API 1.44 through 1.53. It does not contain the complete API 1.53 DTO set or handlers, and it does not advertise whole-API 1.53 compatibility. Logging `/info` and inspect responses deliberately contain only the fields owned by this slice; a complete gateway must compose the other Engine fields. Request headers preserve original spelling, order, duplicates, and mixed-case duplicates through the NIO boundary, with all-value access and fail-closed unique lookup. Registry authentication, image push, BuildKit `/session`, complete archive/build semantics, and every non-logging route's pinned success/failure disposition remain future conformance work.
+
+### Gateway process and provider sessions
+
+The provider selection record rejects a declaration change for an existing state root and requires an explicit handoff rather than silently selecting a fallback. The package does not yet provide the `container-engine` executable or the versioned out-of-process provider-session transport required to keep stock and enhanced Apple package revisions out of one SwiftPM graph. Until that process boundary lands, adopters can reuse the neutral server and identity contract but cannot claim the final singular-gateway topology.
 
 ### Bounded streaming
 

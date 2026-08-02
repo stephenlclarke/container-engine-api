@@ -26,6 +26,7 @@ let package = Package(
         .library(name: "ContainerEngineWire", targets: ["ContainerEngineWire"]),
         .library(name: "ContainerEngineRouter", targets: ["ContainerEngineRouter"]),
         .library(name: "ContainerEngineLogging", targets: ["ContainerEngineLogging"]),
+        .library(name: "ContainerEngineRuntimeSPI", targets: ["ContainerEngineRuntimeSPI"]),
         .library(name: "ContainerUnixHTTPServer", targets: ["ContainerUnixHTTPServer"])
     ],
     dependencies: [
@@ -46,6 +47,7 @@ let package = Package(
                 "ContainerEngineWire"
             ]
         ),
+        .target(name: "ContainerEngineRuntimeSPI"),
         .target(
             name: "ContainerUnixHTTPServer",
             dependencies: [
@@ -76,6 +78,10 @@ let package = Package(
                 "ContainerEngineRouter",
                 "ContainerEngineWire"
             ]
+        ),
+        .testTarget(
+            name: "ContainerEngineRuntimeSPITests",
+            dependencies: ["ContainerEngineRuntimeSPI"]
         ),
         .testTarget(
             name: "ContainerUnixHTTPServerTests",
