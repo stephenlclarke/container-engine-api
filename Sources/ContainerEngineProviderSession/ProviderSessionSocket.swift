@@ -138,9 +138,13 @@ final class ProviderSessionSocket: @unchecked Sendable {
 }
 
 enum ProviderSessionUnixSocket {
+    private nonisolated(unsafe) static var processLockPaths = Set<String>()
+    private static let processLock = NSLock()
+
     struct Listener {
         var descriptor: Int32
         var lockDescriptor: Int32
+        var lockPath: String
         var device: dev_t
         var inode: ino_t
     }
@@ -173,16 +177,17 @@ enum ProviderSessionUnixSocket {
 
     static func listen(path: String) throws -> Listener {
         try prepareParent(path: path)
-        let lockDescriptor = try acquireLock(path: path + ".lock")
+        let lockPath = path + ".lock"
+        let lockDescriptor = try acquireLock(path: lockPath)
         do {
             try prepare(path: path)
         } catch {
-            releaseLock(lockDescriptor)
+            releaseLock(lockDescriptor, path: lockPath)
             throw error
         }
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
-            releaseLock(lockDescriptor)
+            releaseLock(lockDescriptor, path: lockPath)
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         do {
@@ -213,13 +218,14 @@ enum ProviderSessionUnixSocket {
             return Listener(
                 descriptor: descriptor,
                 lockDescriptor: lockDescriptor,
+                lockPath: lockPath,
                 device: status.st_dev,
                 inode: status.st_ino
             )
         } catch {
             Darwin.close(descriptor)
             try? FileManager.default.removeItem(atPath: path)
-            releaseLock(lockDescriptor)
+            releaseLock(lockDescriptor, path: lockPath)
             throw error
         }
     }
@@ -236,7 +242,7 @@ enum ProviderSessionUnixSocket {
         {
             try? FileManager.default.removeItem(atPath: path)
         }
-        releaseLock(listener.lockDescriptor)
+        releaseLock(listener.lockDescriptor, path: listener.lockPath)
     }
 
     static func makeAddress(path: String) throws -> sockaddr_un {
@@ -297,12 +303,20 @@ enum ProviderSessionUnixSocket {
     }
 
     private static func acquireLock(path: String) throws -> Int32 {
+        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        let reserved = processLock.withLock {
+            processLockPaths.insert(standardizedPath).inserted
+        }
+        guard reserved else {
+            throw ContainerEngineProviderSessionError.unsafeSocketPath(path)
+        }
         let descriptor = open(
             path,
             O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW,
             S_IRUSR | S_IWUSR
         )
         guard descriptor >= 0 else {
+            releaseProcessLock(path: standardizedPath)
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         var status = stat()
@@ -315,13 +329,23 @@ enum ProviderSessionUnixSocket {
             flock(descriptor, LOCK_EX | LOCK_NB) == 0
         else {
             Darwin.close(descriptor)
+            releaseProcessLock(path: standardizedPath)
             throw ContainerEngineProviderSessionError.unsafeSocketPath(path)
         }
         return descriptor
     }
 
-    private static func releaseLock(_ descriptor: Int32) {
+    private static func releaseLock(_ descriptor: Int32, path: String) {
         _ = flock(descriptor, LOCK_UN)
         Darwin.close(descriptor)
+        releaseProcessLock(
+            path: URL(fileURLWithPath: path).standardizedFileURL.path
+        )
+    }
+
+    private static func releaseProcessLock(path: String) {
+        _ = processLock.withLock {
+            processLockPaths.remove(path)
+        }
     }
 }
