@@ -80,6 +80,39 @@ struct ContainerEngineProviderIdentityTests {
     }
 
     @Test
+    func `provider state root is stable and participates in selection`() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "container-engine-state-root-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identityPath = root.appendingPathComponent("state-root-id")
+        let identityStore = ContainerEngineStateRootIdentityStore(path: identityPath)
+        let stateRoot = try identityStore.loadOrCreate()
+
+        #expect(try identityStore.loadOrCreate() == stateRoot)
+        let selectionStore = ContainerEngineProviderSelectionStore(
+            path: root.appendingPathComponent("provider.json")
+        )
+        let selected = try selectionStore.select(
+            declaration(),
+            stateRootUUID: stateRoot
+        )
+        #expect(selected.stateRootUUID == stateRoot)
+        #expect(throws: ContainerEngineProviderIdentityError.self) {
+            try selectionStore.select(
+                declaration(),
+                stateRootUUID: UUID()
+            )
+        }
+        #expect(try selectionStore.load() == selected)
+
+        var fileStatus = stat()
+        #expect(lstat(identityPath.path, &fileStatus) == 0)
+        #expect(fileStatus.st_mode & (S_IRWXG | S_IRWXO) == 0)
+    }
+
+    @Test
     func `selection refuses a symbolic link`() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "container-engine-provider-tests-\(UUID().uuidString)",

@@ -20,6 +20,53 @@ import Foundation
 import Testing
 
 @Test
+func `generated Engine 1_53 ledger is complete and fail closed`() throws {
+    let ledger = try DockerEngineAPIRouteLedger.make()
+
+    #expect(DockerEngineAPIRouteLedger.routeCount == 107)
+    #expect(ledger.routes.count == DockerEngineAPIRouteLedger.routeCount)
+    #expect(try ledger.minimumAPIVersion == DockerAPIVersion("1.44"))
+    #expect(try ledger.maximumAPIVersion == DockerAPIVersion("1.53"))
+    #expect(DockerEngineAPIRouteLedger.sources.count == 10)
+    #expect(DockerEngineAPIRouteLedger.sources.last?.revision == "docker-v29.2.1")
+    #expect(
+        DockerEngineAPIRouteLedger.sources.allSatisfy {
+            $0.sha256.count == 64 && $0.sha256.allSatisfy(\.isHexDigit)
+        }
+    )
+
+    let ping = try #require(ledger.routes.first { $0.identifier == "SystemPing" })
+    #expect(ping.pattern.template == "/_ping")
+    #expect(ping.disposition == .unimplemented)
+    let swarm = try #require(ledger.routes.first { $0.identifier == "SwarmInit" })
+    #expect(swarm.disposition == .platformUnavailable)
+}
+
+@Test
+func `implemented route overlay cannot advertise unrelated routes`() throws {
+    let ledger = try DockerEngineAPIRouteLedger.make(
+        implementedRouteIdentifiers: ["SystemPing", "ContainerLogs"]
+    )
+
+    #expect(
+        ledger.routes.first { $0.identifier == "SystemPing" }?.disposition
+            == .implemented
+    )
+    #expect(
+        ledger.routes.first { $0.identifier == "ContainerLogs" }?.disposition
+            == .implemented
+    )
+    #expect(
+        ledger.routes.first { $0.identifier == "ImagePush" }?.disposition
+            == .unimplemented
+    )
+    #expect(
+        ledger.routes.first { $0.identifier == "SwarmInit" }?.disposition
+            == .platformUnavailable
+    )
+}
+
+@Test
 func `request target separates API version path parameters and repeated query values`() throws {
     let target = try DockerRequestTarget(
         "/v1.53/containers/example%2Fname/json?label=first&label=second&empty"

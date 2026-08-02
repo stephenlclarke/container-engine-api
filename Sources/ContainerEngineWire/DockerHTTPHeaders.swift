@@ -21,7 +21,7 @@ public enum DockerHTTPHeaderError: Error, Equatable, Sendable {
 
 /// Runtime-neutral HTTP fields that preserve wire spelling, order, and duplicates.
 public struct DockerHTTPHeaders: Equatable, RandomAccessCollection, Sendable {
-    public struct Field: Equatable, Sendable {
+    public struct Field: Codable, Equatable, Sendable {
         public var name: String
         public var value: String
 

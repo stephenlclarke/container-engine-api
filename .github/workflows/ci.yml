@@ -32,6 +32,7 @@ jobs:
           cmp /tmp/container-engine-api-Package.resolved Package.resolved
       - name: Validate formatting and documentation
         run: |
+          python3 Tools/generate_route_ledger.py --check
           swiftformat --lint Package.swift Sources Tests
           markdownlint README.md docs
       - name: Build and test

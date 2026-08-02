@@ -267,7 +267,6 @@ public struct ContainerEngineProviderSelectionStore: Sendable {
     public func select(
         _ declaration: ContainerEngineProviderDeclaration
     ) throws -> ContainerEngineProviderFingerprint {
-        try prepareParentDirectory()
         if FileManager.default.fileExists(atPath: path.path) {
             let existing = try load()
             guard existing.declaration == declaration else {
@@ -277,10 +276,34 @@ public struct ContainerEngineProviderSelectionStore: Sendable {
             }
             return existing
         }
+        return try select(declaration, stateRootUUID: UUID())
+    }
+
+    /// Selects a provider using the provider authority's immutable state-root UUID.
+    ///
+    /// A different root is an authority change even when every build and
+    /// capability field is otherwise identical.
+    public func select(
+        _ declaration: ContainerEngineProviderDeclaration,
+        stateRootUUID: UUID
+    ) throws -> ContainerEngineProviderFingerprint {
+        try prepareParentDirectory()
+        if FileManager.default.fileExists(atPath: path.path) {
+            let existing = try load()
+            guard
+                existing.declaration == declaration,
+                existing.stateRootUUID == stateRootUUID
+            else {
+                throw ContainerEngineProviderIdentityError.providerMismatch(
+                    selected: existing.digest
+                )
+            }
+            return existing
+        }
 
         let fingerprint = try ContainerEngineProviderFingerprint(
             declaration: declaration,
-            stateRootUUID: UUID()
+            stateRootUUID: stateRootUUID
         )
         try create(fingerprint)
         return try load()
@@ -397,8 +420,10 @@ public enum ContainerEngineProviderIdentityError:
     case fingerprintDigestMismatch
     case invalidCapability(String)
     case invalidDeclaration
+    case invalidStateRootIdentity
     case providerMismatch(selected: String)
     case selectionFileTooLarge
+    case stateRootIdentityFileTooLarge
     case unsafeSelectionDirectory(String)
     case unsafeSelectionFile(String)
     case unsupportedDeclarationSchema(UInt32)
@@ -414,10 +439,14 @@ public enum ContainerEngineProviderIdentityError:
             "invalid provider capability \(identifier)"
         case .invalidDeclaration:
             "invalid provider declaration"
+        case .invalidStateRootIdentity:
+            "invalid provider state-root identity"
         case let .providerMismatch(selected):
             "state root is already owned by provider \(selected); explicit handoff is required"
         case .selectionFileTooLarge:
             "provider selection file exceeds the 1 MiB safety limit"
+        case .stateRootIdentityFileTooLarge:
+            "provider state-root identity file exceeds the safety limit"
         case let .unsafeSelectionDirectory(path):
             "unsafe provider selection directory at \(path)"
         case let .unsafeSelectionFile(path):
