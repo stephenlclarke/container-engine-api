@@ -14,7 +14,7 @@ Use a bounded direct Swift Testing launch to identify the previously opaque host
 - Mark the provider server stopped and close its active connections before wakeup.
 - Connect to the mode-`0600` private socket to wake the listener, reject that accepted wake connection after observing the stopped state, and await the accept loop before closing and unlinking its descriptor.
 - Add a focused regression proving an idle listener shuts down and removes its socket.
-- Keep ownership/handshake, bytes, ordinary pull streams, large chunks, hijacks, and fingerprint rejection as independently named protocol tests so a blocked stage is visible in hosted output.
+- Keep ownership/handshake, bytes, ordinary pull streams, large chunks, queued/concurrent hijack input, hijack exit status, combined hijack completion, and fingerprint rejection as independently named protocol tests so a blocked stage is visible in hosted output.
 
 ## Validation
 
@@ -26,7 +26,7 @@ Tools/ci/run-swift-testing-bundle.sh \
   --no-parallel
 ```
 
-The direct bundle run passes all 59 tests in three suites on the designated Mac. Hosted accepted-head evidence is required before issue closure.
+The direct bundle run passes all 63 tests in three suites on the designated Mac. Hosted accepted-head evidence is required before issue closure.
 
 ## Compatibility
 

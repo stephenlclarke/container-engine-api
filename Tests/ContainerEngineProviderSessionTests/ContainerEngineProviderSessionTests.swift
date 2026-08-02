@@ -99,18 +99,81 @@ struct ContainerEngineProviderSessionTests {
     }
 
     @Test
-    func `provider forwards bidirectional hijacks`() async throws {
+    func `provider hijack accepts queued input`() async throws {
         try await withServer { socket, declaration, stateRoot in
             let client = try await Self.client(
                 socket: socket,
                 declaration: declaration,
                 stateRoot: stateRoot
             )
-            let response = await client.respond(
-                to: DockerHTTPRequest(method: .post, target: "/hijack")
+            let session = try await Self.hijackSession(client: client)
+            try await session.write(Data("queued-input".utf8))
+            await session.cancel()
+        }
+    }
+
+    @Test
+    func `provider hijack relays queued input`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
             )
-            if case let .hijack(session, terminal) = response.body {
-                #expect(!terminal)
+            let session = try await Self.hijackSession(client: client)
+            try await session.write(Data("queued-input".utf8))
+            var iterator = session.frames.makeAsyncIterator()
+            let frame = try await iterator.next()
+            #expect(frame?.channel == .standardOutput)
+            #expect(frame?.data == Data("queued-input".utf8))
+            await session.cancel()
+        }
+    }
+
+    @Test
+    func `provider hijack relays concurrent input`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let session = try await Self.hijackSession(client: client)
+            let output = Task {
+                var iterator = session.frames.makeAsyncIterator()
+                return try await iterator.next()
+            }
+            try await session.write(Data("concurrent-input".utf8))
+            let frame = try await output.value
+            #expect(frame?.channel == .standardOutput)
+            #expect(frame?.data == Data("concurrent-input".utf8))
+            await session.cancel()
+        }
+    }
+
+    @Test
+    func `provider hijack returns exit status`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let session = try await Self.hijackSession(client: client)
+            #expect(try await session.wait() == 0)
+        }
+    }
+
+    @Test
+    func `provider hijack relays input before returning exit status`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let session = try await Self.hijackSession(client: client)
+            do {
                 let output = Task {
                     var iterator = session.frames.makeAsyncIterator()
                     return try await iterator.next()
@@ -120,8 +183,9 @@ struct ContainerEngineProviderSessionTests {
                 #expect(frame?.channel == .standardOutput)
                 #expect(frame?.data == Data("input-before-output".utf8))
                 #expect(try await session.wait() == 0)
-            } else {
-                Issue.record("expected hijack response")
+            } catch {
+                await session.cancel()
+                throw error
             }
         }
     }
@@ -194,6 +258,19 @@ struct ContainerEngineProviderSessionTests {
         )
     }
 
+    private static func hijackSession(
+        client: ContainerEngineProviderSessionClient
+    ) async throws -> any DockerHijackSession {
+        let response = await client.respond(
+            to: DockerHTTPRequest(method: .post, target: "/hijack")
+        )
+        guard case let .hijack(session, terminal) = response.body else {
+            throw ProviderSessionTestError.expectedHijack
+        }
+        #expect(!terminal)
+        return session
+    }
+
     private static func declaration(
         version: String = "1.0.0"
     ) throws -> ContainerEngineProviderDeclaration {
@@ -211,6 +288,10 @@ struct ContainerEngineProviderSessionTests {
             ]
         )
     }
+}
+
+private enum ProviderSessionTestError: Error {
+    case expectedHijack
 }
 
 private struct TestResponder: DockerHTTPResponder {
