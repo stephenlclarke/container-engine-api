@@ -58,11 +58,24 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
     }
 
     public func shutdown() async {
-        let task = lock.withLock { () -> Task<Void, Never>? in
+        let state = lock.withLock { () -> (Task<Void, Never>?, Bool) in
             guard !stopped else {
-                return acceptTask
+                return (acceptTask, false)
             }
             stopped = true
+            for connection in connections.values {
+                connection.close()
+            }
+            connections.removeAll()
+            return (acceptTask, listener != nil)
+        }
+        if state.1, let wakeConnection = try? ProviderSessionUnixSocket.connect(
+            path: socketPath
+        ) {
+            wakeConnection.close()
+        }
+        await state.0?.value
+        lock.withLock {
             if let listener {
                 ProviderSessionUnixSocket.close(listener, path: socketPath)
                 self.listener = nil
@@ -71,18 +84,23 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 connection.close()
             }
             connections.removeAll()
-            return acceptTask
         }
-        await task?.value
     }
 
     private func acceptConnections(descriptor: Int32) {
         while true {
+            if lock.withLock({ stopped }) {
+                return
+            }
             let accepted = Darwin.accept(descriptor, nil, nil)
             if accepted < 0 {
                 if errno == EINTR {
                     continue
                 }
+                return
+            }
+            if lock.withLock({ stopped }) {
+                Darwin.close(accepted)
                 return
             }
             do {

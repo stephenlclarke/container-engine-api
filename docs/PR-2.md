@@ -1,8 +1,8 @@
-# Change handoff: run the prebuilt Swift Testing bundle
+# Change handoff: make provider shutdown deterministic
 
 ## Summary
 
-Split the hosted test step into an explicit warnings-as-errors `swift build --build-tests` and a bounded invocation of the resulting bundle through `swiftpm-testing-helper`. Reuse the launch path already proven by the devcontainer adopter on Xcode 26.6.
+Use a bounded direct Swift Testing launch to identify the previously opaque hosted timeout, then make provider shutdown deterministic by waking its idle blocking accept loop before closing the listener.
 
 ## Implementation
 
@@ -10,7 +10,9 @@ Split the hosted test step into an explicit warnings-as-errors `swift build --bu
 - Validate the script with `bash -n` in CI.
 - Give the test-launch step its own five-minute timeout.
 - Keep exact resolution, route-ledger generation, formatting, documentation checks, warnings-as-errors compilation, and all tests unchanged.
-- Document why hosted CI does not use the `swift test` launcher.
+- Mark the provider server stopped and close its active connections before wakeup.
+- Connect to the mode-`0600` private socket to wake the listener, reject that accepted wake connection after observing the stopped state, and await the accept loop before closing and unlinking its descriptor.
+- Add a focused regression proving an idle listener shuts down and removes its socket.
 
 ## Validation
 
@@ -22,11 +24,11 @@ Tools/ci/run-swift-testing-bundle.sh \
   --no-parallel
 ```
 
-The direct bundle run passes all 54 tests in three suites on the designated Mac. Hosted accepted-head evidence is required before issue closure.
+The direct bundle run passes all 55 tests in three suites on the designated Mac. Hosted accepted-head evidence is required before issue closure.
 
 ## Compatibility
 
-This changes only CI test launch. Runtime products, package APIs, dependency pins, route behavior, test selection, and pass/fail interpretation are unchanged.
+The CI path changes only test launch. The runtime change is internal and preserves package APIs, dependency pins, route behavior, session framing, and shutdown's public contract while removing an indefinite wait.
 
 ## Linked issue
 
@@ -34,4 +36,4 @@ Closes [#2](https://github.com/stephenlclarke/container-engine-api/issues/2).
 
 ## Remaining risks
 
-The helper path is toolchain-internal but is the executable SwiftPM itself resolves for the active `swiftc`, and the script fails explicitly if its expected path or macOS platform frameworks are unavailable.
+The helper path is toolchain-internal but is the executable SwiftPM itself resolves for the active `swiftc`, and the script fails explicitly if its expected path or macOS platform frameworks are unavailable. If the listener path is removed or replaced before shutdown wakeup, the wake connection can fail; the current server exclusively owns the locked path and exact-inode cleanup, so that condition indicates an already broken ownership invariant rather than an expected lifecycle transition.

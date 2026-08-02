@@ -29,6 +29,6 @@ swift test
 python3 Tools/generate_route_ledger.py --check
 ```
 
-On Xcode 26.6 hosted runners, `swift test` can finish building and then stall while SwiftPM launches its helper. CI therefore builds tests once with `swift build --build-tests` and loads the resulting bundle through `Tools/ci/run-swift-testing-bundle.sh`, the same supported Swift Testing helper path already proven by the devcontainer consumer. This changes only test launch; it does not skip, retry, or reinterpret results.
+On Xcode 26.6 hosted runners, CI builds tests once with `swift build --build-tests` and loads the resulting bundle through `Tools/ci/run-swift-testing-bundle.sh`, the same Swift Testing helper path already proven by the devcontainer consumer. This exposes per-test progress and gives the test process its own five-minute bound; it does not skip, retry, or reinterpret results. That diagnostic path identified and the package now regression-tests a Darwin lifecycle edge: an idle blocking provider `accept()` is woken explicitly before its listener is closed during shutdown.
 
 See [`docs/LOGGING_API.md`](docs/LOGGING_API.md) for the logging adapter contract and [`docs/EXTRACTION.md`](docs/EXTRACTION.md) for source provenance, extraction mechanics, exclusions, and remaining gaps.

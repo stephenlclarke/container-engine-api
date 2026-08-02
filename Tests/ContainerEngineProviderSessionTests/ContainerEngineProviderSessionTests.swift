@@ -12,6 +12,27 @@ import Testing
 @Suite(.serialized)
 struct ContainerEngineProviderSessionTests {
     @Test
+    func `shutdown wakes an idle provider listener`() async throws {
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true).appendingPathComponent(
+            "ceps-\(UUID().uuidString.prefix(8))",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socket = root.appendingPathComponent("provider.sock").path
+        let server = try ContainerEngineProviderSessionServer(
+            responder: TestResponder(),
+            socketPath: socket,
+            declaration: Self.declaration(),
+            stateRootUUID: UUID()
+        )
+
+        try server.start()
+        await server.shutdown()
+
+        #expect(!FileManager.default.fileExists(atPath: socket))
+    }
+
+    @Test
     func `provider handshake forwards bytes and pull based streams`() async throws {
         let root = URL(fileURLWithPath: "/tmp", isDirectory: true).appendingPathComponent(
             "ceps-\(UUID().uuidString.prefix(8))",
