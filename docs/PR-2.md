@@ -13,6 +13,7 @@ Use a bounded direct Swift Testing launch to identify the previously opaque host
 - Reserve each standardized provider lock path in a process-local locked set before opening its cross-process lock file, and release both ownership layers together on every failure and shutdown path.
 - Mark the provider server stopped and close its active connections before wakeup.
 - Connect to the mode-`0600` private socket to wake the listener, reject that accepted wake connection after observing the stopped state, and await the accept loop before closing and unlinking its descriptor.
+- Dispatch blocking framed POSIX reads and writes outside Swift's cooperative executor so hijack command processing and output production cannot starve behind the sockets they must service.
 - Add a focused regression proving an idle listener shuts down and removes its socket.
 - Keep ownership/handshake, bytes, ordinary pull streams, large chunks, queued/concurrent hijack input, hijack exit status, combined hijack completion, and fingerprint rejection as independently named protocol tests so a blocked stage is visible in hosted output.
 
@@ -30,7 +31,7 @@ The direct bundle run passes all 63 tests in three suites on the designated Mac.
 
 ## Compatibility
 
-The CI path changes only test launch. The runtime change is internal and preserves package APIs, dependency pins, route behavior, session framing, and shutdown's public contract while removing an indefinite wait.
+The CI path changes only test launch. The runtime changes are internal and preserve package APIs, dependency pins, route behavior, session framing, and shutdown's public contract while removing indefinite ownership, shutdown, and bidirectional-I/O waits.
 
 ## Linked issue
 
@@ -38,4 +39,4 @@ Closes [#2](https://github.com/stephenlclarke/container-engine-api/issues/2).
 
 ## Remaining risks
 
-The helper path is toolchain-internal but is the executable SwiftPM itself resolves for the active `swiftc`, and the script fails explicitly if its expected path or macOS platform frameworks are unavailable. Process-local exclusion is intentionally additive: `flock` remains authoritative between processes. If the listener path is removed or replaced before shutdown wakeup, the wake connection can fail; the current server exclusively owns the locked path and exact-inode cleanup, so that condition indicates an already broken ownership invariant rather than an expected lifecycle transition.
+The helper path is toolchain-internal but is the executable SwiftPM itself resolves for the active `swiftc`, and the script fails explicitly if its expected path or macOS platform frameworks are unavailable. Process-local exclusion is intentionally additive: `flock` remains authoritative between processes. Dispatch owns one blocked work item per active frame read or write, so connection ceilings and caller-driven stream reads remain the resource bounds. If the listener path is removed or replaced before shutdown wakeup, the wake connection can fail; the current server exclusively owns the locked path and exact-inode cleanup, so that condition indicates an already broken ownership invariant rather than an expected lifecycle transition.

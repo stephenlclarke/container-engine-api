@@ -35,52 +35,66 @@ final class ProviderSessionSocket: @unchecked Sendable {
     }
 
     func readFrame() async throws -> ProviderSessionFrame {
-        try await Task.detached { [self] in
-            try readLock.withLock {
-                var lengthBytes = [UInt8](repeating: 0, count: 4)
-                try readExactly(into: &lengthBytes)
-                let length = lengthBytes.reduce(UInt32(0)) { value, byte in
-                    (value << 8) | UInt32(byte)
-                }
-                guard length > 0, length <= Self.maximumFrameBytes else {
-                    throw ContainerEngineProviderSessionError.frameTooLarge(Int(length))
-                }
-                var payload = [UInt8](repeating: 0, count: Int(length))
-                try readExactly(into: &payload)
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
                 do {
-                    return try JSONDecoder().decode(
-                        ProviderSessionFrame.self,
-                        from: Data(payload)
-                    )
-                } catch let error as ContainerEngineProviderSessionError {
-                    throw error
+                    let frame = try readLock.withLock {
+                        var lengthBytes = [UInt8](repeating: 0, count: 4)
+                        try readExactly(into: &lengthBytes)
+                        let length = lengthBytes.reduce(UInt32(0)) { value, byte in
+                            (value << 8) | UInt32(byte)
+                        }
+                        guard length > 0, length <= Self.maximumFrameBytes else {
+                            throw ContainerEngineProviderSessionError.frameTooLarge(Int(length))
+                        }
+                        var payload = [UInt8](repeating: 0, count: Int(length))
+                        try readExactly(into: &payload)
+                        do {
+                            return try JSONDecoder().decode(
+                                ProviderSessionFrame.self,
+                                from: Data(payload)
+                            )
+                        } catch let error as ContainerEngineProviderSessionError {
+                            throw error
+                        } catch {
+                            throw ContainerEngineProviderSessionError.invalidFrame(
+                                String(describing: error)
+                            )
+                        }
+                    }
+                    continuation.resume(returning: frame)
                 } catch {
-                    throw ContainerEngineProviderSessionError.invalidFrame(
-                        String(describing: error)
-                    )
+                    continuation.resume(throwing: error)
                 }
             }
-        }.value
+        }
     }
 
     func writeFrame(_ frame: ProviderSessionFrame) async throws {
-        try await Task.detached { [self] in
-            try writeLock.withLock {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-                let payload = try encoder.encode(frame)
-                guard payload.count <= Self.maximumFrameBytes else {
-                    throw ContainerEngineProviderSessionError.frameTooLarge(payload.count)
-                }
-                var length = UInt32(payload.count).bigEndian
-                try withUnsafeBytes(of: &length) { bytes in
-                    try writeAll(bytes)
-                }
-                try payload.withUnsafeBytes { bytes in
-                    try writeAll(bytes)
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                do {
+                    try writeLock.withLock {
+                        let encoder = JSONEncoder()
+                        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                        let payload = try encoder.encode(frame)
+                        guard payload.count <= Self.maximumFrameBytes else {
+                            throw ContainerEngineProviderSessionError.frameTooLarge(payload.count)
+                        }
+                        var length = UInt32(payload.count).bigEndian
+                        try withUnsafeBytes(of: &length) { bytes in
+                            try writeAll(bytes)
+                        }
+                        try payload.withUnsafeBytes { bytes in
+                            try writeAll(bytes)
+                        }
+                    }
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
-        }.value
+        }
     }
 
     func close() {
