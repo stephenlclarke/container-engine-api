@@ -13,27 +13,145 @@ import Testing
 struct ContainerEngineProviderSessionTests {
     @Test
     func `shutdown wakes an idle provider listener`() async throws {
-        let root = URL(fileURLWithPath: "/tmp", isDirectory: true).appendingPathComponent(
-            "ceps-\(UUID().uuidString.prefix(8))",
-            isDirectory: true
-        )
-        defer { try? FileManager.default.removeItem(at: root) }
-        let socket = root.appendingPathComponent("provider.sock").path
-        let server = try ContainerEngineProviderSessionServer(
-            responder: TestResponder(),
-            socketPath: socket,
-            declaration: Self.declaration(),
-            stateRootUUID: UUID()
-        )
-
-        try server.start()
-        await server.shutdown()
-
-        #expect(!FileManager.default.fileExists(atPath: socket))
+        try await withServer { _, _, _ in }
     }
 
     @Test
-    func `provider handshake forwards bytes and pull based streams`() async throws {
+    func `provider ownership and handshake are exclusive`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let competing = try ContainerEngineProviderSessionServer(
+                responder: TestResponder(),
+                socketPath: socket,
+                declaration: declaration,
+                stateRootUUID: stateRoot
+            )
+            #expect(throws: (any Error).self) {
+                try competing.start()
+            }
+
+            _ = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+        }
+    }
+
+    @Test
+    func `provider forwards byte responses`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .get, target: "/bytes")
+            )
+            #expect(response.status == 200)
+            if case let .bytes(data) = response.body {
+                #expect(String(decoding: data, as: UTF8.self) == "provider-bytes")
+            } else {
+                Issue.record("expected bytes response")
+            }
+        }
+    }
+
+    @Test
+    func `provider forwards pull based streams`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .get, target: "/stream")
+            )
+            if case let .managedStream(session) = response.body {
+                #expect(try await session.nextChunk() == Data("first".utf8))
+                #expect(try await session.nextChunk() == Data("second".utf8))
+                #expect(try await session.nextChunk() == nil)
+            } else {
+                Issue.record("expected managed stream response")
+            }
+        }
+    }
+
+    @Test
+    func `provider forwards large pull based stream chunks`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .get, target: "/large-stream")
+            )
+            if case let .managedStream(session) = response.body {
+                #expect(try await session.nextChunk()?.count == 2 * 1024 * 1024 + 17)
+                #expect(try await session.nextChunk() == nil)
+            } else {
+                Issue.record("expected large managed stream response")
+            }
+        }
+    }
+
+    @Test
+    func `provider forwards bidirectional hijacks`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .post, target: "/hijack")
+            )
+            if case let .hijack(session, terminal) = response.body {
+                #expect(!terminal)
+                let output = Task {
+                    var iterator = session.frames.makeAsyncIterator()
+                    return try await iterator.next()
+                }
+                try await session.write(Data("input-before-output".utf8))
+                let frame = try await output.value
+                #expect(frame?.channel == .standardOutput)
+                #expect(frame?.data == Data("input-before-output".utf8))
+                #expect(try await session.wait() == 0)
+            } else {
+                Issue.record("expected hijack response")
+            }
+        }
+    }
+
+    @Test
+    func `client rejects a different selected fingerprint`() async throws {
+        try await withServer { socket, _, _ in
+            let other = try ContainerEngineProviderFingerprint(
+                declaration: Self.declaration(version: "2.0.0"),
+                stateRootUUID: UUID()
+            )
+            let client = ContainerEngineProviderSessionClient(
+                socketPath: socket,
+                expectedFingerprint: other
+            )
+
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .get, target: "/bytes")
+            )
+            #expect(response.status == 503)
+        }
+    }
+
+    private func withServer(
+        _ operation: (
+            _ socket: String,
+            _ declaration: ContainerEngineProviderDeclaration,
+            _ stateRoot: UUID
+        ) async throws -> Void
+    ) async throws {
         let root = URL(fileURLWithPath: "/tmp", isDirectory: true).appendingPathComponent(
             "ceps-\(UUID().uuidString.prefix(8))",
             isDirectory: true
@@ -49,74 +167,9 @@ struct ContainerEngineProviderSessionTests {
             stateRootUUID: stateRoot
         )
         try server.start()
-        let competing = try ContainerEngineProviderSessionServer(
-            responder: TestResponder(),
-            socketPath: socket,
-            declaration: declaration,
-            stateRootUUID: stateRoot
-        )
-        #expect(throws: (any Error).self) {
-            try competing.start()
-        }
 
         do {
-            let descriptor = try await ContainerEngineProviderSessionClient.probe(
-                socketPath: socket
-            )
-            #expect(descriptor.fingerprint.declaration == declaration)
-            #expect(descriptor.fingerprint.stateRootUUID == stateRoot)
-            let client = ContainerEngineProviderSessionClient(
-                socketPath: socket,
-                expectedFingerprint: descriptor.fingerprint
-            )
-            let bytes = await client.respond(
-                to: DockerHTTPRequest(method: .get, target: "/bytes")
-            )
-            #expect(bytes.status == 200)
-            if case let .bytes(data) = bytes.body {
-                #expect(String(decoding: data, as: UTF8.self) == "provider-bytes")
-            } else {
-                Issue.record("expected bytes response")
-            }
-
-            let streamed = await client.respond(
-                to: DockerHTTPRequest(method: .get, target: "/stream")
-            )
-            if case let .managedStream(session) = streamed.body {
-                #expect(try await session.nextChunk() == Data("first".utf8))
-                #expect(try await session.nextChunk() == Data("second".utf8))
-                #expect(try await session.nextChunk() == nil)
-            } else {
-                Issue.record("expected managed stream response")
-            }
-
-            let largeStream = await client.respond(
-                to: DockerHTTPRequest(method: .get, target: "/large-stream")
-            )
-            if case let .managedStream(session) = largeStream.body {
-                #expect(try await session.nextChunk()?.count == 2 * 1024 * 1024 + 17)
-                #expect(try await session.nextChunk() == nil)
-            } else {
-                Issue.record("expected large managed stream response")
-            }
-
-            let hijacked = await client.respond(
-                to: DockerHTTPRequest(method: .post, target: "/hijack")
-            )
-            if case let .hijack(session, terminal) = hijacked.body {
-                #expect(!terminal)
-                let output = Task {
-                    var iterator = session.frames.makeAsyncIterator()
-                    return try await iterator.next()
-                }
-                try await session.write(Data("input-before-output".utf8))
-                let frame = try await output.value
-                #expect(frame?.channel == .standardOutput)
-                #expect(frame?.data == Data("input-before-output".utf8))
-                #expect(try await session.wait() == 0)
-            } else {
-                Issue.record("expected hijack response")
-            }
+            try await operation(socket, declaration, stateRoot)
         } catch {
             await server.shutdown()
             throw error
@@ -125,35 +178,20 @@ struct ContainerEngineProviderSessionTests {
         #expect(!FileManager.default.fileExists(atPath: socket))
     }
 
-    @Test
-    func `client rejects a different selected fingerprint`() async throws {
-        let root = URL(fileURLWithPath: "/tmp", isDirectory: true).appendingPathComponent(
-            "ceps-\(UUID().uuidString.prefix(8))",
-            isDirectory: true
+    private static func client(
+        socket: String,
+        declaration: ContainerEngineProviderDeclaration,
+        stateRoot: UUID
+    ) async throws -> ContainerEngineProviderSessionClient {
+        let descriptor = try await ContainerEngineProviderSessionClient.probe(
+            socketPath: socket
         )
-        defer { try? FileManager.default.removeItem(at: root) }
-        let socket = root.appendingPathComponent("provider.sock").path
-        let server = try ContainerEngineProviderSessionServer(
-            responder: TestResponder(),
+        #expect(descriptor.fingerprint.declaration == declaration)
+        #expect(descriptor.fingerprint.stateRootUUID == stateRoot)
+        return ContainerEngineProviderSessionClient(
             socketPath: socket,
-            declaration: Self.declaration(),
-            stateRootUUID: UUID()
+            expectedFingerprint: descriptor.fingerprint
         )
-        try server.start()
-        let other = try ContainerEngineProviderFingerprint(
-            declaration: Self.declaration(version: "2.0.0"),
-            stateRootUUID: UUID()
-        )
-        let client = ContainerEngineProviderSessionClient(
-            socketPath: socket,
-            expectedFingerprint: other
-        )
-
-        let response = await client.respond(
-            to: DockerHTTPRequest(method: .get, target: "/bytes")
-        )
-        #expect(response.status == 503)
-        await server.shutdown()
     }
 
     private static func declaration(
