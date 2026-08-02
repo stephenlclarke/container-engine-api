@@ -88,9 +88,12 @@ struct ContainerEngineProviderIdentityTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let identityPath = root.appendingPathComponent("state-root-id")
         let identityStore = ContainerEngineStateRootIdentityStore(path: identityPath)
-        let stateRoot = try identityStore.loadOrCreate()
+        let migrationIdentity = UUID()
+        let stateRoot = try identityStore.loadOrCreate(initial: migrationIdentity)
 
+        #expect(stateRoot == migrationIdentity)
         #expect(try identityStore.loadOrCreate() == stateRoot)
+        #expect(try identityStore.loadOrCreate(initial: UUID()) == stateRoot)
         let selectionStore = ContainerEngineProviderSelectionStore(
             path: root.appendingPathComponent("provider.json")
         )

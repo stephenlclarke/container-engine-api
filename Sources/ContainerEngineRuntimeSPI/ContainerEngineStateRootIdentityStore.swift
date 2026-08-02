@@ -30,11 +30,15 @@ public struct ContainerEngineStateRootIdentityStore: Sendable {
     }
 
     public func loadOrCreate() throws -> UUID {
+        try loadOrCreate(initial: UUID())
+    }
+
+    /// Creates a new identity with a migration-supplied UUID when absent.
+    public func loadOrCreate(initial identifier: UUID) throws -> UUID {
         try prepareParentDirectory()
         if FileManager.default.fileExists(atPath: path.path) {
             return try load()
         }
-        let identifier = UUID()
         do {
             try create(identifier)
             return identifier
