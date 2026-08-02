@@ -41,7 +41,7 @@ This package provides a generated ledger for all 107 Docker Engine 29.2.1 API 1.
 
 The provider selection record rejects a declaration or provider-owned state-root change and requires an explicit handoff rather than silently selecting a fallback. `container-engine` now binds the public listener only after probing and selecting one out-of-process provider, and every provider request repeats the fingerprint-bound handshake. The private provider socket uses a mode-`0600` endpoint, non-followed single-link singleton lock, current-user private parent, and exact-inode cleanup. The protocol forwards bytes, pull-based streams, and bidirectional hijack sessions without linking the provider's Apple packages into the gateway process.
 
-The stock devcontainer and enhanced Container adapters still need their complete process cutover and exact route capability declarations. The signed drain/import/commit/complete handoff is also not implemented. Therefore the package now provides the singular-gateway mechanism but does not yet prove that every client observes one migrated authority.
+Devcontainer 1.0.1 now supplies the stock adapter through the private provider session with an exact route capability declaration. The enhanced Container adapter still needs its complete process cutover and declaration. The signed drain/import/commit/complete handoff is also not implemented. Therefore the package now provides the singular-gateway mechanism but does not yet prove that every client observes one migrated authority.
 
 ### Bounded streaming
 

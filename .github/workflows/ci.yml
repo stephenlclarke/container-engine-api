@@ -33,10 +33,18 @@ jobs:
       - name: Validate formatting and documentation
         run: |
           python3 Tools/generate_route_ledger.py --check
+          bash -n Tools/ci/*.sh
           swiftformat --lint Package.swift Sources Tests
           markdownlint README.md docs
-      - name: Build and test
-        run: swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors
+      - name: Build tests
+        run: swift build --disable-automatic-resolution -Xswiftc -warnings-as-errors --build-tests
+      - name: Run tests
+        timeout-minutes: 5
+        run: |
+          test_bin_path="$(swift build --disable-automatic-resolution --show-bin-path)"
+          Tools/ci/run-swift-testing-bundle.sh \
+            "$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests" \
+            --no-parallel
 
   validate:
     name: Validate
