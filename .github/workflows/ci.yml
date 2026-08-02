@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Format, build, and test
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install quality tools
+        run: brew install markdownlint-cli swiftformat
+      - name: Verify exact dependency resolution
+        run: |
+          cp Package.resolved /tmp/container-engine-api-Package.resolved
+          swift package resolve
+          cmp /tmp/container-engine-api-Package.resolved Package.resolved
+      - name: Validate formatting and documentation
+        run: |
+          swiftformat --lint Package.swift Sources Tests
+          markdownlint README.md docs
+      - name: Build and test
+        run: swift test --disable-automatic-resolution -Xswiftc -warnings-as-errors
+
+  validate:
+    name: Validate
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful validation
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = success
