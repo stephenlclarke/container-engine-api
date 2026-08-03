@@ -11,6 +11,11 @@ import Foundation
 
 /// Owns Engine route advertisement and dispatch for exactly one selected provider.
 public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
+    private static let gatewayRouteIdentifiers: Set<String> = [
+        "SystemPing",
+        "SystemPingHead"
+    ]
+
     public let fingerprint: ContainerEngineProviderFingerprint
     public let ledger: DockerRouteLedger
     private let provider: ContainerEngineProviderSessionClient
@@ -20,7 +25,7 @@ public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
         fingerprint: ContainerEngineProviderFingerprint
     ) throws {
         self.fingerprint = fingerprint
-        let implemented = Set<String>(
+        let providerRoutes = Set<String>(
             fingerprint.declaration.capabilities.compactMap { capability in
                 guard
                     capability.status != .unavailable,
@@ -31,6 +36,7 @@ public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
                 return String(capability.identifier.dropFirst("engine.route.".count))
             }
         )
+        let implemented = providerRoutes.union(Self.gatewayRouteIdentifiers)
         ledger = try DockerEngineAPIRouteLedger.make(
             implementedRouteIdentifiers: implemented
         )
@@ -44,6 +50,9 @@ public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
         do {
             guard let match = try ledger.match(request) else {
                 return Self.error(status: 404, message: "page not found")
+            }
+            if Self.gatewayRouteIdentifiers.contains(match.metadata.identifier) {
+                return pingResponse(method: request.method)
             }
             switch match.metadata.disposition {
             case .implemented:
@@ -64,6 +73,25 @@ public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
         } catch {
             return Self.error(status: 500, message: "Engine route dispatch failed")
         }
+    }
+
+    private func pingResponse(method: DockerHTTPMethod) -> DockerHTTPResponse {
+        DockerHTTPResponse(
+            status: 200,
+            headers: [
+                "API-Version": ledger.maximumAPIVersion.description,
+                "Builder-Version": "2",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Docker-Experimental": "false",
+                "OSType": "linux",
+                "Pragma": "no-cache",
+                "Server":
+                    "Docker/\(fingerprint.declaration.implementationVersion) (linux)",
+                "Swarm": "inactive",
+                "Content-Type": "text/plain; charset=utf-8"
+            ],
+            body: .bytes(method == .head ? Data() : Data("OK".utf8))
+        )
     }
 
     private static func error(status: Int, message: String) -> DockerHTTPResponse {

@@ -18,12 +18,7 @@ func `gateway advertises only declared provider routes`() async throws {
             implementationVersion: "1.0.0",
             runtimeRevisions: ["runtime": "test"],
             stateSchemaVersion: 1,
-            capabilities: [
-                ContainerEngineProviderCapability(
-                    identifier: "engine.route.SystemPing",
-                    status: .native
-                )
-            ]
+            capabilities: []
         ),
         stateRootUUID: UUID()
     )
@@ -35,6 +30,14 @@ func `gateway advertises only declared provider routes`() async throws {
     #expect(
         gateway.ledger.routes.first { $0.identifier == "SystemPing" }?.disposition
             == .implemented
+    )
+    #expect(
+        gateway.ledger.routes.first { $0.identifier == "SystemPingHead" }?
+            .disposition == .implemented
+    )
+    #expect(
+        gateway.ledger.routes.first { $0.identifier == "SystemVersion" }?
+            .disposition == .unimplemented
     )
     #expect(
         gateway.ledger.routes.first { $0.identifier == "ImagePush" }?.disposition
@@ -52,4 +55,30 @@ func `gateway advertises only declared provider routes`() async throws {
         to: DockerHTTPRequest(method: .get, target: "/not-an-engine-route")
     )
     #expect(unknown.status == 404)
+
+    let ping = await gateway.respond(
+        to: DockerHTTPRequest(method: .get, target: "/_ping")
+    )
+    #expect(ping.status == 200)
+    #expect(ping.headers["API-Version"] == "1.53")
+    #expect(ping.headers["Builder-Version"] == "2")
+    #expect(ping.headers["Docker-Experimental"] == "false")
+    #expect(ping.headers["OSType"] == "linux")
+    #expect(ping.headers["Swarm"] == "inactive")
+    if case let .bytes(body) = ping.body {
+        #expect(body == Data("OK".utf8))
+    } else {
+        Issue.record("expected gateway-local ping bytes")
+    }
+
+    let head = await gateway.respond(
+        to: DockerHTTPRequest(method: .head, target: "/_ping")
+    )
+    #expect(head.status == 200)
+    #expect(head.headers == ping.headers)
+    if case let .bytes(body) = head.body {
+        #expect(body.isEmpty)
+    } else {
+        Issue.record("expected gateway-local head bytes")
+    }
 }

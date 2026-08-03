@@ -14,6 +14,36 @@ import Logging
 import Testing
 
 @Test
+func `public gateway owns Docker ping negotiation`() async throws {
+    try await withPublicGateway(
+        capabilityIdentifier: "engine.route.ContainerLogs",
+        capabilityStatus: .native
+    ) { publicSocket in
+        let getClient = try GatewayUnixSocketClient(path: publicSocket)
+        defer { getClient.close() }
+        try getClient.write(
+            "GET /_ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        let getResponse = try getClient.readUntil(Data("OK".utf8))
+        let getText = String(decoding: getResponse, as: UTF8.self)
+        #expect(getText.contains("200 OK"))
+        #expect(getText.localizedCaseInsensitiveContains("Api-Version: 1.53"))
+        #expect(getText.localizedCaseInsensitiveContains("Content-Length: 2"))
+
+        let headClient = try GatewayUnixSocketClient(path: publicSocket)
+        defer { headClient.close() }
+        try headClient.write(
+            "HEAD /_ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        let headResponse = try headClient.readUntil(Data("\r\n\r\n".utf8))
+        let headText = String(decoding: headResponse, as: UTF8.self)
+        #expect(headText.contains("200 OK"))
+        #expect(headText.localizedCaseInsensitiveContains("Api-Version: 1.53"))
+        #expect(headText.localizedCaseInsensitiveContains("Content-Length: 0"))
+    }
+}
+
+@Test
 func `public gateway relays websocket bytes through its provider session`() async throws {
     try await withPublicGateway(
         capabilityIdentifier: "engine.route.ContainerAttachWebsocket",
