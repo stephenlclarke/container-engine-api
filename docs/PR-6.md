@@ -32,7 +32,7 @@ Tools/ci/run-swift-testing-bundle.sh \
 scripts/make-docs.sh /tmp/container-engine-api-docc-v032 api/container-engine-api
 ```
 
-The direct bundle run passes all 80 tests in three suites. The complete-gateway 4 MiB regression returns all bytes in 0.325 seconds in the focused run. Exact dependency resolution, generation checks, helper checks, formatting, Markdown, warnings-as-errors builds, and all seven DocC modules also pass locally. Clean-head performance evidence and hosted CI remain release gates.
+The direct bundle run passes all 80 tests in three suites. The complete-gateway 4 MiB regression returns all bytes in 0.325 seconds in the focused run. Exact dependency resolution, generation checks, helper checks, formatting, Markdown, warnings-as-errors builds, and all seven DocC modules also pass locally. Clean signed head `aefa9cb13bceae5e0921faef055085d8976f3966` passes all 66 same-host performance samples against Docker: 0.44x resize, 0.79x 32-byte WebSocket, and 0.45x 1 MiB WebSocket median ratios. Hosted CI remains the release gate.
 
 ## Compatibility
 
@@ -44,4 +44,4 @@ Closes [#6](https://github.com/stephenlclarke/container-engine-api/issues/6).
 
 ## Remaining risks
 
-The queue can retain up to 16 MiB per active hijack before failing closed, so the server's existing connection ceiling remains the aggregate resource bound. Coalescing copies adjacent fragments into at most 1 MiB values; release performance evidence must confirm the reduced provider-call count does not introduce a meaningful latency or memory regression. Production Container and external-client parity lanes remain separate adopter gates after this package release.
+The queue can retain up to 16 MiB per active hijack before failing closed, so the server's existing connection ceiling remains the aggregate resource bound. Coalescing copies adjacent fragments into at most 1 MiB values; the clean-head comparator shows no material shared-transport regression, but production Container and external-client parity lanes remain separate adopter gates after this package release.

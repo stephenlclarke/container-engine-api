@@ -20,3 +20,4 @@ The public input bound must be expressed in bytes, independent of the number and
 - The focused complete-gateway regression sends and half-closes 4 MiB through the public Unix listener, shared gateway, private provider connection, delayed provider session, and response path; all 4,194,304 bytes return exactly.
 - The local complete quality gate passes all 80 tests, including ordered byte/EOF, post-EOF, and overflow cancellation coverage.
 - Exact dependency resolution, route generation, performance-helper self-tests, SwiftFormat, Markdown lint, warnings-as-errors builds, and all seven DocC modules pass on the designated Mac.
+- Clean signed head `aefa9cb13bceae5e0921faef055085d8976f3966` passes all 66 same-host performance samples against Docker: 0.44x resize, 0.79x 32-byte WebSocket, and 0.45x 1 MiB WebSocket median ratios.
