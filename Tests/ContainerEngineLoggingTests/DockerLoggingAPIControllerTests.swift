@@ -70,6 +70,89 @@ func `info and inspect expose only Docker logging fields and public paths`() asy
 }
 
 @Test
+func `complete shared responses preserve base fields and overlay logging authority`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let shared = try FakeSharedResponseBackend(
+        info: JSONSerialization.data(
+            withJSONObject: completeInfoBase()
+        ),
+        inspect: JSONSerialization.data(
+            withJSONObject: completeInspectBase()
+        )
+    )
+    let controller = try DockerLoggingAPIController(
+        backend: backend,
+        sharedResponseBackend: shared
+    )
+
+    let info = await controller.respond(
+        to: DockerHTTPRequest(method: .get, target: "/v1.53/info")
+    )
+    #expect(info.status == 200)
+    let infoObject = try responseJSONObject(info)
+    #expect(infoObject["Containers"] as? Int == 7)
+    #expect(infoObject["Driver"] as? String == "apple-container")
+    #expect(infoObject["LoggingDriver"] as? String == "json-file")
+    let plugins = try #require(infoObject["Plugins"] as? [String: Any])
+    #expect(plugins["Volume"] as? [String] == ["local"])
+    #expect(plugins["Log"] as? [String] == ["json-file", "local", "syslog"])
+
+    let inspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/containers/local-container/json"
+        )
+    )
+    #expect(inspect.status == 200)
+    let inspectObject = try responseJSONObject(inspect)
+    #expect(inspectObject["Id"] as? String == "local-container")
+    #expect(inspectObject["Driver"] as? String == "apple-container")
+    #expect(inspectObject["LogPath"] as? String == "")
+    let config = try #require(inspectObject["Config"] as? [String: Any])
+    #expect(config["Hostname"] as? String == "preserved-host")
+    #expect(config["Tty"] as? Bool == false)
+    let hostConfig = try #require(inspectObject["HostConfig"] as? [String: Any])
+    #expect(hostConfig["NetworkMode"] as? String == "default")
+    let logConfig = try #require(hostConfig["LogConfig"] as? [String: Any])
+    #expect(logConfig["Type"] as? String == "local")
+    #expect(logConfig["Config"] as? [String: String] == ["max-file": "5"])
+}
+
+@Test
+func `complete shared responses reject fragments before replacing whole routes`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let shared = FakeSharedResponseBackend(
+        info: Data(#"{"Plugins":{}}"#.utf8),
+        inspect: Data(#"{"Config":{},"HostConfig":{}}"#.utf8)
+    )
+    let controller = try DockerLoggingAPIController(
+        backend: backend,
+        sharedResponseBackend: shared
+    )
+
+    let info = await controller.respond(
+        to: DockerHTTPRequest(method: .get, target: "/info")
+    )
+    #expect(info.status == 500)
+    #expect(
+        try errorMessage(info)
+            == "complete SystemInfo response is missing required fields"
+    )
+
+    let inspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/containers/example/json"
+        )
+    )
+    #expect(inspect.status == 500)
+    #expect(
+        try errorMessage(inspect)
+            == "complete ContainerInspect response is missing required fields"
+    )
+}
+
+@Test
 func `logging routes enforce API version range and Docker error envelopes`() async throws {
     let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
     let controller = try DockerLoggingAPIController(backend: backend)
@@ -410,6 +493,111 @@ private func errorMessage(_ response: DockerHTTPResponse) throws -> String {
     ).message
 }
 
+private func responseJSONObject(
+    _ response: DockerHTTPResponse
+) throws -> [String: Any] {
+    let value = try JSONSerialization.jsonObject(with: responseData(response))
+    return try #require(value as? [String: Any])
+}
+
+private func completeInfoBase() -> [String: Any] {
+    [
+        "Architecture": "aarch64",
+        "CDISpecDirs": [],
+        "CPUShares": true,
+        "CPUSet": true,
+        "CgroupDriver": "cgroupfs",
+        "ContainerdCommit": ["ID": ""],
+        "Containers": 7,
+        "ContainersPaused": 1,
+        "ContainersRunning": 2,
+        "ContainersStopped": 4,
+        "CpuCfsPeriod": true,
+        "CpuCfsQuota": true,
+        "Debug": false,
+        "DefaultRuntime": "io.container.runtime.v2.linux",
+        "DockerRootDir": "/private/container",
+        "Driver": "apple-container",
+        "DriverStatus": [],
+        "ExperimentalBuild": false,
+        "GenericResources": [],
+        "HttpProxy": "",
+        "HttpsProxy": "",
+        "ID": "authority",
+        "IPv4Forwarding": true,
+        "Images": 3,
+        "IndexServerAddress": "https://index.docker.io/v1/",
+        "InitBinary": "vminitd",
+        "InitCommit": ["ID": ""],
+        "Isolation": "",
+        "KernelVersion": "",
+        "Labels": [],
+        "LiveRestoreEnabled": false,
+        "LoggingDriver": "stale",
+        "MemTotal": 1024,
+        "MemoryLimit": true,
+        "NCPU": 8,
+        "NEventsListener": 0,
+        "NFd": 0,
+        "NGoroutines": 0,
+        "Name": "test-host",
+        "NoProxy": "",
+        "OSType": "linux",
+        "OSVersion": "",
+        "OomKillDisable": false,
+        "OperatingSystem": "Apple container Linux virtual machines",
+        "PidsLimit": true,
+        "Plugins": [
+            "Authorization": [],
+            "Log": ["stale"],
+            "Network": ["bridge"],
+            "Volume": ["local"]
+        ],
+        "RegistryConfig": [:],
+        "RuncCommit": ["ID": ""],
+        "Runtimes": ["io.container.runtime.v2.linux": [:]],
+        "SecurityOptions": [],
+        "ServerVersion": "test",
+        "SwapLimit": true,
+        "Swarm": [:],
+        "SystemTime": "2026-01-01T00:00:00Z",
+        "Warnings": []
+    ]
+}
+
+private func completeInspectBase() -> [String: Any] {
+    [
+        "AppArmorProfile": "",
+        "Args": ["hello"],
+        "Config": [
+            "Hostname": "preserved-host",
+            "Tty": true
+        ],
+        "Created": "2026-01-01T00:00:00Z",
+        "Driver": "apple-container",
+        "ExecIDs": NSNull(),
+        "HostConfig": [
+            "LogConfig": ["Type": "stale", "Config": [:]],
+            "NetworkMode": "default"
+        ],
+        "HostnamePath": "",
+        "HostsPath": "",
+        "Id": "local-container",
+        "Image": "sha256:image",
+        "LogPath": "/must/not/leak",
+        "MountLabel": "",
+        "Mounts": [],
+        "Name": "/local-container",
+        "NetworkSettings": [:],
+        "Path": "/bin/echo",
+        "Platform": "linux",
+        "ProcessLabel": "",
+        "ResolvConfPath": "",
+        "RestartCount": 0,
+        "State": ["Status": "exited"]
+    ]
+}
+
 private func managedStream(
     _ response: DockerHTTPResponse
 ) throws -> any DockerHTTPStreamSession {
@@ -602,6 +790,19 @@ private final class FakeLoggingBackend: DockerLoggingBackend, @unchecked Sendabl
             capturedAttachRequest = request
         }
         return DockerAttachConnection(terminal: false, session: attachSession)
+    }
+}
+
+private struct FakeSharedResponseBackend: DockerLoggingSharedResponseBackend {
+    let info: Data
+    let inspect: Data
+
+    func systemInfoBaseJSON() async throws -> Data {
+        info
+    }
+
+    func containerInspectBaseJSON(containerID _: String) async throws -> Data {
+        inspect
     }
 }
 

@@ -181,6 +181,17 @@ public protocol DockerLogReadSession: Sendable {
     func cancel() async
 }
 
+/// Supplies complete non-logging JSON documents for Engine routes shared by
+/// multiple domain controllers.
+///
+/// The logging controller validates these documents and overlays only the
+/// fields owned by `DockerLoggingBackend`. A provider must not use the
+/// logging-only fragments as complete `/info` or inspect responses.
+public protocol DockerLoggingSharedResponseBackend: Sendable {
+    func systemInfoBaseJSON() async throws -> Data
+    func containerInspectBaseJSON(containerID: String) async throws -> Data
+}
+
 /// The normalized Docker attach query passed to the live-output controller.
 public struct DockerAttachRequest: Equatable, Sendable {
     public var includeLogs: Bool

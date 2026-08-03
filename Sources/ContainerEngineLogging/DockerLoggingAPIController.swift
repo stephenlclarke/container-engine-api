@@ -25,8 +25,12 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     public let routeLedger: DockerRouteLedger
 
     private let backend: any DockerLoggingBackend
+    private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
 
-    public init(backend: any DockerLoggingBackend) throws {
+    public init(
+        backend: any DockerLoggingBackend,
+        sharedResponseBackend: (any DockerLoggingSharedResponseBackend)? = nil
+    ) throws {
         minimumAPIVersion = try DockerAPIVersion("1.44")
         maximumAPIVersion = try DockerAPIVersion("1.53")
         routeLedger = try Self.makeRouteLedger(
@@ -34,6 +38,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             maximum: maximumAPIVersion
         )
         self.backend = backend
+        self.sharedResponseBackend = sharedResponseBackend
     }
 
     public func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
@@ -138,6 +143,14 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             let drivers = Array(
                 Set(info.registeredDrivers.filter { !$0.isEmpty && $0 != "none" })
             ).sorted(by: Self.utf8Less)
+            if let sharedResponseBackend {
+                let base = try await sharedResponseBackend.systemInfoBaseJSON()
+                return try Self.completeInfoResponse(
+                    base: base,
+                    loggingDriver: info.defaultDriver,
+                    logPlugins: drivers
+                )
+            }
             return Self.jsonLineResponse(
                 InfoResponse(
                     loggingDriver: info.defaultDriver,
@@ -155,6 +168,15 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 containerID: containerID
             )
             let configuration = inspection.configuration
+            if let sharedResponseBackend {
+                let base = try await sharedResponseBackend.containerInspectBaseJSON(
+                    containerID: containerID
+                )
+                return try Self.completeInspectResponse(
+                    base: base,
+                    inspection: inspection
+                )
+            }
             return Self.jsonLineResponse(
                 InspectResponse(
                     config: InspectConfig(tty: inspection.terminal),
@@ -173,6 +195,130 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             return Self.backendErrorResponse(error)
         }
     }
+
+    private static func completeInfoResponse(
+        base: Data,
+        loggingDriver: String,
+        logPlugins: [String]
+    ) throws -> DockerHTTPResponse {
+        var object = try completeJSONObject(
+            base,
+            route: "SystemInfo",
+            requiredKeys: systemInfoRequiredKeys
+        )
+        guard var plugins = object["Plugins"] as? [String: Any] else {
+            throw DockerLoggingBackendError.server(
+                "complete SystemInfo response has invalid Plugins"
+            )
+        }
+        plugins["Log"] = logPlugins
+        object["Plugins"] = plugins
+        object["LoggingDriver"] = loggingDriver
+        return try jsonObjectLineResponse(object)
+    }
+
+    private static func completeInspectResponse(
+        base: Data,
+        inspection: DockerContainerLoggingInspection
+    ) throws -> DockerHTTPResponse {
+        var object = try completeJSONObject(
+            base,
+            route: "ContainerInspect",
+            requiredKeys: containerInspectRequiredKeys
+        )
+        guard
+            var config = object["Config"] as? [String: Any],
+            var hostConfig = object["HostConfig"] as? [String: Any]
+        else {
+            throw DockerLoggingBackendError.server(
+                "complete ContainerInspect response has invalid Config or HostConfig"
+            )
+        }
+        config["Tty"] = inspection.terminal
+        hostConfig["LogConfig"] = [
+            "Type": inspection.configuration.driver,
+            "Config": inspection.configuration.options
+        ]
+        object["Config"] = config
+        object["HostConfig"] = hostConfig
+        object["LogPath"] =
+            inspection.configuration.driver == "json-file"
+                ? inspection.publicLogPath ?? ""
+                : ""
+        return try jsonObjectLineResponse(object)
+    }
+
+    private static func completeJSONObject(
+        _ data: Data,
+        route: String,
+        requiredKeys: Set<String>
+    ) throws -> [String: Any] {
+        let value: Any
+        do {
+            value = try JSONSerialization.jsonObject(
+                with: data,
+                options: [.fragmentsAllowed]
+            )
+        } catch {
+            throw DockerLoggingBackendError.server(
+                "complete \(route) response is not valid JSON"
+            )
+        }
+        guard let object = value as? [String: Any] else {
+            throw DockerLoggingBackendError.server(
+                "complete \(route) response is not a JSON object"
+            )
+        }
+        let missing = requiredKeys.subtracting(object.keys)
+        guard missing.isEmpty else {
+            throw DockerLoggingBackendError.server(
+                "complete \(route) response is missing required fields"
+            )
+        }
+        return object
+    }
+
+    private static func jsonObjectLineResponse(
+        _ object: [String: Any]
+    ) throws -> DockerHTTPResponse {
+        guard JSONSerialization.isValidJSONObject(object) else {
+            throw DockerLoggingBackendError.server(
+                "complete Engine response is not JSON encodable"
+            )
+        }
+        var data = try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        data.append(UInt8(ascii: "\n"))
+        return DockerHTTPResponse(
+            status: 200,
+            headers: ["Content-Type": "application/json"],
+            body: .bytes(data)
+        )
+    }
+
+    private static let systemInfoRequiredKeys: Set<String> = [
+        "Architecture", "CDISpecDirs", "CPUShares", "CPUSet", "CgroupDriver",
+        "ContainerdCommit", "Containers", "ContainersPaused", "ContainersRunning",
+        "ContainersStopped", "CpuCfsPeriod", "CpuCfsQuota", "Debug",
+        "DefaultRuntime", "DockerRootDir", "Driver", "DriverStatus",
+        "ExperimentalBuild", "GenericResources", "HttpProxy", "HttpsProxy", "ID",
+        "IPv4Forwarding", "Images", "IndexServerAddress", "InitBinary", "InitCommit",
+        "Isolation", "KernelVersion", "Labels", "LiveRestoreEnabled", "LoggingDriver",
+        "MemTotal", "MemoryLimit", "NCPU", "NEventsListener", "NFd", "NGoroutines",
+        "Name", "NoProxy", "OSType", "OSVersion", "OomKillDisable",
+        "OperatingSystem", "PidsLimit", "Plugins", "RegistryConfig", "RuncCommit",
+        "Runtimes", "SecurityOptions", "ServerVersion", "SwapLimit", "Swarm",
+        "SystemTime", "Warnings"
+    ]
+
+    private static let containerInspectRequiredKeys: Set<String> = [
+        "AppArmorProfile", "Args", "Config", "Created", "Driver", "ExecIDs",
+        "HostConfig", "HostnamePath", "HostsPath", "Id", "Image", "LogPath",
+        "MountLabel", "Mounts", "Name", "NetworkSettings", "Path", "Platform",
+        "ProcessLabel", "ResolvConfPath", "RestartCount", "State"
+    ]
 
     private func logsResponse(
         containerID: String,

@@ -2,14 +2,14 @@
 
 | Item | Value |
 | --- | --- |
-| Status | Implemented runtime-neutral logging surface; awaiting adoption by the authoritative Container gateway |
+| Status | Implemented runtime-neutral logging surface and fail-closed whole-response composition; final public-gateway and external-client certification remain |
 | Reference | Docker Engine 29.2.1, API 1.53, minimum API 1.44 |
 | Products | `ContainerEngineLogging`, `ContainerEngineRouter`, `ContainerEngineWire`, `ContainerUnixHTTPServer` |
 | Runtime dependency | None; adopters supply one `DockerLoggingBackend` |
 
 ## Contract
 
-`DockerLoggingAPIController` is the HTTP presentation boundary for logging. It never opens a bundle path, local store, cache, provider, or live process itself. One `DockerLoggingBackend` supplies the effective default/catalog, resolved inspect configuration, historical reader, and live attach session so native and Docker clients cannot drift onto separate state or read sources.
+`DockerLoggingAPIController` is the HTTP presentation boundary for logging. It never opens a bundle path, local store, cache, provider, or live process itself. One `DockerLoggingBackend` supplies the effective default/catalog, resolved inspect configuration, historical reader, and live attach session so native and Docker clients cannot drift onto separate state or read sources. The same selected authority may also supply one `DockerLoggingSharedResponseBackend` containing complete non-logging `/info` and inspect JSON documents; this is composition inside one provider, not a gateway merge between competing authorities.
 
 The backend must resolve container names and IDs authoritatively, generation-fence any effectful reader or attach session, return only public-safe errors through `DockerLoggingBackendError`, and make `close` and `cancel` idempotent. A stopped-container reader and a running reader use the same protocol. An unsupported native/cache/provider reader throws `.unsupportedLogReader` before a streaming response starts.
 
@@ -17,14 +17,14 @@ The backend must resolve container names and IDs authoritatively, generation-fen
 
 | Method and route | Mapping |
 | --- | --- |
-| `GET /info` | Returns `LoggingDriver` and sorted, de-duplicated `Plugins.Log`; Docker's special `none` driver is not advertised as a plugin. |
-| `GET /containers/{id}/json` | Returns `HostConfig.LogConfig.Type`, the full resolved string option map at `HostConfig.LogConfig.Config`, `Config.Tty`, and top-level `LogPath`. `LogPath` is non-empty only for `json-file`; local/cache/provider paths are suppressed. |
+| `GET /info` | Returns `LoggingDriver` and sorted, de-duplicated `Plugins.Log`; Docker's special `none` driver is not advertised as a plugin. With a shared-response backend, it preserves the complete authority document and replaces only those two logging-owned fields. |
+| `GET /containers/{id}/json` | Returns `HostConfig.LogConfig.Type`, the full resolved string option map at `HostConfig.LogConfig.Config`, `Config.Tty`, and top-level `LogPath`. `LogPath` is non-empty only for `json-file`; local/cache/provider paths are suppressed. With a shared-response backend, it preserves every other complete authority field. |
 | `GET /containers/{id}/logs` | Validates Docker booleans and stream selection, normalizes `tail`, `since`, and `until`, then maps the backend's exact record sequence to raw TTY bytes or Docker multiplex frames. |
 | `POST /containers/{id}/attach` | Passes Docker attach selection and detach keys to the live backend and returns the existing raw hijack session. Upgrade requests receive `101` from the Unix server and multiplexed content type for non-TTY output; non-upgrade and TTY responses use Docker raw-stream content type. |
 
 Versionless routes use API 1.53 behavior. Versioned requests from 1.44 through 1.53 are accepted. Older and newer versions receive Docker 29.2.1-shaped `400` envelopes before query parsing or backend contact. `responseIfHandled(to:)` permits a complete gateway to compose non-logging controllers without duplicating version/query parsing.
 
-The controller's `/info` and inspect JSON documents intentionally contain only fields owned by this package. A complete Engine gateway must merge or replace the other Docker fields at its outer DTO boundary; it must not create a second logging controller or reader to do so.
+Without a `DockerLoggingSharedResponseBackend`, the controller retains its source-compatible logging-only fragments. Those fragments are useful for focused tests and cannot justify advertising the generated whole-route operation. In complete-response mode, the controller requires every non-optional top-level field in Moby 29.2.1's `system.Info` or `container.InspectResponse`, validates the nested object it modifies, preserves all unrelated fields, and emits one deterministic JSON document. A partial base fails with a public-safe `500` before the route can masquerade as complete.
 
 ## Logs Query and Presentation
 
@@ -61,7 +61,7 @@ The legacy generic `AsyncThrowingStream<Data>` response remains source-compatibl
 - Return the controller's effective default and currently registered provider names for info.
 - Use the same live attach session as native/Compose foreground output; do not synthesize attach from historical logs.
 - Keep backend stream errors redacted and public-safe; message payloads and protected option values must not enter diagnostics.
-- Compose the unrelated `/info` and inspect fields at the gateway DTO boundary.
+- Supply complete `/info` and inspect documents through `DockerLoggingSharedResponseBackend` from the same selected authority, then advertise `SystemInfo` and `ContainerInspect` only after the fail-closed composition tests pass.
 - Keep stdin-capable attach gated until the raw input queue has a bounded policy.
 
 ## Upstream Applicability Audit
