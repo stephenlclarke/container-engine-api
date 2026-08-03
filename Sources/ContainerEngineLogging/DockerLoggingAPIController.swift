@@ -26,6 +26,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
 
     private let backend: any DockerLoggingBackend
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
+    private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
 
     public init(
         backend: any DockerLoggingBackend,
@@ -39,6 +40,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         )
         self.backend = backend
         self.sharedResponseBackend = sharedResponseBackend
+        terminalResizeBackend = backend as? any DockerTerminalResizeBackend
     }
 
     public func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
@@ -129,6 +131,17 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         case RouteIdentifier.attach:
             return await attachResponse(
                 request: request,
+                containerID: match.parameters["id"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.attachWebSocket:
+            return await attachWebSocketResponse(
+                request: request,
+                containerID: match.parameters["id"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.resize:
+            return await resizeResponse(
                 containerID: match.parameters["id"] ?? "",
                 target: match.target
             )
@@ -395,6 +408,102 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         }
     }
 
+    private func attachWebSocketResponse(
+        request _: DockerHTTPRequest,
+        containerID: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        let query = DockerAttachRequest(
+            includeLogs: Self.boolValue(target.first("logs")),
+            stream: Self.boolValue(target.first("stream")),
+            stdin: Self.boolValue(target.first("stdin")),
+            stdout: Self.boolValue(target.first("stdout")),
+            stderr: Self.boolValue(target.first("stderr")),
+            detachKeys: target.first("detachKeys")
+        )
+        do {
+            let connection = try await backend.attachContainer(
+                containerID: containerID,
+                request: query
+            )
+            return DockerHTTPResponse(
+                status: 101,
+                headers: [
+                    "Connection": "Upgrade",
+                    "Upgrade": "websocket"
+                ],
+                body: .webSocket(connection.session)
+            )
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func resizeResponse(
+        containerID: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        let height: UInt32
+        let width: UInt32
+        do {
+            height = try Self.resizeValue(
+                target.first("h"),
+                dimension: "height"
+            )
+            width = try Self.resizeValue(
+                target.first("w"),
+                dimension: "width"
+            )
+        } catch let error as QueryError {
+            return Self.errorResponse(status: error.status, message: error.message)
+        } catch {
+            return Self.errorResponse(status: 500, message: "server error")
+        }
+        guard let terminalResizeBackend else {
+            return Self.errorResponse(
+                status: 501,
+                message: "container terminal resize is not implemented by the selected provider"
+            )
+        }
+        do {
+            try await terminalResizeBackend.resizeContainerTerminal(
+                containerID: containerID,
+                height: height,
+                width: width
+            )
+            return .empty(status: 200)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private static func resizeValue(
+        _ value: String?,
+        dimension: String
+    ) throws -> UInt32 {
+        let raw = value ?? ""
+        let magnitude = raw.first == "-" ? String(raw.dropFirst()) : raw
+        let isDecimal = !magnitude.isEmpty && magnitude.allSatisfy(\.isNumber)
+        guard
+            !raw.isEmpty,
+            raw.first != "+",
+            raw.first != "-",
+            isDecimal,
+            let parsed = UInt64(raw),
+            parsed <= UInt32.max
+        else {
+            let reason = raw.first == "-" && isDecimal
+                || isDecimal && UInt64(magnitude).map { $0 > UInt32.max } == true
+                ? "value out of range"
+                : "invalid syntax"
+            throw QueryError(
+                status: 400,
+                message: "invalid resize \(dimension) \"\(raw)\": \(reason)"
+            )
+        }
+        return UInt32(parsed)
+    }
+
     private static func logReadRequest(
         target: DockerRequestTarget
     ) throws -> DockerLogReadRequest {
@@ -623,6 +732,22 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                     introduced: minimum,
                     responseMode: .hijack,
                     disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.attachWebSocket,
+                    method: .get,
+                    pattern: DockerRoutePattern("/containers/{id}/attach/ws"),
+                    introduced: minimum,
+                    responseMode: .hijack,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.resize,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/resize"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
                 )
             ]
         )
@@ -635,9 +760,11 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
 
 private enum RouteIdentifier {
     static let attach = "container.attach"
+    static let attachWebSocket = "container.attach.websocket"
     static let info = "system.info"
     static let inspect = "container.inspect"
     static let logs = "container.logs"
+    static let resize = "container.resize"
 }
 
 private struct QueryError: Error {

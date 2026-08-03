@@ -207,6 +207,14 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveHijack(session, on: connection)
+        case let .webSocket(session):
+            try await writeHead(
+                response,
+                bodyKind: .webSocket,
+                terminal: nil,
+                on: connection
+            )
+            try await serveHijack(session, on: connection)
         }
     }
 

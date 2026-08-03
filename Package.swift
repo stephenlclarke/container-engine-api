@@ -77,7 +77,8 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "NIOPosix", package: "swift-nio")
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOWebSocket", package: "swift-nio")
             ]
         ),
         .executableTarget(
@@ -89,6 +90,19 @@ let package = Package(
                 "ContainerUnixHTTPServer",
                 .product(name: "Logging", package: "swift-log")
             ]
+        ),
+        .executableTarget(
+            name: "ContainerEngineStreamingPerformanceFixture",
+            dependencies: [
+                "ContainerEngineGateway",
+                "ContainerEngineLogging",
+                "ContainerEngineProviderSession",
+                "ContainerEngineRuntimeSPI",
+                "ContainerEngineWire",
+                "ContainerUnixHTTPServer",
+                .product(name: "Logging", package: "swift-log")
+            ],
+            path: "Tools/ContainerEngineStreamingPerformanceFixture"
         ),
         .testTarget(
             name: "ContainerEngineWireTests",
@@ -125,9 +139,12 @@ let package = Package(
             name: "ContainerEngineGatewayTests",
             dependencies: [
                 "ContainerEngineGateway",
+                "ContainerEngineProviderSession",
                 "ContainerEngineRouter",
                 "ContainerEngineRuntimeSPI",
-                "ContainerEngineWire"
+                "ContainerEngineWire",
+                "ContainerUnixHTTPServer",
+                .product(name: "Logging", package: "swift-log")
             ]
         ),
         .testTarget(

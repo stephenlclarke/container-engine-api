@@ -81,6 +81,13 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
                     headers: head.headers,
                     body: .hijack(session, terminal: head.terminal ?? false)
                 )
+            case .webSocket:
+                let session = ProviderRemoteHijackSession(socket: socket)
+                return DockerHTTPResponse(
+                    status: head.status,
+                    headers: head.headers,
+                    body: .webSocket(session)
+                )
             }
         } catch {
             let envelope = DockerErrorEnvelope(

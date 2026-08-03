@@ -42,6 +42,7 @@ enum ProviderSessionBodyKind: String, Codable {
     case bytes
     case hijack
     case stream
+    case webSocket
 }
 
 struct ProviderSessionRequest: Codable {
@@ -59,7 +60,7 @@ struct ProviderSessionResponseHead: Codable {
 }
 
 struct ProviderSessionFrame: Codable {
-    static let currentSchemaVersion: UInt32 = 1
+    static let currentSchemaVersion: UInt32 = 2
 
     var schemaVersion = currentSchemaVersion
     var kind: ProviderSessionFrameKind

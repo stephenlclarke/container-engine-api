@@ -75,6 +75,9 @@ public enum DockerHTTPBody: Sendable {
     case managedStream(any DockerHTTPStreamSession)
     case stream(AsyncThrowingStream<Data, any Error>)
     case hijack(any DockerHijackSession, terminal: Bool)
+    /// A Docker attach websocket. Payload bytes are carried in binary
+    /// websocket messages and are never Docker-multiplex framed.
+    case webSocket(any DockerHijackSession)
 }
 
 /// A bounded, cancellation-aware source for one streaming HTTP response.

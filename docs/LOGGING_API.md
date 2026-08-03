@@ -2,7 +2,7 @@
 
 | Item | Value |
 | --- | --- |
-| Status | Implemented runtime-neutral logging surface and fail-closed whole-response composition; final public-gateway and external-client certification remain |
+| Status | Implemented runtime-neutral logging surface, WebSocket attach, resize, fail-closed whole-response composition, tested provider-to-public-gateway streaming, and maintained paired transport performance evidence; production-runtime and external-client certification remain |
 | Reference | Docker Engine 29.2.1, API 1.53, minimum API 1.44 |
 | Products | `ContainerEngineLogging`, `ContainerEngineRouter`, `ContainerEngineWire`, `ContainerUnixHTTPServer` |
 | Runtime dependency | None; adopters supply one `DockerLoggingBackend` |
@@ -21,6 +21,8 @@ The backend must resolve container names and IDs authoritatively, generation-fen
 | `GET /containers/{id}/json` | Returns `HostConfig.LogConfig.Type`, the full resolved string option map at `HostConfig.LogConfig.Config`, `Config.Tty`, and top-level `LogPath`. `LogPath` is non-empty only for `json-file`; local/cache/provider paths are suppressed. With a shared-response backend, it preserves every other complete authority field. |
 | `GET /containers/{id}/logs` | Validates Docker booleans and stream selection, normalizes `tail`, `since`, and `until`, then maps the backend's exact record sequence to raw TTY bytes or Docker multiplex frames. |
 | `POST /containers/{id}/attach` | Passes Docker attach selection and detach keys to the live backend and returns the existing raw hijack session. Upgrade requests receive `101` from the Unix server and multiplexed content type for non-TTY output; non-upgrade and TTY responses use Docker raw-stream content type. |
+| `GET /containers/{id}/attach/ws` | Maps the same Docker attach query and forwards binary, unframed messages through the existing live session. The public Unix server reproduces Docker's `x/net/websocket` handshake, including its exact errors and acceptance of any non-empty challenge key; client frames must be masked, and ping, pong, close, fragmentation bounds, and cancellation are handled at that boundary. |
+| `POST /containers/{id}/resize?h={height}&w={width}` | Requires one decimal unsigned 32-bit height and width, then calls `DockerTerminalResizeBackend`. A provider without that optional protocol returns `501` without a backend effect. |
 
 Versionless routes use API 1.53 behavior. Versioned requests from 1.44 through 1.53 are accepted. Older and newer versions receive Docker 29.2.1-shaped `400` envelopes before query parsing or backend contact. `responseIfHandled(to:)` permits a complete gateway to compose non-logging controllers without duplicating version/query parsing.
 
@@ -45,24 +47,31 @@ The backend returns exact binary line bytes, including any line feed retained by
 | Unsupported historical reader | `500` | `configured logging driver does not support reading` |
 | Malformed time or backend failure | `500` | Docker parse text or backend's public-safe server message |
 
-JSON success and ordinary error bodies use `application/json`, stable key ordering, slash-preserving encoding, and the newline emitted by Docker's JSON writer. Logs use `application/vnd.docker.raw-stream` for TTY and `application/vnd.docker.multiplexed-stream` for non-TTY. Attach follows Docker's upgrade-dependent content-type behavior; pre-hijack attach failures use Docker's raw-stream content type and CRLF-terminated plain error rather than a JSON envelope.
+JSON success and ordinary error bodies use `application/json`, stable key ordering, slash-preserving encoding, and the newline emitted by Docker's JSON writer. Logs use `application/vnd.docker.raw-stream` for TTY and `application/vnd.docker.multiplexed-stream` for non-TTY. Raw attach follows Docker's upgrade-dependent content-type behavior; pre-hijack attach failures use Docker's raw-stream content type and CRLF-terminated plain error rather than a JSON envelope. WebSocket attach returns RFC 6455 `101 Switching Protocols` with no Docker multiplex header inside binary messages.
 
-## Bounds, Cancellation, and Remaining Transport Limit
+## Bounds and Cancellation
 
 Historical logs use `DockerHTTPStreamSession`, a pull-based transport contract. The Unix server requests at most one chunk, waits for that NIO write to complete, and only then asks for the next. Natural completion invokes `close` once. Task/channel cancellation invokes `cancel` on the exact backend reader; the logging adapter also cancels on corrupt/source errors and never retries from another store or provider.
 
-The legacy generic `AsyncThrowingStream<Data>` response remains source-compatible but is not suitable for unbounded production downloads because it can enqueue writes faster than channel writability. Logging does not use it. Hijack output already waits for every write. Hijack stdin still uses an unbounded ordered input queue, so output-only Compose attach is supported by this slice but stdin-capable production advertisement remains gated on a bounded input/backpressure policy. With remote half-close enabled, a completely silent follow cannot observe whether a peer intended a full close or only closed its request-writing side until the next failed output write or a server drain fence; either boundary cancels the reader.
+The legacy generic `AsyncThrowingStream<Data>` response remains source-compatible but is not suitable for unbounded production downloads because it can enqueue writes faster than channel writability. Logging does not use it. Raw and WebSocket hijack output await every channel write. Input is split into at most 1 MiB events and admits at most 16 pending events; if the consumer cannot keep up, the server rejects the new event, closes the channel, and cancels the exact session rather than dropping or reordering bytes. WebSocket messages are bounded to 16 MiB and fragmented input is aggregated only within that bound. With remote half-close enabled, a completely silent follow cannot observe whether a peer intended a full close or only closed its request-writing side until the next failed output write or a server drain fence; either boundary cancels the reader.
+
+## Streaming Performance Evidence
+
+`Tools/performance/check_engine_streaming_performance.py` compares the shared Engine path with the active Docker Engine on the same Mac. Each release-build lane performs the same resize request and fresh WebSocket attach/echo operation for 32-byte and 1 MiB payloads. Every repetition records monotonic wall-clock duration. The output retains raw TSV, exact host/runtime/binary fingerprints, JUnit, machine-readable median/P95/ratio results, and a human matrix. The executable regression rule fails only on timeout, incomplete execution, or a candidate median at least ten times its matched Docker median; a separate lower-is-better direction assessment uses a 10% or 0.5 ms noise band.
+
+The candidate fixture includes the public Unix listener, gateway route ledger, private provider session, logging controller, bounded input pump, and WebSocket framing. Its in-memory echo/resize backend deliberately excludes Container process lookup and terminal control, so this lane proves shared transport overhead only. Production Container, provider, logging-driver, Compose foreground, and external-client matrices remain required before end-to-end performance parity is claimed.
 
 ## Adoption Checklist
 
-- Implement all four `DockerLoggingBackend` operations over the authoritative Container logging/lifecycle controller.
+- Implement the four `DockerLoggingBackend` operations over the authoritative Container logging/lifecycle controller.
 - Translate Container's driver-neutral record to `DockerLogRecord` without reopening files in the Engine layer; retain the reader's exact line-feed decision.
 - Map the authoritative resolved driver/options into inspect and expose a public path only for `json-file`.
 - Return the controller's effective default and currently registered provider names for info.
 - Use the same live attach session as native/Compose foreground output; do not synthesize attach from historical logs.
 - Keep backend stream errors redacted and public-safe; message payloads and protected option values must not enter diagnostics.
 - Supply complete `/info` and inspect documents through `DockerLoggingSharedResponseBackend` from the same selected authority, then advertise `SystemInfo` and `ContainerInspect` only after the fail-closed composition tests pass.
-- Keep stdin-capable attach gated until the raw input queue has a bounded policy.
+- Implement `DockerTerminalResizeBackend` only when the provider can resize the exact active terminal process; otherwise leave `ContainerResize` unadvertised so the gateway returns `501`.
+- Advertise WebSocket attach only after the same live session has passed the provider-to-gateway-to-public-listener binary-stream test.
 
 ## Upstream Applicability Audit
 

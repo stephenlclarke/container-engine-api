@@ -8,6 +8,8 @@ The container Engine package separates wire transport, route matching, provider 
 
 Use the modules in this package to build a runtime provider without importing Compose policy, Dev Container policy, or Apple Container implementation types into the Engine transport layer.
 
+The production path is one public `ContainerUnixHTTPServer`, one `ContainerEngineGatewayResponder`, and one private `ContainerEngineProviderSessionServer`. Raw hijack and WebSocket responses retain distinct identities across the provider boundary; Docker-compatible WebSocket handshake validation and RFC 6455 framing occur only on the public Unix socket, with binary messages carrying the provider's exact unframed bytes.
+
 ## Package modules
 
 - [ContainerEngineWire](https://stephenlclarke.github.io/api/container-engine-api/documentation/containerenginewire/)

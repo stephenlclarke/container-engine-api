@@ -479,6 +479,94 @@ func `attach maps Docker booleans upgrade framing and backend errors`() async th
     )
 }
 
+@Test
+func `websocket attach is binary unframed and preserves the Docker query`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let response = try await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target:
+            "/v1.53/containers/example/attach/ws?logs=1&stream=true&stdin=1&stdout=1&stderr=0&detachKeys=ctrl-z",
+            headers: DockerHTTPHeaders(
+                uniqueFields: [
+                    "Connection": "Upgrade",
+                    "Upgrade": "websocket",
+                    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                    "Sec-WebSocket-Version": "13"
+                ]
+            )
+        )
+    )
+
+    #expect(response.status == 101)
+    #expect(response.headers["Connection"] == "Upgrade")
+    #expect(response.headers["Upgrade"] == "websocket")
+    guard case .webSocket = response.body else {
+        Issue.record("expected websocket response")
+        return
+    }
+    #expect(
+        backend.lastAttachRequest
+            == DockerAttachRequest(
+                includeLogs: true,
+                stream: true,
+                stdin: true,
+                stdout: true,
+                stderr: false,
+                detachKeys: "ctrl-z"
+            )
+    )
+}
+
+@Test
+func `container resize validates UInt32 dimensions before calling the provider`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let resized = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/v1.53/containers/example/resize?h=48&w=132"
+        )
+    )
+    #expect(resized.status == 200)
+    #expect(backend.lastResize == DockerResizeCapture(height: 48, width: 132))
+
+    for (target, message) in [
+        (
+            "/containers/example/resize?w=80",
+            "invalid resize height \"\": invalid syntax"
+        ),
+        (
+            "/containers/example/resize?h=-1&w=80",
+            "invalid resize height \"-1\": value out of range"
+        ),
+        (
+            "/containers/example/resize?h=-&w=80",
+            "invalid resize height \"-\": invalid syntax"
+        ),
+        (
+            "/containers/example/resize?h=24&w=4294967296",
+            "invalid resize width \"4294967296\": value out of range"
+        )
+    ] {
+        let response = await controller.respond(
+            to: DockerHTTPRequest(method: .post, target: target)
+        )
+        #expect(response.status == 400)
+        #expect(try errorMessage(response) == message)
+    }
+
+    let missing = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/missing/resize?h=24&w=80"
+        )
+    )
+    #expect(missing.status == 404)
+    #expect(try errorMessage(missing) == "No such container: missing")
+}
+
 private func responseData(_ response: DockerHTTPResponse) throws -> Data {
     guard case let .bytes(data) = response.body else {
         throw FixtureError("expected byte response")
@@ -699,13 +787,18 @@ private struct InspectLogConfigPayload: Decodable {
     }
 }
 
-private final class FakeLoggingBackend: DockerLoggingBackend, @unchecked Sendable {
+private final class FakeLoggingBackend:
+    DockerLoggingBackend,
+    DockerTerminalResizeBackend,
+    @unchecked Sendable
+{
     private let lock = NSLock()
     private let reader: FakeLogReadSession
     private let openError: DockerLoggingBackendError?
     private let attachSession = FakeHijackSession()
     private var capturedLogRequest: DockerLogReadRequest?
     private var capturedAttachRequest: DockerAttachRequest?
+    private var capturedResize: DockerResizeCapture?
     private var openedLogs = 0
 
     init(
@@ -726,6 +819,10 @@ private final class FakeLoggingBackend: DockerLoggingBackend, @unchecked Sendabl
 
     var openLogCount: Int {
         lock.withLock { openedLogs }
+    }
+
+    var lastResize: DockerResizeCapture? {
+        lock.withLock { capturedResize }
     }
 
     func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
@@ -791,6 +888,24 @@ private final class FakeLoggingBackend: DockerLoggingBackend, @unchecked Sendabl
         }
         return DockerAttachConnection(terminal: false, session: attachSession)
     }
+
+    func resizeContainerTerminal(
+        containerID: String,
+        height: UInt32,
+        width: UInt32
+    ) async throws {
+        guard containerID != "missing" else {
+            throw DockerLoggingBackendError.containerNotFound(containerID)
+        }
+        lock.withLock {
+            capturedResize = DockerResizeCapture(height: height, width: width)
+        }
+    }
+}
+
+private struct DockerResizeCapture: Equatable {
+    let height: UInt32
+    let width: UInt32
 }
 
 private struct FakeSharedResponseBackend: DockerLoggingSharedResponseBackend {

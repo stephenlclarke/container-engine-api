@@ -191,6 +191,33 @@ struct ContainerEngineProviderSessionTests {
     }
 
     @Test
+    func `provider preserves websocket response identity and duplex bytes`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .get, target: "/websocket")
+            )
+            guard case let .webSocket(session) = response.body else {
+                Issue.record("expected websocket response")
+                return
+            }
+            let output = Task {
+                var iterator = session.frames.makeAsyncIterator()
+                return try await iterator.next()
+            }
+            try await session.write(Data("websocket-input".utf8))
+            let frame = try await output.value
+            #expect(frame?.channel == .standardOutput)
+            #expect(frame?.data == Data("websocket-input".utf8))
+            await session.cancel()
+        }
+    }
+
+    @Test
     func `client rejects a different selected fingerprint`() async throws {
         try await withServer { socket, _, _ in
             let other = try ContainerEngineProviderFingerprint(
@@ -300,6 +327,12 @@ private struct TestResponder: DockerHTTPResponder {
             return DockerHTTPResponse(
                 status: 101,
                 body: .hijack(TestHijackSession(), terminal: false)
+            )
+        }
+        if request.target == "/websocket" {
+            return DockerHTTPResponse(
+                status: 101,
+                body: .webSocket(TestHijackSession())
             )
         }
         if request.target == "/large-stream" {

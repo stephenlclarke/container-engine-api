@@ -248,6 +248,17 @@ public protocol DockerLoggingBackend: Sendable {
     ) async throws -> DockerAttachConnection
 }
 
+/// The container-init terminal resize operation shared by Docker attach
+/// clients. It is separate from exec resize and preserves Docker's UInt32
+/// query contract until the selected runtime validates its terminal range.
+public protocol DockerTerminalResizeBackend: Sendable {
+    func resizeContainerTerminal(
+        containerID: String,
+        height: UInt32,
+        width: UInt32
+    ) async throws
+}
+
 /// Safe backend failures with Docker-compatible HTTP mappings.
 public enum DockerLoggingBackendError: Error, Equatable, Sendable {
     case containerNotFound(String)

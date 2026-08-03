@@ -40,10 +40,33 @@ func `Docker input pump ignores writes following EOF`() async {
 
     pump.write(Data([42]))
     pump.close()
-    pump.write(Data([99]))
+    #expect(pump.write(Data([99])))
     await pump.wait()
 
     #expect(session.operations == [.data(42), .close])
+}
+
+@Test
+func `Docker input pump cancels instead of dropping bytes past its bound`() async throws {
+    let session = BlockingHijackSession()
+    let pump = OrderedDockerInputPump(session: session)
+    var rejected = false
+
+    for value in 0 ... OrderedDockerInputPump.maximumPendingEvents + 1 {
+        if !pump.write(Data([UInt8(truncatingIfNeeded: value)])) {
+            rejected = true
+            break
+        }
+    }
+
+    #expect(rejected)
+    let deadline = ContinuousClock.now + .seconds(1)
+    while !session.cancelled, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(session.cancelled)
+    pump.cancel()
+    await pump.wait()
 }
 
 private final class RecordingHijackSession: DockerHijackSession, @unchecked Sendable {
@@ -84,4 +107,42 @@ private final class RecordingHijackSession: DockerHijackSession, @unchecked Send
     }
 
     func cancel() {}
+}
+
+private final class BlockingHijackSession: DockerHijackSession, @unchecked Sendable {
+    let frames = AsyncThrowingStream<DockerStreamFrame, any Error> { continuation in
+        continuation.finish()
+    }
+
+    private let lock = NSLock()
+    private let gate: AsyncStream<Void>
+    private let gateContinuation: AsyncStream<Void>.Continuation
+    private var didCancel = false
+
+    init() {
+        (gate, gateContinuation) = AsyncStream<Void>.makeStream()
+    }
+
+    var cancelled: Bool {
+        lock.withLock { didCancel }
+    }
+
+    func write(_: Data) async throws {
+        for await _ in gate {
+            return
+        }
+    }
+
+    func closeStandardInput() {}
+
+    func wait() async throws -> Int32 {
+        0
+    }
+
+    func cancel() {
+        lock.withLock {
+            didCancel = true
+        }
+        gateContinuation.finish()
+    }
 }

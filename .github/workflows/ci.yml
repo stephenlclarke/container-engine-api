@@ -33,11 +33,15 @@ jobs:
       - name: Validate formatting and documentation
         run: |
           python3 Tools/generate_route_ledger.py --check
+          PYTHONPYCACHEPREFIX="${RUNNER_TEMP}/container-engine-python-cache" python3 -m py_compile Tools/performance/*.py
+          python3 -B Tools/performance/check_engine_streaming_performance.py --self-test
           bash -n Tools/ci/*.sh
-          swiftformat --lint Package.swift Sources Tests
+          swiftformat --lint Package.swift Sources Tests Tools/ContainerEngineStreamingPerformanceFixture
           markdownlint README.md docs
       - name: Build tests
-        run: swift build --disable-automatic-resolution -Xswiftc -warnings-as-errors --build-tests
+        run: |
+          swift build --disable-automatic-resolution -Xswiftc -warnings-as-errors --build-tests
+          swift build --disable-automatic-resolution -Xswiftc -warnings-as-errors --target ContainerEngineStreamingPerformanceFixture
       - name: Run tests
         timeout-minutes: 5
         run: |

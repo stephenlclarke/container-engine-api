@@ -88,6 +88,281 @@ struct ContainerUnixHTTPServerTests {
     }
 
     @Test
+    func `server performs a binary websocket handshake and forwards unframed bytes`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = EchoHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        defer { client.close() }
+        try client.write(
+            "GET /websocket HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: keep-alive, Upgrade\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Sec-WebSocket-Version: 13\r\n"
+                + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+        let response = try client.readUntil(Data("\r\n\r\n".utf8))
+        let responseText = String(decoding: response, as: UTF8.self)
+        #expect(responseText.contains("101 Switching Protocols"))
+        #expect(
+            responseText.contains(
+                "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+            )
+        )
+
+        let payload = Data("websocket-input".utf8)
+        let mask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
+        var frame = Data([0x82, 0x80 | UInt8(payload.count)])
+        frame.append(contentsOf: mask)
+        frame.append(
+            contentsOf: payload.enumerated().map {
+                $0.element ^ mask[$0.offset % mask.count]
+            }
+        )
+        try client.write(frame)
+        try client.closeWrite()
+
+        var expected = Data([0x82, UInt8(payload.count)])
+        expected.append(payload)
+        _ = try client.readUntil(expected)
+        #expect(session.input == payload)
+        #expect(session.inputClosed)
+
+        try await server.shutdown()
+    }
+
+    @Test
+    func `server reassembles independently masked websocket fragments`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = EchoHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        defer { client.close() }
+        try client.write(
+            "GET /websocket HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: Upgrade\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Sec-WebSocket-Version: 13\r\n"
+                + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+        _ = try client.readUntil(Data("\r\n\r\n".utf8))
+
+        let firstPayload = Data("fragmented-".utf8)
+        let finalPayload = Data("input".utf8)
+        let firstMask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
+        let finalMask: [UInt8] = [0x87, 0x65, 0x43, 0x21]
+        var firstFrame = Data([0x02, 0x80 | UInt8(firstPayload.count)])
+        firstFrame.append(contentsOf: firstMask)
+        firstFrame.append(
+            contentsOf: firstPayload.enumerated().map {
+                $0.element ^ firstMask[$0.offset % firstMask.count]
+            }
+        )
+        var finalFrame = Data([0x80, 0x80 | UInt8(finalPayload.count)])
+        finalFrame.append(contentsOf: finalMask)
+        finalFrame.append(
+            contentsOf: finalPayload.enumerated().map {
+                $0.element ^ finalMask[$0.offset % finalMask.count]
+            }
+        )
+        try client.write(firstFrame + finalFrame)
+        try client.closeWrite()
+
+        let payload = firstPayload + finalPayload
+        var expected = Data([0x82, UInt8(payload.count)])
+        expected.append(payload)
+        _ = try client.readUntil(expected)
+        #expect(session.input == payload)
+        #expect(session.inputClosed)
+
+        try await server.shutdown()
+    }
+
+    @Test
+    func `server emits Docker websocket handshake errors and cancels its session`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = CancellableHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        for (request, expected, expectedHeader) in [
+            (
+                "GET /websocket HTTP/1.1\r\nHost: localhost\r\n\r\n",
+                "not websocket protocol",
+                nil
+            ),
+            (
+                "GET /websocket HTTP/1.1\r\nHost: localhost\r\n"
+                    + "Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+                "mismatch challenge/response",
+                nil
+            ),
+            (
+                "GET /websocket HTTP/1.1\r\nHost: localhost\r\n"
+                    + "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+                    + "Sec-WebSocket-Key: key\r\n"
+                    + "Sec-WebSocket-Version: 12\r\n\r\n",
+                "missing or bad WebSocket Version",
+                "Sec-WebSocket-Version: 13"
+            )
+        ] as [(String, String, String?)] {
+            let client = try UnixSocketClient(path: fixture.socketPath)
+            try client.write(request)
+            let response = try client.readUntil(Data(expected.utf8))
+            let responseText = String(decoding: response, as: UTF8.self)
+            #expect(responseText.contains("400 Bad Request"))
+            if let expectedHeader {
+                #expect(responseText.contains(expectedHeader))
+            }
+            client.close()
+        }
+        #expect(await eventually { session.cancelled })
+        try await server.shutdown()
+    }
+
+    @Test
+    func `server accepts Docker websocket keys without RFC nonce decoding`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = CancellableHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        defer { client.close() }
+        try client.write(
+            "GET /websocket HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: Upgrade\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Sec-WebSocket-Version: 13\r\n"
+                + "Sec-WebSocket-Key: bad\r\n\r\n"
+        )
+        let response = try client.readUntil(Data("\r\n\r\n".utf8))
+        let responseText = String(decoding: response, as: UTF8.self)
+        #expect(responseText.contains("101 Switching Protocols"))
+        #expect(
+            responseText.contains(
+                "Sec-WebSocket-Accept: 2T5rb/2MG3XPa/8Yciq6PesMZgc="
+            )
+        )
+        let mask: [UInt8] = [0x87, 0x65, 0x43, 0x21]
+        let payload: [UInt8] = [0x03, 0xE8]
+        var closeFrame = Data([0x88, 0x80 | UInt8(payload.count)])
+        closeFrame.append(contentsOf: mask)
+        closeFrame.append(
+            contentsOf: payload.enumerated().map {
+                $0.element ^ mask[$0.offset % mask.count]
+            }
+        )
+        try client.write(closeFrame)
+        _ = try client.readUntil(Data([0x88, 0x02, 0x03, 0xE8]))
+        client.close()
+        #expect(await eventually { session.cancelled })
+        try await server.shutdown()
+    }
+
+    @Test
+    func `server rejects unmasked websocket client frames`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = CancellableHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        defer { client.close() }
+        try client.write(
+            "GET /websocket HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: Upgrade\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Sec-WebSocket-Version: 13\r\n"
+                + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+        _ = try client.readUntil(Data("\r\n\r\n".utf8))
+        try client.write(Data([0x82, 0x01, 0x41]))
+
+        _ = try client.readUntil(Data([0x88, 0x02, 0x03, 0xEA]))
+        #expect(session.input.isEmpty)
+        #expect(await eventually { session.cancelled })
+        try await server.shutdown()
+    }
+
+    @Test
+    func `server rejects fragmented websocket control frames with a protocol close`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = CancellableHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        defer { client.close() }
+        try client.write(
+            "GET /websocket HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: Upgrade\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Sec-WebSocket-Version: 13\r\n"
+                + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+        _ = try client.readUntil(Data("\r\n\r\n".utf8))
+        try client.write(Data([0x09, 0x80, 0x12, 0x34, 0x56, 0x78]))
+
+        _ = try client.readUntil(Data([0x88, 0x02, 0x03, 0xEA]))
+        #expect(session.input.isEmpty)
+        #expect(await eventually { session.cancelled })
+        try await server.shutdown()
+    }
+
+    @Test
+    func `server rejects oversized websocket frames with a message-too-large close`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = CancellableHijackSession()
+        let server = fixture.server(
+            responder: FixtureResponder(session: session)
+        )
+        try await server.start()
+        let client = try UnixSocketClient(path: fixture.socketPath)
+        defer { client.close() }
+        try client.write(
+            "GET /websocket HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: Upgrade\r\n"
+                + "Upgrade: websocket\r\n"
+                + "Sec-WebSocket-Version: 13\r\n"
+                + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+        _ = try client.readUntil(Data("\r\n\r\n".utf8))
+        var frame = Data([0x82, 0xFF])
+        var declaredLength = UInt64(16 * 1024 * 1024 + 1).bigEndian
+        withUnsafeBytes(of: &declaredLength) { frame.append(contentsOf: $0) }
+        try client.write(frame)
+
+        _ = try client.readUntil(Data([0x88, 0x02, 0x03, 0xF1]))
+        #expect(session.input.isEmpty)
+        #expect(await eventually { session.cancelled })
+        try await server.shutdown()
+    }
+
+    @Test
     func `managed stream cancels its source when its connection is forced closed`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
@@ -776,6 +1051,11 @@ private struct FixtureResponder: DockerHTTPResponder {
                 ],
                 body: .hijack(session, terminal: false)
             )
+        case "/websocket":
+            DockerHTTPResponse(
+                status: 101,
+                body: .webSocket(session)
+            )
         case "/headers":
             .text(
                 request.headers
@@ -1069,7 +1349,10 @@ private final class UnixSocketClient {
     }
 
     func write(_ value: String) throws {
-        let data = Data(value.utf8)
+        try write(Data(value.utf8))
+    }
+
+    func write(_ data: Data) throws {
         try data.withUnsafeBytes { bytes in
             guard let baseAddress = bytes.baseAddress else {
                 return
@@ -1215,6 +1498,7 @@ private final class CancellableHijackSession: DockerHijackSession, @unchecked Se
     private let completionTask: Task<Int32, Never>
     private let completionContinuation: AsyncStream<Int32>.Continuation
     private let lock = NSLock()
+    private var bytes = Data()
     private var didCloseInput = false
     private var didCancel = false
 
@@ -1234,11 +1518,19 @@ private final class CancellableHijackSession: DockerHijackSession, @unchecked Se
         lock.withLock { didCloseInput }
     }
 
+    var input: Data {
+        lock.withLock { bytes }
+    }
+
     var cancelled: Bool {
         lock.withLock { didCancel }
     }
 
-    func write(_: Data) {}
+    func write(_ data: Data) {
+        lock.withLock {
+            bytes.append(data)
+        }
+    }
 
     func closeStandardInput() {
         lock.withLock {

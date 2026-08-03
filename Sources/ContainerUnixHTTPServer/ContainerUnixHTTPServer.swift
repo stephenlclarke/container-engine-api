@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerEngineWire
+import CryptoKit
 import Darwin
 import DequeModule
 import Foundation
@@ -23,6 +24,7 @@ import NIOCore
 import NIOFoundationCompat
 import NIOHTTP1
 import NIOPosix
+import NIOWebSocket
 
 public final class ContainerUnixHTTPServer: @unchecked Sendable {
     private let group: MultiThreadedEventLoopGroup
@@ -1113,6 +1115,12 @@ private final class DockerHTTPHandler:
                 headers: &headers,
                 context: context
             )
+        case let .webSocket(session):
+            writeWebSocket(
+                session: session,
+                headers: &headers,
+                context: context
+            )
         }
     }
 
@@ -1273,6 +1281,202 @@ private final class DockerHTTPHandler:
                 metadata: ["error": .string(String(describing: error))]
             )
             context.close(promise: nil)
+        }
+    }
+
+    private func writeWebSocket(
+        session: any DockerHijackSession,
+        headers: inout HTTPHeaders,
+        context: ChannelHandlerContext
+    ) {
+        let handshake: WebSocketHandshake
+        switch Self.webSocketHandshake(activeRequestHead) {
+        case let .success(value):
+            handshake = value
+        case let .failure(failure):
+            Task { await session.cancel() }
+            writeWebSocketHandshakeError(
+                failure,
+                context: context
+            )
+            return
+        }
+        headers.remove(name: "Content-Length")
+        headers.remove(name: "Content-Type")
+        headers.remove(name: "Transfer-Encoding")
+        headers.replaceOrAdd(name: "Connection", value: "Upgrade")
+        headers.replaceOrAdd(name: "Upgrade", value: "websocket")
+        headers.replaceOrAdd(
+            name: "Sec-WebSocket-Accept",
+            value: handshake.accept
+        )
+        let headPromise = context.eventLoop.makePromise(of: Void.self)
+        context.writeAndFlush(
+            wrapOutboundOut(
+                .head(
+                    HTTPResponseHead(
+                        version: .http1_1,
+                        status: .switchingProtocols,
+                        headers: headers
+                    )
+                )
+            ),
+            promise: headPromise
+        )
+        let handler = DockerWebSocketStreamHandler(
+            session: session,
+            logger: logger
+        )
+        let sendableContext = SendableChannelHandlerContext(context)
+        let eventLoop = context.eventLoop
+        headPromise.futureResult.whenComplete { result in
+            eventLoop.execute {
+                self.completeWebSocket(
+                    result,
+                    handler: handler,
+                    context: sendableContext.value
+                )
+            }
+        }
+    }
+
+    private func completeWebSocket(
+        _ result: Result<Void, any Error>,
+        handler: DockerWebSocketStreamHandler,
+        context: ChannelHandlerContext
+    ) {
+        do {
+            try result.get()
+            let pipeline = context.pipeline
+            try pipeline.syncOperations.addHandler(WebSocketFrameEncoder())
+            try pipeline.syncOperations.addHandler(
+                ByteToMessageHandler(
+                    WebSocketFrameDecoder(
+                        maxFrameSize: DockerWebSocketStreamHandler.maximumMessageBytes
+                    )
+                )
+            )
+            try pipeline.syncOperations.addHandler(
+                DockerWebSocketClientMaskValidator()
+            )
+            try pipeline.syncOperations.addHandler(
+                NIOWebSocketFrameAggregator(
+                    minNonFinalFragmentSize: 1,
+                    maxAccumulatedFrameCount: 1024,
+                    maxAccumulatedFrameSize:
+                    DockerWebSocketStreamHandler.maximumMessageBytes
+                )
+            )
+            try pipeline.syncOperations.addHandler(handler)
+            let sendableContext = SendableChannelHandlerContext(context)
+            pipeline.syncOperations.removeHandler(self)
+                .flatMap {
+                    pipeline.syncOperations.removeHandler(self.requestDecoder)
+                }
+                .flatMap {
+                    pipeline.syncOperations.removeHandler(self.responseEncoder)
+                }
+                .flatMap {
+                    pipeline.syncOperations.removeHandler(self.inputCloseBarrier)
+                }
+                .flatMap {
+                    self.deadlineHandler.disable()
+                    return pipeline.syncOperations.removeHandler(
+                        self.deadlineHandler
+                    )
+                }
+                .whenComplete { removal in
+                    let context = sendableContext.value
+                    switch removal {
+                    case .success:
+                        handler.start(channel: context.channel)
+                        if self.closeAfterResponse || self.upgradeState.inputClosed {
+                            handler.closeInput()
+                        }
+                    case let .failure(error):
+                        self.logger.error(
+                            "Container Engine websocket takeover failed",
+                            metadata: ["error": .string(String(describing: error))]
+                        )
+                        context.close(promise: nil)
+                    }
+                }
+        } catch {
+            logger.error(
+                "Container Engine websocket takeover failed",
+                metadata: ["error": .string(String(describing: error))]
+            )
+            context.close(promise: nil)
+        }
+    }
+
+    private static func webSocketHandshake(
+        _ head: HTTPRequestHead?
+    ) -> Result<WebSocketHandshake, WebSocketHandshakeFailure> {
+        guard let head else {
+            return .failure(.notWebSocket)
+        }
+        guard head.method == .GET else {
+            return .failure(.badMethod)
+        }
+        guard
+            head.headers["Upgrade"].first?.lowercased() == "websocket",
+            head.headers["Connection"].first?.lowercased()
+            .contains("upgrade") == true
+        else {
+            return .failure(.notWebSocket)
+        }
+        guard
+            let key = head.headers["Sec-WebSocket-Key"].first,
+            !key.isEmpty
+        else {
+            return .failure(.challengeResponse)
+        }
+        guard head.headers["Sec-WebSocket-Version"].first == "13" else {
+            return .failure(.badVersion)
+        }
+        let source = Data(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8
+        )
+        return .success(
+            WebSocketHandshake(
+                accept: Data(Insecure.SHA1.hash(data: source))
+                    .base64EncodedString()
+            )
+        )
+    }
+
+    private func writeWebSocketHandshakeError(
+        _ failure: WebSocketHandshakeFailure,
+        context: ChannelHandlerContext
+    ) {
+        var headers = HTTPHeaders()
+        if failure == .badVersion {
+            headers.add(name: "Sec-WebSocket-Version", value: "13")
+        }
+        context.write(
+            wrapOutboundOut(
+                .head(
+                    HTTPResponseHead(
+                        version: .http1_1,
+                        status: failure.status,
+                        headers: headers
+                    )
+                )
+            ),
+            promise: nil
+        )
+        var buffer = context.channel.allocator.buffer(
+            capacity: failure.message.utf8.count
+        )
+        buffer.writeString(failure.message)
+        context.write(
+            wrapOutboundOut(.body(.byteBuffer(buffer))),
+            promise: nil
+        )
+        let sendableContext = SendableChannelHandlerContext(context)
+        context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
+            sendableContext.value.close(promise: nil)
         }
     }
 
@@ -1547,13 +1751,16 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
         }
     }
 
-    func channelRead(context _: ChannelHandlerContext, data: NIOAny) {
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buffer = unwrapInboundIn(data)
         let bytes = buffer.readBytes(length: buffer.readableBytes) ?? []
         guard !bytes.isEmpty else {
             return
         }
-        inputPump.write(Data(bytes))
+        guard writeInput(Data(bytes)) else {
+            context.close(promise: nil)
+            return
+        }
     }
 
     func closeInput() {
@@ -1579,6 +1786,307 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
             inputPump.finish()
         }
         context.fireChannelInactive()
+    }
+
+    private func writeInput(_ data: Data) -> Bool {
+        var offset = 0
+        while offset < data.count {
+            let end = min(
+                offset + OrderedDockerInputPump.maximumInputChunkBytes,
+                data.count
+            )
+            guard inputPump.write(data.subdata(in: offset ..< end)) else {
+                return false
+            }
+            offset = end
+        }
+        return true
+    }
+}
+
+private struct WebSocketHandshake {
+    let accept: String
+}
+
+private enum WebSocketHandshakeFailure: Error, Equatable {
+    case badMethod
+    case badVersion
+    case challengeResponse
+    case notWebSocket
+
+    var status: HTTPResponseStatus {
+        switch self {
+        case .badMethod:
+            .methodNotAllowed
+        case .badVersion, .challengeResponse, .notWebSocket:
+            .badRequest
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .badMethod:
+            "bad method"
+        case .badVersion:
+            "missing or bad WebSocket Version"
+        case .challengeResponse:
+            "mismatch challenge/response"
+        case .notWebSocket:
+            "not websocket protocol"
+        }
+    }
+}
+
+private final class DockerWebSocketClientMaskValidator:
+    ChannelInboundHandler,
+    @unchecked Sendable
+{
+    typealias InboundIn = WebSocketFrame
+    typealias InboundOut = WebSocketFrame
+    typealias OutboundOut = WebSocketFrame
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let frame = unwrapInboundIn(data)
+        guard frame.maskKey != nil else {
+            var payload = context.channel.allocator.buffer(capacity: 2)
+            payload.write(webSocketErrorCode: .protocolError)
+            let close = WebSocketFrame(
+                fin: true,
+                opcode: .connectionClose,
+                data: payload
+            )
+            let sendableContext = SendableChannelHandlerContext(context)
+            context.writeAndFlush(wrapOutboundOut(close)).whenComplete { _ in
+                sendableContext.value.close(promise: nil)
+            }
+            return
+        }
+        context.fireChannelRead(wrapInboundOut(frame))
+    }
+}
+
+private final class DockerWebSocketStreamHandler:
+    ChannelInboundHandler,
+    @unchecked Sendable
+{
+    typealias InboundIn = WebSocketFrame
+    typealias OutboundOut = WebSocketFrame
+
+    static let maximumMessageBytes = 16 * 1024 * 1024
+
+    private let session: any DockerHijackSession
+    private let logger: Logger
+    private let inputPump: OrderedDockerInputPump
+    private let cancellation: DockerHijackCancellation
+    private var outputTask: Task<Void, Never>?
+    private let stateLock = NSLock()
+    private var finishedNormally = false
+    private var protocolCloseStarted = false
+
+    init(
+        session: any DockerHijackSession,
+        logger: Logger
+    ) {
+        self.session = session
+        self.logger = logger
+        let cancellation = DockerHijackCancellation(session: session)
+        self.cancellation = cancellation
+        inputPump = OrderedDockerInputPump(
+            session: session,
+            cancellation: cancellation
+        )
+    }
+
+    func start(channel: any Channel) {
+        outputTask = Task {
+            do {
+                for try await frame in session.frames {
+                    try Task.checkCancellation()
+                    guard channel.isActive else {
+                        return
+                    }
+                    try await writeBinaryMessages(frame.data, to: channel)
+                }
+                _ = try await session.wait()
+                try Task.checkCancellation()
+                guard channel.isActive else {
+                    return
+                }
+                stateLock.withLock {
+                    finishedNormally = true
+                }
+                let close = WebSocketFrame(
+                    fin: true,
+                    opcode: .connectionClose,
+                    data: channel.allocator.buffer(capacity: 0)
+                )
+                try await channel.writeAndFlush(close).get()
+                try await channel.close().get()
+            } catch {
+                guard !Task.isCancelled else {
+                    return
+                }
+                logger.error(
+                    "Container Engine websocket stream failed",
+                    metadata: ["error": .string(String(describing: error))]
+                )
+                if channel.isActive {
+                    channel.close(promise: nil)
+                }
+            }
+        }
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let frame = unwrapInboundIn(data)
+        switch frame.opcode {
+        case .binary, .text:
+            let bytes = Data(frame.unmaskedData.readableBytesView)
+            if !bytes.isEmpty, !writeInput(bytes) {
+                context.close(promise: nil)
+            }
+        case .ping:
+            let pong = WebSocketFrame(
+                fin: true,
+                opcode: .pong,
+                data: frame.unmaskedData
+            )
+            context.writeAndFlush(wrapOutboundOut(pong), promise: nil)
+        case .connectionClose:
+            closeInput()
+            let sendableContext = SendableChannelHandlerContext(context)
+            let close = WebSocketFrame(
+                fin: true,
+                opcode: .connectionClose,
+                data: frame.unmaskedData
+            )
+            context.writeAndFlush(wrapOutboundOut(close)).whenComplete { _ in
+                sendableContext.value.close(promise: nil)
+            }
+        case .pong:
+            break
+        default:
+            context.close(promise: nil)
+        }
+    }
+
+    func closeInput() {
+        inputPump.close()
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let channelEvent = event as? ChannelEvent, channelEvent == .inputClosed {
+            closeInput()
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: any Error) {
+        logger.error(
+            "Container Engine websocket protocol failed",
+            metadata: ["error": .string(String(describing: error))]
+        )
+        guard
+            !protocolCloseStarted,
+            let errorCode = Self.webSocketErrorCode(for: error)
+        else {
+            context.close(promise: nil)
+            return
+        }
+        protocolCloseStarted = true
+        var payload = context.channel.allocator.buffer(capacity: 2)
+        payload.write(webSocketErrorCode: errorCode)
+        let close = WebSocketFrame(
+            fin: true,
+            opcode: .connectionClose,
+            data: payload
+        )
+        let sendableContext = SendableChannelHandlerContext(context)
+        context.writeAndFlush(wrapOutboundOut(close)).whenComplete { _ in
+            sendableContext.value.close(promise: nil)
+        }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        let shouldCancel = stateLock.withLock {
+            !finishedNormally
+        }
+        if shouldCancel {
+            outputTask?.cancel()
+            inputPump.cancel()
+            cancellation.cancel()
+        } else {
+            inputPump.finish()
+        }
+        context.fireChannelInactive()
+    }
+
+    private func writeBinaryMessages(
+        _ data: Data,
+        to channel: any Channel
+    ) async throws {
+        if data.isEmpty {
+            let frame = WebSocketFrame(
+                fin: true,
+                opcode: .binary,
+                data: channel.allocator.buffer(capacity: 0)
+            )
+            try await channel.writeAndFlush(frame).get()
+            return
+        }
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + Self.maximumMessageBytes, data.count)
+            var payload = channel.allocator.buffer(capacity: end - offset)
+            payload.writeBytes(data[offset ..< end])
+            let frame = WebSocketFrame(
+                fin: true,
+                opcode: .binary,
+                data: payload
+            )
+            try await channel.writeAndFlush(frame).get()
+            offset = end
+        }
+    }
+
+    private func writeInput(_ data: Data) -> Bool {
+        var offset = 0
+        while offset < data.count {
+            let end = min(
+                offset + OrderedDockerInputPump.maximumInputChunkBytes,
+                data.count
+            )
+            guard inputPump.write(data.subdata(in: offset ..< end)) else {
+                return false
+            }
+            offset = end
+        }
+        return true
+    }
+
+    private static func webSocketErrorCode(
+        for error: any Error
+    ) -> WebSocketErrorCode? {
+        if let nioError = error as? NIOWebSocketError {
+            return switch nioError {
+            case .invalidFrameLength:
+                .messageTooLarge
+            case .fragmentedControlFrame, .multiByteControlFrameLength:
+                .protocolError
+            }
+        }
+        if let aggregationError = error as? NIOWebSocketFrameAggregator.Error {
+            return switch aggregationError {
+            case .accumulatedFrameSizeIsTooLarge:
+                .messageTooLarge
+            case .didReceiveFragmentBeforeReceivingTextOrBinaryFrame,
+                 .nonFinalFragmentSizeIsTooSmall,
+                 .receivedNewFrameWithoutFinishingPrevious,
+                 .tooManyFragments:
+                .protocolError
+            }
+        }
+        return nil
     }
 }
 
@@ -1714,16 +2222,21 @@ private final class EngineBufferBudget: @unchecked Sendable {
 }
 
 final class OrderedDockerInputPump: @unchecked Sendable {
-    private enum Event: Sendable {
-        case data(Data)
-        case close
+    private enum WriteDisposition {
+        case accepted
+        case closed
+        case overflow
     }
 
-    private let continuation: AsyncStream<Event>.Continuation
+    private let continuation: AsyncStream<Data>.Continuation
     private let worker: Task<Void, Never>
     private let cancellation: DockerHijackCancellation
+    private let closeState: OrderedDockerInputCloseState
     private let stateLock = NSLock()
     private var finished = false
+
+    static let maximumInputChunkBytes = 1 * 1024 * 1024
+    static let maximumPendingEvents = 16
 
     convenience init(session: any DockerHijackSession) {
         self.init(
@@ -1736,19 +2249,22 @@ final class OrderedDockerInputPump: @unchecked Sendable {
         session: any DockerHijackSession,
         cancellation: DockerHijackCancellation
     ) {
-        let (stream, continuation) = AsyncStream<Event>.makeStream()
+        let (stream, continuation) = AsyncStream<Data>.makeStream(
+            bufferingPolicy: .bufferingOldest(Self.maximumPendingEvents)
+        )
+        let closeState = OrderedDockerInputCloseState()
         self.continuation = continuation
         self.cancellation = cancellation
+        self.closeState = closeState
         worker = Task {
             do {
-                for await event in stream {
+                for await data in stream {
                     try Task.checkCancellation()
-                    switch event {
-                    case let .data(data):
-                        try await session.write(data)
-                    case .close:
-                        try await session.closeStandardInput()
-                    }
+                    try await session.write(data)
+                }
+                try Task.checkCancellation()
+                if closeState.requested {
+                    try await session.closeStandardInput()
                 }
             } catch {
                 cancellation.cancel()
@@ -1756,15 +2272,35 @@ final class OrderedDockerInputPump: @unchecked Sendable {
         }
     }
 
-    func write(_ data: Data) {
+    @discardableResult
+    func write(_ data: Data) -> Bool {
         guard !data.isEmpty else {
-            return
+            return true
         }
-        stateLock.withLock {
+        let disposition = stateLock.withLock {
             guard !finished else {
-                return
+                return WriteDisposition.closed
             }
-            continuation.yield(.data(data))
+            switch continuation.yield(data) {
+            case .enqueued:
+                return WriteDisposition.accepted
+            case .dropped, .terminated:
+                finished = true
+                continuation.finish()
+                return WriteDisposition.overflow
+            @unknown default:
+                finished = true
+                continuation.finish()
+                return WriteDisposition.overflow
+            }
+        }
+        switch disposition {
+        case .accepted, .closed:
+            return true
+        case .overflow:
+            worker.cancel()
+            cancellation.cancel()
+            return false
         }
     }
 
@@ -1774,7 +2310,7 @@ final class OrderedDockerInputPump: @unchecked Sendable {
                 return
             }
             finished = true
-            continuation.yield(.close)
+            closeState.request()
             continuation.finish()
         }
     }
@@ -1802,6 +2338,21 @@ final class OrderedDockerInputPump: @unchecked Sendable {
 
     func wait() async {
         await worker.value
+    }
+}
+
+private final class OrderedDockerInputCloseState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didRequest = false
+
+    var requested: Bool {
+        lock.withLock { didRequest }
+    }
+
+    func request() {
+        lock.withLock {
+            didRequest = true
+        }
     }
 }
 
