@@ -327,13 +327,19 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
         on connection: ProviderSessionSocket
     ) async throws {
         let output = ProviderHijackOutputIterator(session.frames)
+        let input = ProviderHijackInputRelay(
+            session: session,
+            failureHandler: { [weak self] error in
+                await self?.writeFailure(error, on: connection)
+            }
+        )
         await withTaskGroup(of: Void.self) { tasks in
             while !Task.isCancelled {
                 let command: ProviderSessionFrame
                 do {
                     command = try await connection.readFrame()
                 } catch {
-                    await session.cancel()
+                    await input.cancel()
                     tasks.cancelAll()
                     return
                 }
@@ -358,23 +364,14 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                         }
                     }
                 case .writeInput:
-                    tasks.addTask {
-                        do {
-                            try await session.write(command.data ?? Data())
-                        } catch {
-                            await self.writeFailure(error, on: connection)
-                        }
-                    }
+                    await input.write(command.data ?? Data())
                 case .closeInput:
-                    tasks.addTask {
-                        do {
-                            try await session.closeStandardInput()
-                        } catch {
-                            await self.writeFailure(error, on: connection)
-                        }
-                    }
+                    await input.closeStandardInput()
                 case .wait:
                     tasks.addTask {
+                        guard await input.finish() else {
+                            return
+                        }
                         do {
                             var result = ProviderSessionFrame(kind: .waitResult)
                             result.exitCode = try await session.wait()
@@ -384,7 +381,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                         }
                     }
                 case .cancel:
-                    await session.cancel()
+                    await input.cancel()
                     tasks.cancelAll()
                     return
                 default:
@@ -420,6 +417,77 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             connections.removeAll()
             stopped = true
         }
+    }
+}
+
+private actor ProviderHijackInputRelay {
+    private static let maximumPendingBytes = 4 * 1024 * 1024
+
+    private let session: any DockerHijackSession
+    private let failureHandler: @Sendable (any Error) async -> Void
+    private var pendingBytes = 0
+    private var tail: Task<Bool, Never>?
+
+    init(
+        session: any DockerHijackSession,
+        failureHandler: @escaping @Sendable (any Error) async -> Void
+    ) {
+        self.session = session
+        self.failureHandler = failureHandler
+    }
+
+    func write(_ data: Data) async {
+        await enqueue(byteCount: data.count) { [session] in
+            try await session.write(data)
+        }
+    }
+
+    func closeStandardInput() async {
+        await enqueue { [session] in
+            try await session.closeStandardInput()
+        }
+    }
+
+    func finish() async -> Bool {
+        await tail?.value ?? true
+    }
+
+    func cancel() async {
+        let pending = tail
+        pending?.cancel()
+        await session.cancel()
+        _ = await pending?.value
+    }
+
+    private func enqueue(
+        byteCount: Int = 0,
+        operation: @escaping @Sendable () async throws -> Void
+    ) async {
+        if pendingBytes + byteCount > Self.maximumPendingBytes, let tail {
+            _ = await tail.value
+        }
+        let previous = tail
+        pendingBytes += byteCount
+        tail = Task { [weak self, failureHandler] in
+            let priorSucceeded = await previous?.value ?? true
+            guard priorSucceeded, !Task.isCancelled else {
+                await self?.complete(byteCount: byteCount)
+                return false
+            }
+            do {
+                try await operation()
+                await self?.complete(byteCount: byteCount)
+                return true
+            } catch {
+                await failureHandler(error)
+                await self?.complete(byteCount: byteCount)
+                return false
+            }
+        }
+    }
+
+    private func complete(byteCount: Int) {
+        pendingBytes -= byteCount
     }
 }
 

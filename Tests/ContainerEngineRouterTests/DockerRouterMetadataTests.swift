@@ -133,6 +133,27 @@ func `route ledger matches versioned and unversioned requests`() throws {
 }
 
 @Test
+func `unknown routes return no match before API version validation`() throws {
+    let ledger = try DockerEngineAPIRouteLedger.make()
+
+    #expect(
+        try ledger.match(
+            DockerHTTPRequest(
+                method: .get,
+                target: "/v1.24/engine-route-that-does-not-exist"
+            )
+        ) == nil
+    )
+    #expect(throws: try DockerRoutingError.unsupportedAPIVersion(
+        DockerAPIVersion("1.24")
+    )) {
+        try ledger.match(
+            DockerHTTPRequest(method: .get, target: "/v1.24/_ping")
+        )
+    }
+}
+
+@Test
 func `ledger rejects ambiguous metadata`() throws {
     let first = try DockerRouteMetadata(
         identifier: "container.inspect",
@@ -295,12 +316,12 @@ func `ledger enforces its version range and schema`() throws {
 
     #expect(throws: DockerRoutingError.self) {
         try ledger.match(
-            DockerHTTPRequest(method: .get, target: "/v1.54/_ping")
+            DockerHTTPRequest(method: .get, target: "/v1.54/legacy/example")
         )
     }
     #expect(throws: DockerRoutingError.self) {
         try ledger.match(
-            DockerHTTPRequest(method: .get, target: "/v1.23/_ping")
+            DockerHTTPRequest(method: .get, target: "/v1.23/legacy/example")
         )
     }
 

@@ -294,9 +294,17 @@ private actor ProviderRemoteHijackCoordinator {
     }
 
     func write(_ data: Data) async throws {
-        var frame = ProviderSessionFrame(kind: .writeInput)
-        frame.data = data
-        try await socket.writeFrame(frame)
+        let chunkSize = 1024 * 1024
+        if data.isEmpty {
+            try await writeInputFrame(data)
+            return
+        }
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            try await writeInputFrame(data.subdata(in: offset ..< end))
+            offset = end
+        }
     }
 
     func closeStandardInput() async throws {
@@ -326,5 +334,11 @@ private actor ProviderRemoteHijackCoordinator {
             try? await socket.writeFrame(ProviderSessionFrame(kind: .cancel))
             socket.close()
         }
+    }
+
+    private func writeInputFrame(_ data: Data) async throws {
+        var frame = ProviderSessionFrame(kind: .writeInput)
+        frame.data = data
+        try await socket.writeFrame(frame)
     }
 }

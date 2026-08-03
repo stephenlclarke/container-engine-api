@@ -152,6 +152,41 @@ struct ContainerEngineProviderSessionTests {
     }
 
     @Test
+    func `provider hijack preserves delayed binary input and half close order`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let response = await client.respond(
+                to: DockerHTTPRequest(method: .post, target: "/ordered-hijack")
+            )
+            guard case let .hijack(session, _) = response.body else {
+                Issue.record("expected ordered hijack response")
+                return
+            }
+            let output = Task {
+                var iterator = session.frames.makeAsyncIterator()
+                return try await iterator.next()
+            }
+            let chunks = [
+                Data(repeating: 0x01, count: 1024 * 1024),
+                Data(repeating: 0x02, count: 1024 * 1024),
+                Data(repeating: 0x03, count: 1024 * 1024)
+            ]
+            for chunk in chunks {
+                try await session.write(chunk)
+            }
+            try await session.closeStandardInput()
+            let frame = try await output.value
+            #expect(frame?.channel == .standardOutput)
+            #expect(frame?.data == chunks.reduce(into: Data()) { $0.append($1) })
+            await session.cancel()
+        }
+    }
+
+    @Test
     func `provider hijack returns exit status`() async throws {
         try await withServer { socket, declaration, stateRoot in
             let client = try await Self.client(
@@ -335,6 +370,12 @@ private struct TestResponder: DockerHTTPResponder {
                 body: .webSocket(TestHijackSession())
             )
         }
+        if request.target == "/ordered-hijack" {
+            return DockerHTTPResponse(
+                status: 101,
+                body: .hijack(OrderedEchoHijackSession(), terminal: false)
+            )
+        }
         if request.target == "/large-stream" {
             return DockerHTTPResponse(
                 status: 200,
@@ -422,5 +463,69 @@ private actor TestHijackState {
             }
         }
         return DockerStreamFrame(channel: .standardOutput, data: data)
+    }
+}
+
+private final class OrderedEchoHijackSession: DockerHijackSession, @unchecked Sendable {
+    private let state = OrderedEchoHijackState()
+
+    var frames: AsyncThrowingStream<DockerStreamFrame, any Error> {
+        let state = state
+        return AsyncThrowingStream(unfolding: {
+            await state.nextFrame()
+        })
+    }
+
+    func write(_ data: Data) async throws {
+        if data.first == 0x01 {
+            try await Task.sleep(for: .milliseconds(40))
+        } else if data.first == 0x02 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        await state.write(data)
+    }
+
+    func closeStandardInput() async throws {
+        await state.closeStandardInput()
+    }
+
+    func wait() async throws -> Int32 {
+        0
+    }
+
+    func cancel() async {}
+}
+
+private actor OrderedEchoHijackState {
+    private var continuation: CheckedContinuation<Data, Never>?
+    private var emitted = false
+    private var input = Data()
+    private var inputClosed = false
+
+    func write(_ data: Data) {
+        input.append(data)
+    }
+
+    func closeStandardInput() {
+        inputClosed = true
+        if let continuation {
+            self.continuation = nil
+            continuation.resume(returning: input)
+        }
+    }
+
+    func nextFrame() async -> DockerStreamFrame? {
+        guard !emitted else {
+            return nil
+        }
+        emitted = true
+        let output: Data = if inputClosed {
+            input
+        } else {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+        return DockerStreamFrame(channel: .standardOutput, data: output)
     }
 }

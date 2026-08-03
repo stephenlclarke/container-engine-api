@@ -146,19 +146,28 @@ public struct DockerRouteLedger: Codable, Sendable {
 
     public func match(_ request: DockerHTTPRequest) throws -> DockerRouteMatch? {
         let target = try DockerRequestTarget(request.target)
+        let candidates: [(DockerRouteMetadata, [String: String])] = matchingRouteIndexes
+            .compactMap { index in
+                let route = routes[index]
+                guard
+                    route.method == request.method,
+                    let parameters = route.pattern.match(target)
+                else {
+                    return nil
+                }
+                return (route, parameters)
+            }
+        guard !candidates.isEmpty else {
+            return nil
+        }
         if let version = target.apiVersion,
            version < minimumAPIVersion || version > maximumAPIVersion
         {
             throw DockerRoutingError.unsupportedAPIVersion(version)
         }
         let requestedVersion = target.apiVersion ?? maximumAPIVersion
-        for index in matchingRouteIndexes {
-            let route = routes[index]
-            guard
-                route.method == request.method,
-                route.isAvailable(in: requestedVersion),
-                let parameters = route.pattern.match(target)
-            else {
+        for (route, parameters) in candidates {
+            guard route.isAvailable(in: requestedVersion) else {
                 continue
             }
             return DockerRouteMatch(
