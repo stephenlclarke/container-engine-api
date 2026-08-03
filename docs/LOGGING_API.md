@@ -61,6 +61,8 @@ The legacy generic `AsyncThrowingStream<Data>` response remains source-compatibl
 
 The candidate fixture includes the public Unix listener, gateway route ledger, private provider session, logging controller, bounded input pump, and WebSocket framing. Its in-memory echo/resize backend deliberately excludes Container process lookup and terminal control, so this lane proves shared transport overhead only. Production Container, provider, logging-driver, Compose foreground, and external-client matrices remain required before end-to-end performance parity is claimed.
 
+The immutable [v0.3.0 transport matrix](performance/engine-streaming-v0.3.0/timing-matrix.md) and its adjacent raw TSV, fingerprints, summary JSON, and JUnit evidence identify the clean signed code head, candidate binary digest, same-host Docker Engine, environment, and all 66 successful samples.
+
 ## Adoption Checklist
 
 - Implement the four `DockerLoggingBackend` operations over the authoritative Container logging/lifecycle controller.
