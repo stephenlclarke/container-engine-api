@@ -1,0 +1,81 @@
+{
+  "candidate": {
+    "binary": "/Users/sclarke/github/container-engine-api/.build/arm64-apple-macosx/release/ContainerEngineStreamingPerformanceFixture",
+    "binarySHA256": "e5bbc258b15c9c9b0f0f4608f5dc15fb161fa40557242881ea07c0693f53d2ac",
+    "gitHead": "31289003ee759b4465e5b92e7c6be62d27b2fd0f",
+    "trackedDiffSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "worktreeDirty": false
+  },
+  "capturedAt": "2026-08-03T20:57:12.064361+00:00",
+  "conditions": {
+    "backend": "bounded in-memory echo/resize fixture",
+    "build": "release",
+    "image": "alpine:3.20",
+    "repetitions": 11,
+    "scope": "public-listener+gateway+private-provider+logging-controller"
+  },
+  "docker": {
+    "context": "colima",
+    "engine": {
+      "ApiVersion": "1.54",
+      "Arch": "arm64",
+      "BuildTime": "2026-05-20T14:39:25.000000000+00:00",
+      "Components": [
+        {
+          "Details": {
+            "ApiVersion": "1.54",
+            "Arch": "arm64",
+            "BuildTime": "Wed May 20 14:39:25 2026",
+            "Experimental": "false",
+            "GitCommit": "568f755",
+            "GoVersion": "go1.26.3",
+            "KernelVersion": "6.8.0-100-generic",
+            "MinAPIVersion": "1.40",
+            "Module": "github.com/moby/moby/v2",
+            "ModuleVersion": "v2.0.0+unknown",
+            "Os": "linux"
+          },
+          "Name": "Engine",
+          "Version": "29.5.2"
+        },
+        {
+          "Details": {
+            "GitCommit": "11ce9d5f3c68c941867e82890e93e815c1304f1b"
+          },
+          "Name": "containerd",
+          "Version": "v2.2.6"
+        },
+        {
+          "Details": {
+            "GitCommit": "v1.3.6-0-g491b69ba"
+          },
+          "Name": "runc",
+          "Version": "1.3.6"
+        },
+        {
+          "Details": {
+            "GitCommit": "de40ad0"
+          },
+          "Name": "docker-init",
+          "Version": "0.19.0"
+        }
+      ],
+      "GitCommit": "568f755",
+      "GoVersion": "go1.26.3",
+      "KernelVersion": "6.8.0-100-generic",
+      "MinAPIVersion": "1.40",
+      "Os": "linux",
+      "Platform": {
+        "Name": "Docker Engine - Community"
+      },
+      "Version": "29.5.2"
+    }
+  },
+  "host": {
+    "architecture": "arm64",
+    "hardwareMemoryBytes": "25769803776",
+    "hardwareModel": "Mac17,9",
+    "macOSVersion": "26.5.2"
+  },
+  "schemaVersion": 1
+}
