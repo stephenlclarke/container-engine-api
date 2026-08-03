@@ -21,6 +21,16 @@ The executable and provider-session boundary are implemented, and devcontainer 1
 
 `ContainerUnixHTTPServer` instances are deliberately one-shot: a failed start may be retried after cleanup, but an instance cannot restart after shutdown. Concurrent lifecycle transitions fail explicitly, completed shutdown is idempotent, and callers must create a new server instance to bind again. `ContainerUnixHTTPServerLimits` configures the global connection ceiling, per-connection and aggregate decoded request-body budgets, pending-request limit, request-read deadline, keep-alive idle deadline, and graceful-drain deadline. Its original three-argument initializer remains source-compatible and derives an aggregate budget no smaller than the configured per-connection budget, with a 2 GiB floor. Hijacked sessions are exempt from ordinary HTTP read/idle deadlines and are force-closed only if they outlive graceful drain.
 
+## Documentation
+
+Browse the [container-engine-api DocC reference](https://stephenlclarke.github.io/api/container-engine-api/) as part of the integrated container developer API collection.
+
+Generate the same static site locally with:
+
+```sh
+scripts/make-docs.sh _site api/container-engine-api
+```
+
 Build and test with SwiftPM:
 
 ```sh
