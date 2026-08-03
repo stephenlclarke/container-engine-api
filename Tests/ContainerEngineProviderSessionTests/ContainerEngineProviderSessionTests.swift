@@ -3,7 +3,7 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
-import ContainerEngineProviderSession
+@testable import ContainerEngineProviderSession
 import ContainerEngineRuntimeSPI
 import ContainerEngineWire
 import Foundation
@@ -55,6 +55,72 @@ struct ContainerEngineProviderSessionTests {
                 Issue.record("expected bytes response")
             }
         }
+    }
+
+    @Test
+    func `provider chunks request bodies larger than one frame`() async throws {
+        let recorder = RequestBodyRecorder()
+        try await withServer(responder: RequestBodyResponder(recorder: recorder)) {
+            socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let body = Data(repeating: 0x5A, count: 36 * 1024 * 1024 + 1)
+            let response = await client.respond(
+                to: DockerHTTPRequest(
+                    method: .post,
+                    target: "/large-request",
+                    body: body
+                )
+            )
+            #expect(response.status == 204)
+            let recorded = await recorder.body
+            #expect(recorded == body)
+        }
+    }
+
+    @Test
+    func `provider request body framing fails closed`() throws {
+        var accumulator = ProviderRequestBodyAccumulator(maximumBytes: 3)
+        var body = ProviderSessionFrame(kind: .requestBody)
+        body.data = Data("abc".utf8)
+        #expect(try accumulator.consume(body) == nil)
+
+        var overflow = ProviderSessionFrame(kind: .requestBody)
+        overflow.data = Data("d".utf8)
+        #expect(throws: ContainerEngineProviderSessionError.requestBodyTooLarge(4)) {
+            try accumulator.consume(overflow)
+        }
+
+        let missing = ProviderSessionFrame(kind: .requestBody)
+        #expect(
+            throws: ContainerEngineProviderSessionError.protocolViolation(
+                "request body frame omitted its data"
+            )
+        ) {
+            var missingAccumulator = ProviderRequestBodyAccumulator(
+                maximumBytes: 3
+            )
+            _ = try missingAccumulator.consume(missing)
+        }
+
+        let unexpected = ProviderSessionFrame(kind: .next)
+        #expect(
+            throws: ContainerEngineProviderSessionError.protocolViolation(
+                "expected request body data or end, received next"
+            )
+        ) {
+            var unexpectedAccumulator = ProviderRequestBodyAccumulator(
+                maximumBytes: 3
+            )
+            _ = try unexpectedAccumulator.consume(unexpected)
+        }
+
+        let end = ProviderSessionFrame(kind: .requestEnd)
+        var emptyAccumulator = ProviderRequestBodyAccumulator(maximumBytes: 3)
+        #expect(try emptyAccumulator.consume(end) == Data())
     }
 
     @Test
@@ -272,6 +338,7 @@ struct ContainerEngineProviderSessionTests {
     }
 
     private func withServer(
+        responder: any DockerHTTPResponder = TestResponder(),
         _ operation: (
             _ socket: String,
             _ declaration: ContainerEngineProviderDeclaration,
@@ -287,7 +354,7 @@ struct ContainerEngineProviderSessionTests {
         let declaration = try Self.declaration()
         let stateRoot = UUID()
         let server = try ContainerEngineProviderSessionServer(
-            responder: TestResponder(),
+            responder: responder,
             socketPath: socket,
             declaration: declaration,
             stateRootUUID: stateRoot
@@ -349,6 +416,23 @@ struct ContainerEngineProviderSessionTests {
                 )
             ]
         )
+    }
+}
+
+private actor RequestBodyRecorder {
+    private(set) var body = Data()
+
+    func record(_ body: Data) {
+        self.body = body
+    }
+}
+
+private struct RequestBodyResponder: DockerHTTPResponder {
+    let recorder: RequestBodyRecorder
+
+    func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
+        await recorder.record(request.body)
+        return DockerHTTPResponse(status: 204, body: .bytes(Data()))
     }
 }
 

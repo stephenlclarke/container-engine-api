@@ -9,6 +9,7 @@ import Foundation
 final class ProviderSessionSocket: @unchecked Sendable {
     static let maximumFrameBytes = 48 * 1024 * 1024
     static let maximumBufferedBodyBytes = 128 * 1024 * 1024
+    static let maximumBufferedRequestBodyBytes = 1024 * 1024 * 1024
 
     private let descriptor: Int32
     private let readLock = NSLock()

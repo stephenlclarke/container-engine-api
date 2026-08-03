@@ -40,10 +40,10 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
             frame.request = ProviderSessionRequest(
                 method: request.method,
                 target: request.target,
-                headers: Array(request.headers),
-                body: request.body
+                headers: Array(request.headers)
             )
             try await socket.writeFrame(frame)
+            try await Self.writeRequestBody(request.body, on: socket)
             let headFrame = try await socket.readFrame()
             if headFrame.kind == .failure {
                 throw ContainerEngineProviderSessionError.providerFailure(
@@ -160,6 +160,22 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
                 )
             }
         }
+    }
+
+    private static func writeRequestBody(
+        _ data: Data,
+        on socket: ProviderSessionSocket
+    ) async throws {
+        let chunkSize = 1024 * 1024
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            var frame = ProviderSessionFrame(kind: .requestBody)
+            frame.data = data.subdata(in: offset ..< end)
+            try await socket.writeFrame(frame)
+            offset = end
+        }
+        try await socket.writeFrame(ProviderSessionFrame(kind: .requestEnd))
     }
 }
 

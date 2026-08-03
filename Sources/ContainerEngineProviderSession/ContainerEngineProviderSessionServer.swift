@@ -151,12 +151,13 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                     "expected one request after handshake"
                 )
             }
+            let body = try await readRequestBody(on: connection)
             let response = await responder.respond(
                 to: DockerHTTPRequest(
                     method: request.method,
                     target: request.target,
                     headers: DockerHTTPHeaders(request.headers),
-                    body: request.body
+                    body: body
                 )
             )
             try await serve(response, on: connection)
@@ -166,6 +167,20 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             var failure = ProviderSessionFrame(kind: .failure)
             failure.message = String(describing: error)
             try? await connection.writeFrame(failure)
+        }
+    }
+
+    private func readRequestBody(
+        on connection: ProviderSessionSocket
+    ) async throws -> Data {
+        var accumulator = ProviderRequestBodyAccumulator(
+            maximumBytes: ProviderSessionSocket.maximumBufferedRequestBodyBytes
+        )
+        while true {
+            let frame = try await connection.readFrame()
+            if let body = try accumulator.consume(frame) {
+                return body
+            }
         }
     }
 
@@ -416,6 +431,45 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             }
             connections.removeAll()
             stopped = true
+        }
+    }
+}
+
+struct ProviderRequestBodyAccumulator {
+    let maximumBytes: Int
+    private var body = Data()
+
+    init(maximumBytes: Int) {
+        self.maximumBytes = maximumBytes
+    }
+
+    mutating func consume(_ frame: ProviderSessionFrame) throws -> Data? {
+        switch frame.kind {
+        case .requestBody:
+            guard let data = frame.data else {
+                throw ContainerEngineProviderSessionError.protocolViolation(
+                    "request body frame omitted its data"
+                )
+            }
+            let (size, overflow) = body.count.addingReportingOverflow(data.count)
+            guard !overflow else {
+                throw ContainerEngineProviderSessionError.requestBodyTooLarge(
+                    Int.max
+                )
+            }
+            guard size <= maximumBytes else {
+                throw ContainerEngineProviderSessionError.requestBodyTooLarge(
+                    size
+                )
+            }
+            body.append(data)
+            return nil
+        case .requestEnd:
+            return body
+        default:
+            throw ContainerEngineProviderSessionError.protocolViolation(
+                "expected request body data or end, received \(frame.kind.rawValue)"
+            )
         }
     }
 }

@@ -29,6 +29,8 @@ enum ProviderSessionFrameKind: String, Codable {
     case providerHello
     case ready
     case request
+    case requestBody
+    case requestEnd
     case responseBody
     case responseChunkEnd
     case responseEnd
@@ -49,7 +51,6 @@ struct ProviderSessionRequest: Codable {
     var method: DockerHTTPMethod
     var target: String
     var headers: [DockerHTTPHeaders.Field]
-    var body: Data
 }
 
 struct ProviderSessionResponseHead: Codable {
@@ -60,7 +61,7 @@ struct ProviderSessionResponseHead: Codable {
 }
 
 struct ProviderSessionFrame: Codable {
-    static let currentSchemaVersion: UInt32 = 2
+    static let currentSchemaVersion: UInt32 = 3
 
     var schemaVersion = currentSchemaVersion
     var kind: ProviderSessionFrameKind
@@ -139,6 +140,7 @@ public enum ContainerEngineProviderSessionError:
     case invalidSocketPath(String)
     case providerFailure(String)
     case protocolViolation(String)
+    case requestBodyTooLarge(Int)
     case unsupportedProtocolVersion(UInt32)
     case unsafeSocketDirectory(String)
     case unsafeSocketPath(String)
@@ -161,6 +163,8 @@ public enum ContainerEngineProviderSessionError:
             "provider request failed: \(message)"
         case let .protocolViolation(message):
             "provider session protocol violation: \(message)"
+        case let .requestBodyTooLarge(size):
+            "provider request body exceeds the limit (\(size) bytes)"
         case let .unsupportedProtocolVersion(version):
             "unsupported provider session protocol version \(version)"
         case let .unsafeSocketDirectory(path):
