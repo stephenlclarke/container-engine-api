@@ -30,7 +30,8 @@ func `Docker input pump preserves bytes and EOF order`() async {
     pump.close()
     await pump.wait()
 
-    #expect(session.operations == (1 ... 8).map { .data(UInt8($0)) } + [.close])
+    #expect(session.bytes == Data(UInt8(1) ... UInt8(8)))
+    #expect(session.operations.last == .close)
 }
 
 @Test
@@ -43,7 +44,7 @@ func `Docker input pump ignores writes following EOF`() async {
     #expect(pump.write(Data([99])))
     await pump.wait()
 
-    #expect(session.operations == [.data(42), .close])
+    #expect(session.operations == [.data(Data([42])), .close])
 }
 
 @Test
@@ -51,9 +52,13 @@ func `Docker input pump cancels instead of dropping bytes past its bound`() asyn
     let session = BlockingHijackSession()
     let pump = OrderedDockerInputPump(session: session)
     var rejected = false
+    let chunk = Data(
+        repeating: 0x5A,
+        count: OrderedDockerInputPump.maximumInputChunkBytes
+    )
 
-    for value in 0 ... OrderedDockerInputPump.maximumPendingEvents + 1 {
-        if !pump.write(Data([UInt8(truncatingIfNeeded: value)])) {
+    for _ in 0 ... OrderedDockerInputPump.maximumPendingBytes / chunk.count + 1 {
+        if !pump.write(chunk) {
             rejected = true
             break
         }
@@ -71,7 +76,7 @@ func `Docker input pump cancels instead of dropping bytes past its bound`() asyn
 
 private final class RecordingHijackSession: DockerHijackSession, @unchecked Sendable {
     enum Operation: Equatable {
-        case data(UInt8)
+        case data(Data)
         case close
     }
 
@@ -86,13 +91,19 @@ private final class RecordingHijackSession: DockerHijackSession, @unchecked Send
         lock.withLock { recorded }
     }
 
-    func write(_ data: Data) async throws {
-        guard let byte = data.first else {
-            return
-        }
-        try await Task.sleep(for: .milliseconds(Int64(10 - Int(byte))))
+    var bytes: Data {
         lock.withLock {
-            recorded.append(.data(byte))
+            recorded.reduce(into: Data()) { result, operation in
+                if case let .data(data) = operation {
+                    result.append(data)
+                }
+            }
+        }
+    }
+
+    func write(_ data: Data) async throws {
+        lock.withLock {
+            recorded.append(.data(data))
         }
     }
 

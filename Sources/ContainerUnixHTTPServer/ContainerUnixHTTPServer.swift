@@ -2222,21 +2222,15 @@ private final class EngineBufferBudget: @unchecked Sendable {
 }
 
 final class OrderedDockerInputPump: @unchecked Sendable {
-    private enum WriteDisposition {
-        case accepted
-        case closed
-        case overflow
-    }
-
-    private let continuation: AsyncStream<Data>.Continuation
+    private let continuation: AsyncStream<Void>.Continuation
     private let worker: Task<Void, Never>
     private let cancellation: DockerHijackCancellation
-    private let closeState: OrderedDockerInputCloseState
+    private let queue: OrderedDockerInputQueue
     private let stateLock = NSLock()
     private var finished = false
 
-    static let maximumInputChunkBytes = 1 * 1024 * 1024
-    static let maximumPendingEvents = 16
+    static let maximumInputChunkBytes = 1024 * 1024
+    static let maximumPendingBytes = 16 * 1024 * 1024
 
     convenience init(session: any DockerHijackSession) {
         self.init(
@@ -2249,21 +2243,30 @@ final class OrderedDockerInputPump: @unchecked Sendable {
         session: any DockerHijackSession,
         cancellation: DockerHijackCancellation
     ) {
-        let (stream, continuation) = AsyncStream<Data>.makeStream(
-            bufferingPolicy: .bufferingOldest(Self.maximumPendingEvents)
+        let (signals, continuation) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
         )
-        let closeState = OrderedDockerInputCloseState()
+        let queue = OrderedDockerInputQueue(
+            maximumPendingBytes: Self.maximumPendingBytes,
+            maximumChunkBytes: Self.maximumInputChunkBytes
+        )
         self.continuation = continuation
         self.cancellation = cancellation
-        self.closeState = closeState
+        self.queue = queue
         worker = Task {
             do {
-                for await data in stream {
+                for await _ in signals {
+                    while let data = queue.popFirst() {
+                        try Task.checkCancellation()
+                        try await session.write(data)
+                    }
+                }
+                while let data = queue.popFirst() {
                     try Task.checkCancellation()
                     try await session.write(data)
                 }
                 try Task.checkCancellation()
-                if closeState.requested {
+                if queue.closeRequested {
                     try await session.closeStandardInput()
                 }
             } catch {
@@ -2279,25 +2282,23 @@ final class OrderedDockerInputPump: @unchecked Sendable {
         }
         let disposition = stateLock.withLock {
             guard !finished else {
-                return WriteDisposition.closed
+                return OrderedDockerInputQueue.EnqueueResult.closed
             }
-            switch continuation.yield(data) {
-            case .enqueued:
-                return WriteDisposition.accepted
-            case .dropped, .terminated:
+            let result = queue.enqueue(data)
+            if result == .overflow {
                 finished = true
-                continuation.finish()
-                return WriteDisposition.overflow
-            @unknown default:
-                finished = true
-                continuation.finish()
-                return WriteDisposition.overflow
             }
+            return result
         }
         switch disposition {
-        case .accepted, .closed:
+        case .accepted:
+            continuation.yield()
+            return true
+        case .closed:
             return true
         case .overflow:
+            queue.cancel()
+            continuation.finish()
             worker.cancel()
             cancellation.cancel()
             return false
@@ -2310,7 +2311,7 @@ final class OrderedDockerInputPump: @unchecked Sendable {
                 return
             }
             finished = true
-            closeState.request()
+            queue.finish(closeInput: true)
             continuation.finish()
         }
     }
@@ -2321,6 +2322,7 @@ final class OrderedDockerInputPump: @unchecked Sendable {
                 return
             }
             finished = true
+            queue.finish(closeInput: false)
             continuation.finish()
         }
     }
@@ -2332,6 +2334,7 @@ final class OrderedDockerInputPump: @unchecked Sendable {
                 continuation.finish()
             }
         }
+        queue.cancel()
         worker.cancel()
         cancellation.cancel()
     }
@@ -2341,17 +2344,86 @@ final class OrderedDockerInputPump: @unchecked Sendable {
     }
 }
 
-private final class OrderedDockerInputCloseState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didRequest = false
-
-    var requested: Bool {
-        lock.withLock { didRequest }
+private final class OrderedDockerInputQueue: @unchecked Sendable {
+    enum EnqueueResult: Equatable {
+        case accepted
+        case closed
+        case overflow
     }
 
-    func request() {
+    private let lock = NSLock()
+    private let maximumPendingBytes: Int
+    private let maximumChunkBytes: Int
+    private var pending = Deque<Data>()
+    private var pendingBytes = 0
+    private var finished = false
+    private var shouldCloseInput = false
+
+    init(maximumPendingBytes: Int, maximumChunkBytes: Int) {
+        self.maximumPendingBytes = maximumPendingBytes
+        self.maximumChunkBytes = maximumChunkBytes
+    }
+
+    var closeRequested: Bool {
+        lock.withLock { shouldCloseInput }
+    }
+
+    func enqueue(_ data: Data) -> EnqueueResult {
         lock.withLock {
-            didRequest = true
+            guard !finished else {
+                return .closed
+            }
+            let (newPendingBytes, overflow) = pendingBytes
+                .addingReportingOverflow(data.count)
+            guard
+                !overflow,
+                data.count <= maximumChunkBytes,
+                newPendingBytes <= maximumPendingBytes
+            else {
+                return .overflow
+            }
+            if var last = pending.popLast() {
+                if last.count + data.count <= maximumChunkBytes {
+                    last.append(data)
+                    pending.append(last)
+                } else {
+                    pending.append(last)
+                    pending.append(data)
+                }
+            } else {
+                pending.append(data)
+            }
+            pendingBytes = newPendingBytes
+            return .accepted
+        }
+    }
+
+    func popFirst() -> Data? {
+        lock.withLock {
+            guard let data = pending.popFirst() else {
+                return nil
+            }
+            pendingBytes -= data.count
+            return data
+        }
+    }
+
+    func finish(closeInput: Bool) {
+        lock.withLock {
+            guard !finished else {
+                return
+            }
+            finished = true
+            shouldCloseInput = closeInput
+        }
+    }
+
+    func cancel() {
+        lock.withLock {
+            finished = true
+            shouldCloseInput = false
+            pending.removeAll(keepingCapacity: false)
+            pendingBytes = 0
         }
     }
 }
