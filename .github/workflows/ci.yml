@@ -57,11 +57,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Generate static DocC site
         run: scripts/make-docs.sh _site api/container-engine-api
+      - name: Archive DocC site
+        run: tar -czf "${RUNNER_TEMP}/container-engine-api-docc.tgz" -C _site .
       - name: Upload DocC artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-engine-api-docc
-          path: _site
+          path: ${{ runner.temp }}/container-engine-api-docc.tgz
           retention-days: 7
 
   validate:
