@@ -1,4 +1,13 @@
-# container-engine-api
+<!-- markdownlint-disable MD033 -->
+<h1>
+  <img
+    alt="container-engine-api icon: frosted engine and container panel"
+    src="docs/images/container-engine-api-icon.png"
+    width="70"
+    valign="middle">
+  &nbsp;container-engine-api
+</h1>
+<!-- markdownlint-enable MD033 -->
 
 `container-engine-api` is a runtime-neutral Swift package for Docker-compatible Engine HTTP transport. It contains no Dev Container policy, Compose policy, runtime state, or Apple Container imports.
 
