@@ -35,7 +35,8 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.80.0")
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.80.0"),
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0")
     ],
     targets: [
         .target(name: "ContainerEngineWire"),
