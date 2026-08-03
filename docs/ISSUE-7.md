@@ -22,3 +22,4 @@ Request metadata must remain in one bounded control frame. The body must follow 
 - The focused protocol regression transfers and compares a 36 MiB + 1 byte body whose previous base64 JSON frame exceeded the 48 MiB guard.
 - Focused framing tests also prove explicit empty-body completion, malformed/missing data rejection, and fail-closed total-bound enforcement.
 - The complete local gate passes all 82 tests, exact dependency resolution, generation and helper checks, formatting, Markdown lint, warnings-as-errors builds, and all seven DocC modules.
+- Clean signed head `6edd44ae092d2d8eb083c96045f5e4539370524c` passes all 66 same-host performance samples against Docker: 0.40x resize, 0.78x 32-byte WebSocket, and 0.44x 1 MiB WebSocket median ratios.

@@ -1,0 +1,33 @@
+{
+  "comparisonMethod": "lower-is-better median/P95; fail on timeout, incomplete lane, or candidate median >= 10x Docker",
+  "fixtures": {
+    "resize": {
+      "candidateMedianSeconds": 0.0006212079897522926,
+      "candidateP95Seconds": 0.0007077920017763972,
+      "candidateToDockerMedianRatio": 0.4017731780171222,
+      "directionAssessment": "better",
+      "dockerMedianSeconds": 0.001546165905892849,
+      "dockerP95Seconds": 0.003633958986029029,
+      "regressionGate": "pass"
+    },
+    "websocket-roundtrip-1mib": {
+      "candidateMedianSeconds": 0.01212154095992446,
+      "candidateP95Seconds": 0.015203916002064943,
+      "candidateToDockerMedianRatio": 0.4399241268599915,
+      "directionAssessment": "better",
+      "dockerMedianSeconds": 0.027553708059713244,
+      "dockerP95Seconds": 0.030606291024014354,
+      "regressionGate": "pass"
+    },
+    "websocket-roundtrip-32b": {
+      "candidateMedianSeconds": 0.0006473750108852983,
+      "candidateP95Seconds": 0.0008413750911131501,
+      "candidateToDockerMedianRatio": 0.7759192093168757,
+      "directionAssessment": "comparable",
+      "dockerMedianSeconds": 0.000834333011880517,
+      "dockerP95Seconds": 0.002622583066113293,
+      "regressionGate": "pass"
+    }
+  },
+  "schemaVersion": 1
+}

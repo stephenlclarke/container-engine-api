@@ -24,7 +24,7 @@ markdownlint README.md docs
 swift build --disable-automatic-resolution -Xswiftc -warnings-as-errors --build-tests
 ```
 
-The two new focused tests pass, including exact comparison of every byte in the body that exceeded the old frame geometry. The complete local gate passes all 82 tests, exact dependency resolution, generation and helper checks, formatting, Markdown lint, warnings-as-errors builds, and all seven DocC modules. Clean-head performance, hosted CI, and the D05 adopter gate remain required before release and issue closure.
+The two new focused tests pass, including exact comparison of every byte in the body that exceeded the old frame geometry. The complete local gate passes all 82 tests, exact dependency resolution, generation and helper checks, formatting, Markdown lint, warnings-as-errors builds, and all seven DocC modules. Clean signed head `6edd44ae092d2d8eb083c96045f5e4539370524c` passes all 66 same-host performance samples against Docker: 0.40x resize, 0.78x 32-byte WebSocket, and 0.44x 1 MiB WebSocket median ratios. Hosted CI and the D05 adopter gate remain required before issue closure.
 
 ## Compatibility
 
@@ -36,4 +36,4 @@ Closes [#7](https://github.com/stephenlclarke/container-engine-api/issues/7).
 
 ## Remaining risks
 
-The provider process still assembles the complete request before invoking `DockerHTTPResponder`, mirroring the responder's current `Data` contract. The public listener also buffers accepted bodies. Later public-listener streaming or secure spooling can reduce peak memory without another provider framing change. Release performance evidence must confirm that the extra `requestEnd` frame does not materially regress small requests.
+The provider process still assembles the complete request before invoking `DockerHTTPResponder`, mirroring the responder's current `Data` contract. The public listener also buffers accepted bodies. Later public-listener streaming or secure spooling can reduce peak memory without another provider framing change. Clean-head evidence shows no material small-request regression from the extra `requestEnd` frame.
