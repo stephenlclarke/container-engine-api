@@ -38,17 +38,17 @@ public enum ProviderHandoffGatewayStateError:
 
     public var description: String {
         switch self {
-        case .activeTokenExists(let identifier):
+        case let .activeTokenExists(identifier):
             "provider handoff token \(identifier) is already active"
         case .commitMismatch:
             "provider handoff commit record does not match the staged transaction"
-        case .duplicateToken(let identifier):
+        case let .duplicateToken(identifier):
             "provider handoff token \(identifier) is duplicated"
         case .invalidManifest:
             "provider handoff manifest is structurally invalid"
         case .invalidState:
             "provider handoff gateway state is invalid"
-        case .invalidTransition(let from, let to):
+        case let .invalidTransition(from, to):
             "provider handoff transition \(from.rawValue) -> \(to.rawValue) is invalid"
         case .manifestMismatch:
             "provider handoff manifest does not match the token"
@@ -58,11 +58,11 @@ public enum ProviderHandoffGatewayStateError:
             "provider handoff has no immutable manifest"
         case .revisionOverflow:
             "provider handoff revision cannot advance beyond UInt64.max"
-        case .revisionMismatch(let expected, let actual):
+        case let .revisionMismatch(expected, actual):
             "provider handoff revision mismatch: expected \(expected), found \(actual)"
-        case .tokenNotFound(let identifier):
+        case let .tokenNotFound(identifier):
             "provider handoff token \(identifier) does not exist"
-        case .unresolvedPart(let kind):
+        case let .unresolvedPart(kind):
             "provider handoff part \(kind.rawValue) is unresolved"
         }
     }
@@ -75,9 +75,9 @@ public enum ProviderHandoffGatewayStateMachine {
     ) throws -> ProviderHandoffGatewayStateV1 {
         guard
             providerSelection.selectedProviderFingerprint
-                == socketDiscovery.selectedProviderFingerprint,
+            == socketDiscovery.selectedProviderFingerprint,
             providerSelection.selectedStateRootUUID
-                == socketDiscovery.selectedStateRootUUID
+            == socketDiscovery.selectedStateRootUUID
         else {
             throw ProviderHandoffGatewayStateError.invalidState
         }
@@ -102,7 +102,7 @@ public enum ProviderHandoffGatewayStateMachine {
         guard
             state.activeTokenID == nil,
             trustRegistryRevision
-                > state.providerSelection.trustRegistryRevision,
+            > state.providerSelection.trustRegistryRevision,
             state.providerSelection.selectionRevision < UInt64.max,
             state.storeRevision < UInt64.max
         else {
@@ -266,9 +266,9 @@ public enum ProviderHandoffGatewayStateMachine {
                 record.role == expected.role,
                 record.stateRootUUID == expected.stateRootUUID,
                 record.expectedHeaderDigestSHA256
-                    == expected.expectedHeaderDigestSHA256,
+                == expected.expectedHeaderDigestSHA256,
                 record.preCommitRevisionVectorDigestSHA256
-                    == expected.preCommitRevisionVector.revisionVectorDigestSHA256
+                == expected.preCommitRevisionVector.revisionVectorDigestSHA256
             else {
                 throw ProviderHandoffGatewayStateError.invalidState
             }
@@ -338,6 +338,51 @@ public enum ProviderHandoffGatewayStateMachine {
         }
     }
 
+    /// Persists the ordered opaque controller receipts produced while the
+    /// destination is reconciling. The receipts are gateway-private recovery
+    /// material: a later Complete activation can resume without re-running a
+    /// controller promotion after process restart.
+    public static func recordPromotedParts(
+        _ receipts: [ProviderHandoffPartOpaqueControllerReceiptV1],
+        tokenID: String,
+        expectedTokenRevision: UInt64,
+        in state: inout ProviderHandoffGatewayStateV1,
+        expectedStoreRevision: UInt64
+    ) throws {
+        try checkStoreRevision(state, expected: expectedStoreRevision)
+        let existingIndex = try transactionIndex(tokenID, in: state)
+        try checkTokenRevision(
+            state.transactions[existingIndex].token,
+            expected: expectedTokenRevision
+        )
+        if let existing = state.transactions[existingIndex]
+            .promotedPartReceipts
+        {
+            guard existing == receipts else {
+                throw ProviderHandoffGatewayStateError.invalidState
+            }
+            return
+        }
+        try mutate(
+            tokenID: tokenID,
+            expectedTokenRevision: expectedTokenRevision,
+            expectedStoreRevision: expectedStoreRevision,
+            in: &state
+        ) { transaction in
+            guard
+                transaction.token.phase == .reconciling,
+                let imported = transaction.token.importedParts
+            else {
+                throw ProviderHandoffGatewayStateError.invalidTransition(
+                    transaction.token.phase,
+                    .reconciling
+                )
+            }
+            try validatePromotedReceipts(receipts, imported: imported)
+            transaction.promotedPartReceipts = receipts
+        }
+    }
+
     public static func complete(
         _ validatedOutcome: ProviderHandoffValidatedTerminalOutcomeV1,
         tokenID: String,
@@ -401,9 +446,9 @@ public enum ProviderHandoffGatewayStateMachine {
             state.schemaVersion == 1,
             state.storeRevision > 0,
             state.providerSelection.selectedProviderFingerprint
-                == state.socketDiscovery.selectedProviderFingerprint,
+            == state.socketDiscovery.selectedProviderFingerprint,
             state.providerSelection.selectedStateRootUUID
-                == state.socketDiscovery.selectedStateRootUUID
+            == state.socketDiscovery.selectedStateRootUUID
         else {
             throw ProviderHandoffGatewayStateError.invalidState
         }
@@ -509,7 +554,7 @@ public enum ProviderHandoffGatewayStateMachine {
             outcome.manifestID == transaction.token.manifestID,
             outcome.manifestDigest == transaction.token.manifestDigest,
             try ProviderHandoffProjections.terminalOutcomeDigest(outcome)
-                == outcome.outcomeDigestSHA256
+            == outcome.outcomeDigestSHA256
         else {
             throw ProviderHandoffGatewayStateError.invalidTransition(
                 transaction.token.phase,
@@ -541,7 +586,7 @@ public enum ProviderHandoffGatewayStateMachine {
             !token.manifestID.isEmpty,
             !token.orderedSourceStateRootUUIDs.isEmpty,
             Set(token.orderedSourceStateRootUUIDs).count
-                == token.orderedSourceStateRootUUIDs.count,
+            == token.orderedSourceStateRootUUIDs.count,
             !token.orderedSourceStateRootUUIDs.contains(token.destinationStateRootUUID),
             token.trustRegistryRevision > 0,
             token.resultingLineageDigestKeyVersion > 0,
@@ -564,7 +609,7 @@ public enum ProviderHandoffGatewayStateMachine {
         let values =
             token.orderedSourceStateRootUUIDs + [
                 token.destinationStateRootUUID,
-                token.resultingAuthorityLineageUUID,
+                token.resultingAuthorityLineageUUID
             ]
         for value in values {
             guard
@@ -600,7 +645,7 @@ public enum ProviderHandoffGatewayStateMachine {
                     value.expectedHeader.handoffState == .destinationStaged,
                     value.expectedHeader.activeHandoffTokenID == token.tokenID,
                     value.expectedHeader.stagedAuthorityLineageUUID
-                        == token.resultingAuthorityLineageUUID
+                    == token.resultingAuthorityLineageUUID
                 else {
                     throw ProviderHandoffGatewayStateError.invalidState
                 }
@@ -618,37 +663,37 @@ public enum ProviderHandoffGatewayStateMachine {
             manifest.manifestID == token.manifestID,
             manifest.trustRegistryRevision == token.trustRegistryRevision,
             manifest.destinationProviderFingerprint
-                == token.destinationProviderFingerprint,
+            == token.destinationProviderFingerprint,
             manifest.destinationStateRootUUID == token.destinationStateRootUUID,
             manifest.resultingAuthorityLineageUUID
-                == token.resultingAuthorityLineageUUID,
+            == token.resultingAuthorityLineageUUID,
             manifest.resultingLineageDigestKeyVersion
-                == token.resultingLineageDigestKeyVersion,
+            == token.resultingLineageDigestKeyVersion,
             manifest.manifestDigestAlgorithm == .sha256,
             manifest.sources.map(\.stateRootUUID)
-                == token.orderedSourceStateRootUUIDs,
+            == token.orderedSourceStateRootUUIDs,
             manifest.sources.map(\.preCommitExpectation)
-                + [manifest.destinationPreCommitExpectation]
-                == token.preCommitRootExpectations,
+            + [manifest.destinationPreCommitExpectation]
+            == token.preCommitRootExpectations,
             manifest.parts.map(\.kind) == ProviderHandoffPartKindV1.allCases,
             !manifest.destinationKeyPossessionProofDigestsSHA256.isEmpty
-                || manifest.parts.allSatisfy({
-                    $0.payload.protection == .authenticatedPlaintext
-                })
+            || manifest.parts.allSatisfy({
+                $0.payload.protection == .authenticatedPlaintext
+            })
         else {
             throw ProviderHandoffGatewayStateError.invalidManifest
         }
         guard
             try ProviderHandoffProjections.manifestDigest(manifest)
-                == manifest.manifestDigest,
+            == manifest.manifestDigest,
             manifest.coordinatorSignature.purpose == .coordinatorManifestSigning,
             manifest.coordinatorSignature.signerRole == .gatewayCoordinator,
             manifest.coordinatorSignature.providerFingerprint == nil,
             manifest.coordinatorSignature.stateRootUUID == nil,
             manifest.coordinatorSignature.trustRegistryRevision
-                == manifest.trustRegistryRevision,
+            == manifest.trustRegistryRevision,
             manifest.coordinatorSignature.signedProjectionDigestSHA256
-                == manifest.manifestDigest
+            == manifest.manifestDigest
         else {
             throw ProviderHandoffGatewayStateError.invalidManifest
         }
@@ -669,10 +714,10 @@ public enum ProviderHandoffGatewayStateMachine {
                 source.sourceSignature.purpose == .sourceManifestSigning,
                 source.sourceSignature.signerRole == .sourceProvider,
                 source.sourceSignature.providerFingerprint
-                    == source.providerFingerprint,
+                == source.providerFingerprint,
                 source.sourceSignature.stateRootUUID == source.stateRootUUID,
                 source.sourceSignature.trustRegistryRevision
-                    == manifest.trustRegistryRevision,
+                == manifest.trustRegistryRevision,
                 source.sourceSignature.signedProjectionDigestSHA256 == digest
             else {
                 throw ProviderHandoffGatewayStateError.invalidManifest
@@ -684,17 +729,17 @@ public enum ProviderHandoffGatewayStateMachine {
             )
             let expectedRole: ProviderHandoffKeyRoleV1 =
                 envelope.sourceStateRootUUID == nil
-                ? .gatewayCoordinator : .sourceProvider
+                    ? .gatewayCoordinator : .sourceProvider
             guard
                 envelope.envelopeSignature.purpose
-                    == .lineageKeyEnvelopeSigning,
+                == .lineageKeyEnvelopeSigning,
                 envelope.envelopeSignature.signerRole == expectedRole,
                 envelope.envelopeSignature.providerFingerprint
-                    == envelope.sourceStateRootUUID.flatMap({ sourcesByRoot[$0] }),
+                == envelope.sourceStateRootUUID.flatMap({ sourcesByRoot[$0] }),
                 envelope.envelopeSignature.stateRootUUID
-                    == envelope.sourceStateRootUUID,
+                == envelope.sourceStateRootUUID,
                 envelope.envelopeSignature.trustRegistryRevision
-                    == manifest.trustRegistryRevision,
+                == manifest.trustRegistryRevision,
                 envelope.envelopeSignature.signedProjectionDigestSHA256 == digest
             else {
                 throw ProviderHandoffGatewayStateError.invalidManifest
@@ -721,7 +766,7 @@ public enum ProviderHandoffGatewayStateMachine {
             guard
                 part.kind == expectation.partKind,
                 try ProviderHandoffProjections.payloadDescriptorDigest(part.payload)
-                    == expectation.payloadDescriptorDigestSHA256
+                == expectation.payloadDescriptorDigestSHA256
             else {
                 throw ProviderHandoffGatewayStateError.invalidState
             }
@@ -738,10 +783,10 @@ public enum ProviderHandoffGatewayStateMachine {
     ) throws {
         let derivedPostCommitRoots =
             try ProviderHandoffRecordValidator
-            .derivePostCommitRoots(
-                intent: record.intent,
-                chainHeadDigestSHA256: record.handoffChainHeadDigestSHA256
-            )
+                .derivePostCommitRoots(
+                    intent: record.intent,
+                    chainHeadDigestSHA256: record.handoffChainHeadDigestSHA256
+                )
         let commitRecordDigest = try ProviderHandoffProjections.commitRecordDigest(
             record
         )
@@ -765,33 +810,33 @@ public enum ProviderHandoffGatewayStateMachine {
             record.intent.manifestDigest == manifestDigest,
             record.intent.trustRegistryRevision == transaction.token.trustRegistryRevision,
             record.intent.authoritativeCommitRevision
-                == nextCommitRevision,
+            == nextCommitRevision,
             record.intent.preCommitRootExpectations
-                == transaction.token.preCommitRootExpectations,
+            == transaction.token.preCommitRootExpectations,
             record.intent.importedParts == importedParts,
             record.intent.destinationKeyPossessionProofDigestsSHA256
-                == transaction.token.destinationKeyPossessionProofDigestsSHA256,
+            == transaction.token.destinationKeyPossessionProofDigestsSHA256,
             record.intent.resultingAuthorityLineageUUID
-                == transaction.token.resultingAuthorityLineageUUID,
+            == transaction.token.resultingAuthorityLineageUUID,
             record.intent.resultingLineageDigestKeyVersion
-                == transaction.token.resultingLineageDigestKeyVersion,
+            == transaction.token.resultingLineageDigestKeyVersion,
             record.intent.providerSelection.expectedRecord == state.providerSelection,
             record.intent.socketSelection.expectedRecord == state.socketDiscovery,
             record.intent.providerSelection.resultingRecord.selectionRevision
-                == nextProviderSelectionRevision,
+            == nextProviderSelectionRevision,
             record.intent.socketSelection.resultingRecord.discoveryRevision
-                == nextSocketDiscoveryRevision,
+            == nextSocketDiscoveryRevision,
             record.intent.providerSelection.resultingRecord.selectedProviderFingerprint
-                == manifest.destinationProviderFingerprint,
+            == manifest.destinationProviderFingerprint,
             record.intent.providerSelection.resultingRecord.selectedStateRootUUID
-                == manifest.destinationStateRootUUID,
+            == manifest.destinationStateRootUUID,
             record.intent.socketSelection.resultingRecord.selectedProviderFingerprint
-                == manifest.destinationProviderFingerprint,
+            == manifest.destinationProviderFingerprint,
             record.intent.socketSelection.resultingRecord.selectedStateRootUUID
-                == manifest.destinationStateRootUUID,
+            == manifest.destinationStateRootUUID,
             record.rootPrepareRecordDigestsSHA256 == prepared,
             try ProviderHandoffProjections.commitIntentDigest(record.intent)
-                == record.commitDigestSHA256,
+            == record.commitDigestSHA256,
             try ProviderHandoffProjections.chainHeadDigest(
                 commitDigestSHA256: record.commitDigestSHA256,
                 orderedPreCommitHeaders: record.intent.preCommitRootExpectations.map(
@@ -804,9 +849,9 @@ public enum ProviderHandoffGatewayStateMachine {
             record.coordinatorSignature.providerFingerprint == nil,
             record.coordinatorSignature.stateRootUUID == nil,
             record.coordinatorSignature.trustRegistryRevision
-                == record.intent.trustRegistryRevision,
+            == record.intent.trustRegistryRevision,
             record.coordinatorSignature.signedProjectionDigestSHA256
-                == commitRecordDigest
+            == commitRecordDigest
         else {
             throw ProviderHandoffGatewayStateError.commitMismatch
         }
@@ -830,30 +875,68 @@ public enum ProviderHandoffGatewayStateMachine {
         }
         switch token.phase {
         case .draining:
-            guard transaction.manifest == nil, transaction.commitRecord == nil else {
+            guard
+                transaction.manifest == nil,
+                transaction.commitRecord == nil,
+                transaction.promotedPartReceipts == nil
+            else {
                 throw ProviderHandoffGatewayStateError.invalidState
             }
         case .quiesced:
             try validateExpectations(token.preCommitRootExpectations, for: token)
-            guard transaction.commitRecord == nil else {
+            guard
+                transaction.commitRecord == nil,
+                transaction.promotedPartReceipts == nil
+            else {
                 throw ProviderHandoffGatewayStateError.invalidState
             }
-        case .staged, .aborting:
+        case .staged:
             guard
                 let manifest = transaction.manifest,
                 let imported = token.importedParts,
-                transaction.commitRecord == nil
+                transaction.commitRecord == nil,
+                transaction.promotedPartReceipts == nil
             else {
                 throw ProviderHandoffGatewayStateError.invalidState
             }
             try validateImportedParts(imported, manifest: manifest)
-        case .committed, .reconciling, .complete:
+        case .aborting:
+            guard
+                transaction.commitRecord == nil,
+                transaction.promotedPartReceipts == nil
+            else {
+                throw ProviderHandoffGatewayStateError.commitMismatch
+            }
+            if let imported = token.importedParts {
+                guard let manifest = transaction.manifest else {
+                    throw ProviderHandoffGatewayStateError.missingManifest
+                }
+                try validateImportedParts(imported, manifest: manifest)
+            }
+        case .committed:
+            guard let commitRecord = transaction.commitRecord else {
+                throw ProviderHandoffGatewayStateError.missingCommit
+            }
+            guard transaction.promotedPartReceipts == nil else {
+                throw ProviderHandoffGatewayStateError.invalidState
+            }
+            try validatePersistedCommit(commitRecord, token: token)
+        case .reconciling, .complete:
             guard let commitRecord = transaction.commitRecord else {
                 throw ProviderHandoffGatewayStateError.missingCommit
             }
             try validatePersistedCommit(commitRecord, token: token)
+            if let receipts = transaction.promotedPartReceipts {
+                guard let imported = token.importedParts else {
+                    throw ProviderHandoffGatewayStateError.invalidState
+                }
+                try validatePromotedReceipts(receipts, imported: imported)
+            }
         case .aborted:
-            guard transaction.commitRecord == nil else {
+            guard
+                transaction.commitRecord == nil,
+                transaction.promotedPartReceipts == nil
+            else {
                 throw ProviderHandoffGatewayStateError.commitMismatch
             }
         }
@@ -861,7 +944,7 @@ public enum ProviderHandoffGatewayStateMachine {
             guard
                 let terminalOutcome = transaction.terminalOutcome,
                 token.terminalOutcomeDigestSHA256
-                    == terminalOutcome.outcomeDigestSHA256
+                == terminalOutcome.outcomeDigestSHA256
             else {
                 throw ProviderHandoffGatewayStateError.invalidState
             }
@@ -886,19 +969,19 @@ public enum ProviderHandoffGatewayStateMachine {
             record.intent.manifestDigest == token.manifestDigest,
             record.intent.trustRegistryRevision == token.trustRegistryRevision,
             record.intent.preCommitRootExpectations
-                == token.preCommitRootExpectations,
+            == token.preCommitRootExpectations,
             record.intent.importedParts == token.importedParts,
             record.intent.destinationKeyPossessionProofDigestsSHA256
-                == token.destinationKeyPossessionProofDigestsSHA256,
+            == token.destinationKeyPossessionProofDigestsSHA256,
             record.intent.authoritativeCommitRevision
-                == token.authoritativeCommitRevision,
+            == token.authoritativeCommitRevision,
             record.commitDigestSHA256 == token.commitDigestSHA256,
             record.handoffChainHeadDigestSHA256
-                == token.handoffChainHeadDigestSHA256,
+            == token.handoffChainHeadDigestSHA256,
             record.rootPrepareRecordDigestsSHA256
-                == token.rootPrepareRecordDigestsSHA256,
+            == token.rootPrepareRecordDigestsSHA256,
             try ProviderHandoffProjections.commitIntentDigest(record.intent)
-                == record.commitDigestSHA256,
+            == record.commitDigestSHA256,
             try ProviderHandoffProjections.chainHeadDigest(
                 commitDigestSHA256: record.commitDigestSHA256,
                 orderedPreCommitHeaders: record.intent.preCommitRootExpectations
@@ -910,9 +993,9 @@ public enum ProviderHandoffGatewayStateMachine {
             record.coordinatorSignature.providerFingerprint == nil,
             record.coordinatorSignature.stateRootUUID == nil,
             record.coordinatorSignature.trustRegistryRevision
-                == token.trustRegistryRevision,
+            == token.trustRegistryRevision,
             record.coordinatorSignature.signedProjectionDigestSHA256
-                == signedDigest
+            == signedDigest
         else {
             throw ProviderHandoffGatewayStateError.commitMismatch
         }
@@ -928,18 +1011,44 @@ public enum ProviderHandoffGatewayStateMachine {
             outcome.manifestID == token.manifestID,
             outcome.manifestDigest == token.manifestDigest,
             try ProviderHandoffProjections.terminalOutcomeDigest(outcome)
-                == outcome.outcomeDigestSHA256,
+            == outcome.outcomeDigestSHA256,
             outcome.coordinatorSignature.purpose
-                == .coordinatorTerminalOutcomeSigning,
+            == .coordinatorTerminalOutcomeSigning,
             outcome.coordinatorSignature.signerRole == .gatewayCoordinator,
             outcome.coordinatorSignature.providerFingerprint == nil,
             outcome.coordinatorSignature.stateRootUUID == nil,
             outcome.coordinatorSignature.trustRegistryRevision
-                == token.trustRegistryRevision,
+            == token.trustRegistryRevision,
             outcome.coordinatorSignature.signedProjectionDigestSHA256
-                == outcome.outcomeDigestSHA256
+            == outcome.outcomeDigestSHA256
         else {
             throw ProviderHandoffGatewayStateError.invalidState
+        }
+    }
+
+    private static func validatePromotedReceipts(
+        _ receipts: [ProviderHandoffPartOpaqueControllerReceiptV1],
+        imported: [ProviderHandoffPartImportExpectationV1]
+    ) throws {
+        guard receipts.map(\.partKind) == imported.map(\.partKind) else {
+            throw ProviderHandoffGatewayStateError.invalidState
+        }
+        for receipt in receipts {
+            guard
+                receipt.schemaVersion
+                == ProviderHandoffPartOpaqueControllerReceiptV1
+                .currentSchemaVersion,
+                !receipt.mediaType.isEmpty,
+                receipt.mediaType.utf8.count <= 256,
+                !receipt.body.isEmpty,
+                receipt.body.count
+                <= ContainerEngineProviderControlMetadataLimits
+                .maximumBodyBytes,
+                ProviderHandoffDigest.sha256(receipt.body)
+                == receipt.bodyDigestSHA256
+            else {
+                throw ProviderHandoffGatewayStateError.invalidState
+            }
         }
     }
 
@@ -950,7 +1059,7 @@ public enum ProviderHandoffGatewayStateMachine {
         let token = transaction.token
         let orderedRoots =
             token.orderedSourceStateRootUUIDs
-            + [token.destinationStateRootUUID]
+                + [token.destinationStateRootUUID]
         guard
             outcome.roots.map(\.stateRootUUID) == orderedRoots,
             outcome.roots.dropLast().allSatisfy({ $0.role == .source }),
@@ -984,16 +1093,16 @@ public enum ProviderHandoffGatewayStateMachine {
                 terminal.stateRootUUID == post.stateRootUUID,
                 terminal.terminalHeader.stateRootUUID == post.stateRootUUID,
                 terminal.terminalHeader.handoffChainHeadDigest
-                    == post.postCommitHeader.handoffChainHeadDigest,
+                == post.postCommitHeader.handoffChainHeadDigest,
                 terminal.terminalHeader.authorityLineageUUID
-                    == post.postCommitHeader.authorityLineageUUID,
+                == post.postCommitHeader.authorityLineageUUID,
                 terminal.terminalHeader.lineageDigestKeyVersion
-                    == post.postCommitHeader.lineageDigestKeyVersion,
+                == post.postCommitHeader.lineageDigestKeyVersion,
                 terminal.terminalHeader.selectedProviderFingerprint
-                    == post.postCommitHeader.selectedProviderFingerprint,
+                == post.postCommitHeader.selectedProviderFingerprint,
                 terminal.terminalHeader.activeHandoffTokenID == nil,
                 terminal.terminalRevisionVector.rootStoreRevision
-                    >= post.postCommitRevisionVector.rootStoreRevision,
+                >= post.postCommitRevisionVector.rootStoreRevision,
                 controllersDoNotRegress(
                     terminal.terminalRevisionVector.controllerRevisions,
                     from: post.postCommitRevisionVector.controllerRevisions
@@ -1008,9 +1117,9 @@ public enum ProviderHandoffGatewayStateMachine {
                     terminal.terminalHeader.handoffState == .destinationActive,
                     terminal.terminalHeader.stagedAuthorityLineageUUID == nil,
                     terminal.terminalHeader.writerEpoch
-                        == post.postCommitHeader.writerEpoch + 1,
+                    == post.postCommitHeader.writerEpoch + 1,
                     terminal.terminalRevisionVector.rootStoreRevision
-                        >= post.postCommitRevisionVector.rootStoreRevision + 1
+                    >= post.postCommitRevisionVector.rootStoreRevision + 1
                 else {
                     throw ProviderHandoffGatewayStateError.invalidState
                 }
@@ -1018,7 +1127,7 @@ public enum ProviderHandoffGatewayStateMachine {
                 guard
                     terminal.terminalHeader.handoffState == .sourceTransferred,
                     terminal.terminalHeader.writerEpoch
-                        == post.postCommitHeader.writerEpoch
+                    == post.postCommitHeader.writerEpoch
                 else {
                     throw ProviderHandoffGatewayStateError.invalidState
                 }

@@ -55,11 +55,12 @@ public enum ContainerEngineServiceRunner {
             socketPath: options.providerSocket
         )
         let stateDirectory = URL(fileURLWithPath: options.stateDirectory, isDirectory: true)
-        let trustRegistryRevision = try await prepareProviderHandoffTrust(
+        let handoffTrust = try await prepareProviderHandoffTrust(
             descriptor: descriptor,
             providerSocket: options.providerSocket,
             configuration: trustConfiguration
         )
+        let trustRegistryRevision = handoffTrust.registryRevision
         let handoffStore = ProviderHandoffGatewayStore(
             root: stateDirectory.appendingPathComponent("provider-handoff", isDirectory: true)
         )
@@ -70,13 +71,12 @@ public enum ContainerEngineServiceRunner {
                 trustRegistryRevision: trustRegistryRevision
             )
         )
-        let gatewayState: ProviderHandoffGatewayStateV1
-        if loadedGatewayState.providerSelection.trustRegistryRevision
+        let gatewayState: ProviderHandoffGatewayStateV1 = if loadedGatewayState.providerSelection.trustRegistryRevision
             == trustRegistryRevision
         {
-            gatewayState = loadedGatewayState
+            loadedGatewayState
         } else {
-            gatewayState = try handoffStore.update(
+            try handoffStore.update(
                 expectedStoreRevision: loadedGatewayState.storeRevision
             ) {
                 try ProviderHandoffGatewayStateMachine
@@ -84,19 +84,19 @@ public enum ContainerEngineServiceRunner {
                         trustRegistryRevision,
                         in: &$0,
                         expectedStoreRevision:
-                            loadedGatewayState.storeRevision
+                        loadedGatewayState.storeRevision
                     )
             }
         }
         guard
             gatewayState.providerSelection.selectedProviderFingerprint
-                == descriptor.fingerprint.digest,
+            == descriptor.fingerprint.digest,
             gatewayState.providerSelection.selectedStateRootUUID
-                == descriptor.fingerprint.stateRootUUID.uuidString.lowercased(),
+            == descriptor.fingerprint.stateRootUUID.uuidString.lowercased(),
             gatewayState.socketDiscovery.selectedProviderFingerprint
-                == descriptor.fingerprint.digest,
+            == descriptor.fingerprint.digest,
             gatewayState.socketDiscovery.selectedStateRootUUID
-                == descriptor.fingerprint.stateRootUUID.uuidString.lowercased()
+            == descriptor.fingerprint.stateRootUUID.uuidString.lowercased()
         else {
             throw ContainerEngineProviderIdentityError.providerMismatch(
                 selected: gatewayState.providerSelection.selectedProviderFingerprint
@@ -104,6 +104,12 @@ public enum ContainerEngineServiceRunner {
             )
         }
         let selected = descriptor.fingerprint
+        let handoffCoordinator = handoffTrust.gatewayIdentity.map {
+            ProviderHandoffGatewayCoordinator(
+                store: handoffStore,
+                bootstrap: $0.bootstrap
+            )
+        }
 
         var logger = Logger(label: "container-engine")
         logger.logLevel = .info
@@ -122,14 +128,15 @@ public enum ContainerEngineServiceRunner {
             metadata: [
                 "fingerprint": .string(selected.digest),
                 "profile": .string(selected.declaration.profile.rawValue),
-                "socket": .string(options.socket),
+                "socket": .string(options.socket)
             ]
         )
         return ContainerEngineServiceRuntime(
             server: server,
             fingerprint: selected,
             socketPath: options.socket,
-            handoffStore: handoffStore
+            handoffStore: handoffStore,
+            handoffCoordinator: handoffCoordinator
         )
     }
 
@@ -151,8 +158,8 @@ public enum ContainerEngineServiceRunner {
         }
         let registrationDigest =
             selected.digest.hasPrefix("sha256:")
-            ? String(selected.digest.dropFirst("sha256:".count))
-            : selected.digest
+                ? String(selected.digest.dropFirst("sha256:".count))
+                : selected.digest
         return try ProviderHandoffGatewayStateMachine.initialState(
             providerSelection: ProviderHandoffProviderSelectionRecordV1(
                 selectionRevision: 1,
@@ -177,26 +184,29 @@ public enum ContainerEngineServiceRunner {
         descriptor: ContainerEngineProviderSessionDescriptor,
         providerSocket: String,
         configuration: ContainerEngineServiceTrustConfiguration
-    ) async throws -> UInt64 {
+    ) async throws -> PreparedProviderHandoffTrust {
         guard
             descriptor.fingerprint.declaration.capabilities.contains(where: {
                 $0.identifier == "engine.handoff.provider-key-enrollment.v1"
                     && $0.status == .native
             })
         else {
-            return 0
+            return PreparedProviderHandoffTrust(
+                registryRevision: 0,
+                gatewayIdentity: nil
+            )
         }
         let now = try configuration.nowUnixSeconds ?? currentUnixSeconds()
         let gatewayCodeIdentity = try ProviderHandoffCodeIdentity.current()
         let gatewayIdentity = try configuration.gatewayKeyStore.loadOrCreate(
             context: ProviderHandoffGatewayKeyEnrollmentContextV1(
                 owningBundleIdentifier:
-                    gatewayCodeIdentity.signingIdentifier,
+                gatewayCodeIdentity.signingIdentifier,
                 codeRequirementDigestSHA256:
-                    gatewayCodeIdentity.designatedRequirementDigestSHA256,
+                gatewayCodeIdentity.designatedRequirementDigestSHA256,
                 teamIdentifier: gatewayCodeIdentity.teamIdentifier,
                 gatewayRegistrationDigestSHA256:
-                    try ProviderHandoffGatewayKeyEnrollmentContextV1
+                ProviderHandoffGatewayKeyEnrollmentContextV1
                     .registrationDigest(codeIdentity: gatewayCodeIdentity),
                 enrolledAtUnixSeconds: now,
                 notBeforeUnixSeconds: now,
@@ -207,13 +217,13 @@ public enum ContainerEngineServiceRunner {
             .lowercased()
         let requestBody =
             try ProviderHandoffProviderKeyControlCodec
-            .encodeSnapshotRequest(
-                ProviderHandoffProviderKeySnapshotRequestV1(
-                    expectedProviderFingerprint:
+                .encodeSnapshotRequest(
+                    ProviderHandoffProviderKeySnapshotRequestV1(
+                        expectedProviderFingerprint:
                         descriptor.fingerprint.digest,
-                    expectedStateRootUUID: expectedRoot
+                        expectedStateRootUUID: expectedRoot
+                    )
                 )
-            )
         let request = try ContainerEngineProviderHandoffControlRequestV1(
             requestID: "provider-key-snapshot-\(UUID().uuidString.lowercased())",
             operation: .destinationKeySnapshot,
@@ -228,7 +238,7 @@ public enum ContainerEngineServiceRunner {
         guard
             result.response.disposition == .completed,
             result.response.bodyMediaType
-                == ProviderHandoffProviderKeyControlCodec.snapshotMediaType
+            == ProviderHandoffProviderKeyControlCodec.snapshotMediaType
         else {
             throw ContainerEngineProviderSessionError.providerFailure(
                 result.response.message
@@ -243,14 +253,14 @@ public enum ContainerEngineServiceRunner {
         )
         let providerKeys =
             try ProviderHandoffProviderKeySnapshotValidator
-            .validate(
-                snapshot,
-                expectedProviderFingerprint: descriptor.fingerprint.digest,
-                expectedStateRootUUID: expectedRoot,
-                peerCodeIdentity: descriptor.codeIdentity,
-                providerRegistrationDigestSHA256: registrationDigest,
-                atUnixSeconds: now
-            )
+                .validate(
+                    snapshot,
+                    expectedProviderFingerprint: descriptor.fingerprint.digest,
+                    expectedStateRootUUID: expectedRoot,
+                    peerCodeIdentity: descriptor.codeIdentity,
+                    providerRegistrationDigestSHA256: registrationDigest,
+                    atUnixSeconds: now
+                )
         let store = configuration.trustRegistryStore
         do {
             let existing = try store.load(bootstrap: gatewayIdentity.bootstrap)
@@ -262,17 +272,24 @@ public enum ContainerEngineServiceRunner {
             else {
                 throw ProviderHandoffTrustError.invalidRegistry
             }
-            return existing.registry.registryRevision
+            return PreparedProviderHandoffTrust(
+                registryRevision: existing.registry.registryRevision,
+                gatewayIdentity: gatewayIdentity
+            )
         } catch ProviderHandoffTrustRegistryStoreError.notFound {
             let registry = try gatewayIdentity.makeTrustRegistry(
                 providerKeys: providerKeys,
                 registryRevision: 1,
                 issuedAtUnixSeconds: now
             )
-            return try store.install(
+            let installed = try store.install(
                 registry.registry,
                 bootstrap: gatewayIdentity.bootstrap
-            ).registry.registryRevision
+            )
+            return PreparedProviderHandoffTrust(
+                registryRevision: installed.registry.registryRevision,
+                gatewayIdentity: gatewayIdentity
+            )
         }
     }
 
@@ -308,12 +325,17 @@ public enum ContainerEngineServiceRunner {
     }
 
     public static let usage = """
-        Usage: container-engine --socket PATH --provider-socket PATH --state-directory PATH
+    Usage: container-engine --socket PATH --provider-socket PATH --state-directory PATH
 
-          --socket PATH           Public current-user Docker Engine Unix socket.
-          --provider-socket PATH  Private socket owned by the selected provider adapter.
-          --state-directory PATH  Private gateway identity and selection directory.
-        """
+      --socket PATH           Public current-user Docker Engine Unix socket.
+      --provider-socket PATH  Private socket owned by the selected provider adapter.
+      --state-directory PATH  Private gateway identity and selection directory.
+    """
+}
+
+private struct PreparedProviderHandoffTrust: Sendable {
+    var registryRevision: UInt64
+    var gatewayIdentity: ProviderHandoffGatewayIdentityV1?
 }
 
 struct ContainerEngineServiceTrustConfiguration: Sendable {
@@ -330,6 +352,7 @@ struct ContainerEngineServiceTrustConfiguration: Sendable {
 
 public final class ContainerEngineServiceRuntime: @unchecked Sendable {
     public let fingerprint: ContainerEngineProviderFingerprint
+    public let handoffCoordinator: ProviderHandoffGatewayCoordinator?
     public let handoffStore: ProviderHandoffGatewayStore
     public let socketPath: String
 
@@ -339,12 +362,14 @@ public final class ContainerEngineServiceRuntime: @unchecked Sendable {
         server: ContainerUnixHTTPServer,
         fingerprint: ContainerEngineProviderFingerprint,
         socketPath: String,
-        handoffStore: ProviderHandoffGatewayStore
+        handoffStore: ProviderHandoffGatewayStore,
+        handoffCoordinator: ProviderHandoffGatewayCoordinator?
     ) {
         self.server = server
         self.fingerprint = fingerprint
         self.socketPath = socketPath
         self.handoffStore = handoffStore
+        self.handoffCoordinator = handoffCoordinator
     }
 
     public func wait() async throws {
@@ -430,11 +455,11 @@ public enum ContainerEngineServiceOptionError:
 
     public var description: String {
         switch self {
-        case .duplicateArgument(let name):
+        case let .duplicateArgument(name):
             "duplicate argument \(name)"
-        case .invalidArgument(let name):
+        case let .invalidArgument(name):
             "invalid argument \(name)"
-        case .missingArgument(let name):
+        case let .missingArgument(name):
             "missing required argument \(name)"
         }
     }

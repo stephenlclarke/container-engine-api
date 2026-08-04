@@ -123,6 +123,37 @@ struct ProviderHandoffGatewayStoreTests {
     }
 
     @Test
+    func `quiesced transaction can durably enter abort recovery`() throws {
+        var state = try initialState()
+        let token = handoffToken()
+        try ProviderHandoffGatewayStateMachine.begin(
+            token,
+            in: &state,
+            expectedStoreRevision: 1
+        )
+        try ProviderHandoffGatewayStateMachine.quiesce(
+            tokenID: token.tokenID,
+            expectedTokenRevision: 1,
+            expectations: expectations(token: token),
+            in: &state,
+            expectedStoreRevision: 2
+        )
+
+        try ProviderHandoffGatewayStateMachine.beginAbort(
+            tokenID: token.tokenID,
+            expectedTokenRevision: 2,
+            in: &state,
+            expectedStoreRevision: 3
+        )
+
+        #expect(state.storeRevision == 4)
+        #expect(state.transactions[0].token.tokenRevision == 3)
+        #expect(state.transactions[0].token.phase == .aborting)
+        #expect(state.transactions[0].token.importedParts == nil)
+        try ProviderHandoffGatewayStateMachine.validate(state)
+    }
+
+    @Test
     func `gateway revisions fail closed at UInt64 max without mutation`() throws {
         var storeBound = try initialState()
         storeBound.storeRevision = UInt64.max
@@ -149,7 +180,7 @@ struct ProviderHandoffGatewayStoreTests {
             try ProviderHandoffGatewayStateMachine.quiesce(
                 tokenID: token.tokenID,
                 expectedTokenRevision: UInt64.max,
-                expectations: try expectations(token: token),
+                expectations: expectations(token: token),
                 in: &tokenBound,
                 expectedStoreRevision: 2
             )
@@ -170,7 +201,7 @@ struct ProviderHandoffGatewayStoreTests {
             )
             var payload = try #require(object["payload"] as? String)
             let index = payload.startIndex
-            payload.replaceSubrange(index...index, with: payload[index] == "A" ? "B" : "A")
+            payload.replaceSubrange(index ... index, with: payload[index] == "A" ? "B" : "A")
             object["payload"] = payload
             let changed = try JSONSerialization.data(withJSONObject: object)
             try changed.write(to: stateURL)
@@ -225,8 +256,8 @@ struct ProviderHandoffGatewayStoreTests {
     private func expectations(
         token: ProviderHandoffTokenV1
     ) throws -> [ProviderHandoffHeaderExpectationV1] {
-        [
-            try expectation(
+        try [
+            expectation(
                 role: .source,
                 root: sourceRoot,
                 lineage: sourceLineage,
@@ -244,7 +275,7 @@ struct ProviderHandoffGatewayStoreTests {
                     )
                 ]
             ),
-            try expectation(
+            expectation(
                 role: .destination,
                 root: destinationRoot,
                 lineage: destinationLineage,
@@ -255,7 +286,7 @@ struct ProviderHandoffGatewayStoreTests {
                 token: token,
                 snapshot: nil,
                 controllers: []
-            ),
+            )
         ]
     }
 
@@ -315,16 +346,16 @@ struct ProviderHandoffGatewayStoreTests {
         )
         abortVector.revisionVectorDigestSHA256 =
             try ProviderHandoffProjections.revisionVectorDigest(abortVector)
-        return ProviderHandoffHeaderExpectationV1(
+        return try ProviderHandoffHeaderExpectationV1(
             role: role,
             stateRootUUID: root,
             expectedHeader: expectedHeader,
-            expectedHeaderDigestSHA256: try ProviderHandoffProjections.stateRootHeaderDigest(
+            expectedHeaderDigestSHA256: ProviderHandoffProjections.stateRootHeaderDigest(
                 expectedHeader
             ),
             preCommitRevisionVector: preCommitVector,
             abortHeader: abortHeader,
-            abortHeaderDigestSHA256: try ProviderHandoffProjections.stateRootHeaderDigest(
+            abortHeaderDigestSHA256: ProviderHandoffProjections.stateRootHeaderDigest(
                 abortHeader
             ),
             abortRevisionVector: abortVector

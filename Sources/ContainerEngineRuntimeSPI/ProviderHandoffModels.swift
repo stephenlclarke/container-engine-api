@@ -1259,17 +1259,25 @@ public struct ProviderHandoffGatewayTransactionV1: Codable, Equatable, Sendable 
     public var token: ProviderHandoffTokenV1
     public var manifest: ProviderHandoffManifestV1?
     public var commitRecord: ProviderHandoffCommitRecordV1?
+    /// Ordered, destination-private controller receipts produced while the
+    /// signed transaction is reconciling. Persisting these opaque receipts in
+    /// the gateway authority makes Complete -> activation replayable after a
+    /// gateway restart without asking a controller to promote public state a
+    /// second time.
+    public var promotedPartReceipts: [ProviderHandoffPartOpaqueControllerReceiptV1]?
     public var terminalOutcome: ProviderHandoffTerminalOutcomeV1?
 
     public init(
         token: ProviderHandoffTokenV1,
         manifest: ProviderHandoffManifestV1? = nil,
         commitRecord: ProviderHandoffCommitRecordV1? = nil,
+        promotedPartReceipts: [ProviderHandoffPartOpaqueControllerReceiptV1]? = nil,
         terminalOutcome: ProviderHandoffTerminalOutcomeV1? = nil
     ) {
         self.token = token
         self.manifest = manifest
         self.commitRecord = commitRecord
+        self.promotedPartReceipts = promotedPartReceipts
         self.terminalOutcome = terminalOutcome
     }
 }
