@@ -75,6 +75,49 @@ public struct ProviderHandoffGatewayTerminalResultV1: Equatable, Sendable {
     }
 }
 
+public struct ProviderHandoffGatewayDestinationPossessionV1:
+    Equatable,
+    Sendable
+{
+    public var payloadEncryptionKey: ProviderHandoffTrustKeyV1
+    public var lineageEncryptionKey: ProviderHandoffTrustKeyV1
+    public var proofs: [ProviderHandoffDestinationKeyPossessionProofV1]
+
+    public init(
+        payloadEncryptionKey: ProviderHandoffTrustKeyV1,
+        lineageEncryptionKey: ProviderHandoffTrustKeyV1,
+        proofs: [ProviderHandoffDestinationKeyPossessionProofV1]
+    ) {
+        self.payloadEncryptionKey = payloadEncryptionKey
+        self.lineageEncryptionKey = lineageEncryptionKey
+        self.proofs = proofs
+    }
+}
+
+public struct ProviderHandoffGatewayManifestAssemblyResultV1:
+    Equatable,
+    Sendable
+{
+    public var validatedManifest: ProviderHandoffValidatedManifestV1
+    public var gatewayState: ProviderHandoffGatewayStateV1
+
+    public init(
+        validatedManifest: ProviderHandoffValidatedManifestV1,
+        gatewayState: ProviderHandoffGatewayStateV1
+    ) {
+        self.validatedManifest = validatedManifest
+        self.gatewayState = gatewayState
+    }
+
+    public static func == (
+        lhs: ProviderHandoffGatewayManifestAssemblyResultV1,
+        rhs: ProviderHandoffGatewayManifestAssemblyResultV1
+    ) -> Bool {
+        lhs.validatedManifest.manifest == rhs.validatedManifest.manifest
+            && lhs.gatewayState == rhs.gatewayState
+    }
+}
+
 public enum ProviderHandoffGatewayCoordinatorError:
     Error,
     Equatable,
@@ -82,6 +125,7 @@ public enum ProviderHandoffGatewayCoordinatorError:
     Sendable
 {
     case activeTransactionMismatch
+    case duplicateContribution(ProviderHandoffPartKindV1, String)
     case duplicatePartSource(ProviderHandoffPartKindV1)
     case incompleteObject(String)
     case invalidObject(String)
@@ -89,7 +133,9 @@ public enum ProviderHandoffGatewayCoordinatorError:
     case invalidProviderResponse(ContainerEngineProviderHandoffOperationV1)
     case invalidTransactionPhase(ProviderHandoffPhaseV1)
     case missingManifest
+    case missingManifestAuthority
     case missingPartSource(ProviderHandoffPartKindV1)
+    case missingSourceEndpoint(String)
     case missingPromotionReceipts
     case providerFailure(
         ContainerEngineProviderHandoffOperationV1,
@@ -101,6 +147,8 @@ public enum ProviderHandoffGatewayCoordinatorError:
         switch self {
         case .activeTransactionMismatch:
             return "provider handoff gateway active transaction changed"
+        case let .duplicateContribution(partKind, stateRootUUID):
+            return "provider handoff part \(partKind.rawValue) has more than one contribution for source root \(stateRootUUID)"
         case let .duplicatePartSource(partKind):
             return "provider handoff part \(partKind.rawValue) has more than one source route"
         case let .incompleteObject(objectID):
@@ -115,8 +163,12 @@ public enum ProviderHandoffGatewayCoordinatorError:
             return "provider handoff gateway transaction is in phase \(phase.rawValue)"
         case .missingManifest:
             return "provider handoff gateway transaction has no manifest"
+        case .missingManifestAuthority:
+            return "provider handoff gateway manifest authority is unavailable"
         case let .missingPartSource(partKind):
             return "provider handoff part \(partKind.rawValue) has no source route"
+        case let .missingSourceEndpoint(stateRootUUID):
+            return "provider handoff source root \(stateRootUUID) has no authenticated provider endpoint"
         case .missingPromotionReceipts:
             return "provider handoff controller promotions are not durably recorded"
         case let .providerFailure(operation, disposition, message):
@@ -153,6 +205,36 @@ public struct ContainerEngineProviderSessionHandoffTransport:
     }
 }
 
+public struct ProviderHandoffGatewayManifestAuthorityV1: Sendable {
+    public let gatewayIdentity: ProviderHandoffGatewayIdentityV1
+    public let trustRegistryStore: ProviderHandoffTrustRegistryStore
+    public let possessionProofStore: ProviderHandoffPossessionProofStore
+    public let transactionSecretStore:
+        ProviderHandoffGatewayTransactionSecretStore
+    public let nowUnixSeconds: @Sendable () throws -> UInt64
+
+    public init(
+        gatewayIdentity: ProviderHandoffGatewayIdentityV1,
+        trustRegistryStore: ProviderHandoffTrustRegistryStore,
+        possessionProofStore: ProviderHandoffPossessionProofStore,
+        transactionSecretStore:
+        ProviderHandoffGatewayTransactionSecretStore = .init(),
+        nowUnixSeconds: @escaping @Sendable () throws -> UInt64 = {
+            let value = Date().timeIntervalSince1970
+            guard value.isFinite, value >= 0, value < Double(UInt64.max) else {
+                throw ProviderHandoffGatewayStateError.invalidState
+            }
+            return UInt64(value.rounded(.down))
+        }
+    ) {
+        self.gatewayIdentity = gatewayIdentity
+        self.trustRegistryStore = trustRegistryStore
+        self.possessionProofStore = possessionProofStore
+        self.transactionSecretStore = transactionSecretStore
+        self.nowUnixSeconds = nowUnixSeconds
+    }
+}
+
 /// Serial, crash-replayable orchestration for provider handoff controller
 /// parts. The coordinator owns the gateway authority store, streams immutable
 /// bundle objects between authenticated provider sessions, freezes the exact
@@ -161,16 +243,19 @@ public struct ContainerEngineProviderSessionHandoffTransport:
 public actor ProviderHandoffGatewayCoordinator {
     private let store: ProviderHandoffGatewayStore
     private let bootstrap: ProviderHandoffPinnedBootstrapKeyV1
+    private let manifestAuthority: ProviderHandoffGatewayManifestAuthorityV1?
     private let transport: any ProviderHandoffGatewayControlTransport
 
     public init(
         store: ProviderHandoffGatewayStore,
         bootstrap: ProviderHandoffPinnedBootstrapKeyV1,
+        manifestAuthority: ProviderHandoffGatewayManifestAuthorityV1? = nil,
         transport: any ProviderHandoffGatewayControlTransport =
             ContainerEngineProviderSessionHandoffTransport()
     ) {
         self.store = store
         self.bootstrap = bootstrap
+        self.manifestAuthority = manifestAuthority
         self.transport = transport
     }
 
@@ -226,6 +311,114 @@ public actor ProviderHandoffGatewayCoordinator {
                 expectedStoreRevision: state.storeRevision
             )
         }
+    }
+
+    /// Proves possession of the exact destination payload and lineage X25519
+    /// keys archived by the token's trust-registry revision. Every challenge
+    /// byte is derived from the durable gateway transaction seed, so a crash or
+    /// lost response replays the same request and can adopt only the exact
+    /// signed destination receipt.
+    public func proveDestinationKeyPossession(
+        tokenID: String,
+        destination: ProviderHandoffGatewayProviderEndpointV1
+    ) async throws -> ProviderHandoffGatewayDestinationPossessionV1 {
+        let state = try store.load()
+        let transaction = try requireTransaction(tokenID, in: state)
+        let token = transaction.token
+        guard
+            state.activeTokenID == tokenID,
+            token.phase == .draining || token.phase == .quiesced,
+            token.destinationProviderFingerprint
+            == destination.fingerprint.digest,
+            token.destinationStateRootUUID
+            == destination.fingerprint.stateRootUUID.uuidString.lowercased(),
+            let authority = manifestAuthority
+        else {
+            if manifestAuthority == nil {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .missingManifestAuthority
+            }
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        let now = try authority.nowUnixSeconds()
+        let trustRegistry = try authority.trustRegistryStore.loadRevision(
+            token.trustRegistryRevision,
+            bootstrap: bootstrap
+        )
+        let keys = try [
+            ProviderHandoffKeyPurposeV1.destinationLineageKeyEncryption,
+            .destinationPayloadEncryption
+        ].map {
+            try Self.destinationKey(
+                purpose: $0,
+                token: token,
+                trustRegistry: trustRegistry,
+                atUnixSeconds: now
+            )
+        }
+        let secret = try authority.transactionSecretStore.loadOrCreate(
+            binding: Self.secretBinding(token)
+        )
+        var proofs: [ProviderHandoffDestinationKeyPossessionProofV1] = []
+        proofs.reserveCapacity(keys.count)
+        for key in keys {
+            let discriminator = Self.possessionDiscriminator(key)
+            let challenge = try Self.possessionChallenge(
+                token: token,
+                key: key,
+                secret: secret
+            )
+            let body = try ProviderHandoffProviderKeyControlCodec
+                .encodePossessionChallenge(
+                    ProviderHandoffProviderKeyPossessionRequestV1(
+                        trustRegistryRevision: token.trustRegistryRevision,
+                        challenge: challenge.transportChallenge
+                    )
+                )
+            let result = try await perform(
+                operation: .destinationKeyPossession,
+                mediaType: ProviderHandoffProviderKeyControlCodec
+                    .possessionChallengeMediaType,
+                responseMediaType: ProviderHandoffProviderKeyControlCodec
+                    .possessionProofMediaType,
+                body: body,
+                endpoint: destination,
+                identity: "\(token.tokenID):\(token.manifestID):\(discriminator)"
+            )
+            let proof = try ProviderHandoffProviderKeyControlCodec
+                .decodePossessionProof(result.body)
+            let validated = try ProviderHandoffPossessionProofCodec.verify(
+                proof,
+                challenge: challenge,
+                trustRegistry: trustRegistry,
+                atUnixSeconds: now
+            )
+            guard
+                try authority.possessionProofStore.store(proof)
+                == validated.proofRecordDigestSHA256
+            else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .invalidProviderResponse(.destinationKeyPossession)
+            }
+            proofs.append(proof)
+        }
+        guard
+            let lineageKey = keys.first(where: {
+                $0.purpose == .destinationLineageKeyEncryption
+            }),
+            let payloadKey = keys.first(where: {
+                $0.purpose == .destinationPayloadEncryption
+            })
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .invalidProviderResponse(.destinationKeyPossession)
+        }
+        return ProviderHandoffGatewayDestinationPossessionV1(
+            payloadEncryptionKey: payloadKey,
+            lineageEncryptionKey: lineageKey,
+            proofs: proofs
+        )
     }
 
     /// Requests a source controller to produce one immutable,
@@ -357,6 +550,212 @@ public actor ProviderHandoffGatewayCoordinator {
                 .invalidPartReceipt(request.partKind)
         }
         return receipt
+    }
+
+    /// Assembles the complete immutable manifest from provider-owned export
+    /// contributions, obtains every source authority signature, applies the
+    /// gateway signature, validates the exact trust-registry revision, and
+    /// atomically binds the result to the quiesced token.
+    ///
+    /// The transaction seed makes gateway-created lineage material stable
+    /// across a crash. If the manifest was already bound, the same unsigned
+    /// assembly is checked locally and returned without contacting providers.
+    public func assembleAndBindManifest(
+        tokenID: String,
+        parts: [ProviderHandoffPartV1],
+        contributions: [ProviderHandoffSourceContributionV1],
+        sourceEndpoints: [
+            String: ProviderHandoffGatewayProviderEndpointV1
+        ],
+        destinationPossession:
+        ProviderHandoffGatewayDestinationPossessionV1
+    ) async throws -> ProviderHandoffGatewayManifestAssemblyResultV1 {
+        var state = try store.load()
+        var transaction = try requireTransaction(tokenID, in: state)
+        let token = transaction.token
+        guard
+            state.activeTokenID == tokenID,
+            token.phase == .quiesced,
+            let authority = manifestAuthority
+        else {
+            if manifestAuthority == nil {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .missingManifestAuthority
+            }
+            throw ProviderHandoffGatewayCoordinatorError
+                .invalidTransactionPhase(token.phase)
+        }
+
+        let now = try authority.nowUnixSeconds()
+        let trustRegistry = try authority.trustRegistryStore.loadRevision(
+            token.trustRegistryRevision,
+            bootstrap: bootstrap
+        )
+        let secret = try authority.transactionSecretStore.loadOrCreate(
+            binding: Self.secretBinding(token)
+        )
+        let possessionProofs = try Self.validateDestinationPossession(
+            destinationPossession,
+            token: token,
+            authority: authority,
+            trustRegistry: trustRegistry,
+            secret: secret,
+            atUnixSeconds: now
+        )
+        let requiredProofs = try Self.requiredPossessionProofs(
+            possessionProofs,
+            parts: parts,
+            destinationPossession: destinationPossession
+        )
+        let proofDigests = requiredProofs.map(
+            \.proofRecordDigestSHA256
+        ).sorted()
+        let assembly = try Self.makeManifestAssembly(
+            token: token,
+            parts: parts,
+            contributions: contributions,
+            sourceEndpoints: sourceEndpoints,
+            destinationPossession: destinationPossession,
+            proofDigests: proofDigests,
+            trustRegistry: trustRegistry,
+            gatewayIdentity: authority.gatewayIdentity,
+            secret: secret,
+            atUnixSeconds: now
+        )
+
+        if let existing = transaction.manifest {
+            guard
+                Self.normalizedUnsignedManifest(existing, using: assembly.manifest)
+                == assembly.manifest
+            else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .activeTransactionMismatch
+            }
+            let validated = try ProviderHandoffRecordValidator
+                .validateManifest(
+                    existing,
+                    possessionProofs: requiredProofs,
+                    trustRegistry: trustRegistry,
+                    atUnixSeconds: now
+                )
+            return ProviderHandoffGatewayManifestAssemblyResultV1(
+                validatedManifest: validated,
+                gatewayState: state
+            )
+        }
+
+        var manifest = assembly.manifest
+        var signatures: [String: ProviderHandoffSignatureV1] = [:]
+        for contribution in assembly.orderedContributions {
+            guard
+                let endpoint = sourceEndpoints[
+                    contribution.sourceStateRootUUID
+                ]
+            else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .missingSourceEndpoint(
+                        contribution.sourceStateRootUUID
+                    )
+            }
+            let receipt = try await signSourceManifest(
+                ProviderHandoffSourceManifestSignRequestV1(
+                    bootstrap: bootstrap,
+                    partKind: contribution.partKind,
+                    contributionDigestSHA256:
+                    contribution.contributionDigestSHA256,
+                    candidateManifest: manifest
+                ),
+                source: endpoint
+            )
+            try trustRegistry.verify(
+                receipt.sourceSignature,
+                expectedPurpose: .sourceManifestSigning,
+                expectedRole: .sourceProvider,
+                providerFingerprint:
+                contribution.sourceProviderFingerprint,
+                stateRootUUID: contribution.sourceStateRootUUID,
+                projectionDigestSHA256:
+                receipt.sourceProjectionDigestSHA256,
+                atUnixSeconds: now
+            )
+            if let existing = signatures[
+                contribution.sourceStateRootUUID
+            ] {
+                guard
+                    existing.signedProjectionDigestSHA256
+                    == receipt.sourceSignature
+                    .signedProjectionDigestSHA256,
+                    existing.signerKeyID
+                    == receipt.sourceSignature.signerKeyID
+                else {
+                    throw ProviderHandoffGatewayCoordinatorError
+                        .invalidPartReceipt(contribution.partKind)
+                }
+            } else {
+                signatures[contribution.sourceStateRootUUID] =
+                    receipt.sourceSignature
+            }
+        }
+        guard signatures.count == manifest.sources.count else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        for index in manifest.sources.indices {
+            guard
+                let signature = signatures[
+                    manifest.sources[index].stateRootUUID
+                ]
+            else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .missingSourceEndpoint(
+                        manifest.sources[index].stateRootUUID
+                    )
+            }
+            manifest.sources[index].sourceSignature = signature
+        }
+        manifest.manifestDigest = try ProviderHandoffProjections
+            .manifestDigest(manifest)
+        manifest.coordinatorSignature = try authority.gatewayIdentity.sign(
+            projectionDigestSHA256: manifest.manifestDigest,
+            purpose: .coordinatorManifestSigning,
+            trustRegistryRevision: manifest.trustRegistryRevision
+        )
+        let validated = try ProviderHandoffRecordValidator.validateManifest(
+            manifest,
+            possessionProofs: requiredProofs,
+            trustRegistry: trustRegistry,
+            atUnixSeconds: now
+        )
+
+        state = try store.load()
+        transaction = try requireTransaction(tokenID, in: state)
+        if let existing = transaction.manifest {
+            guard existing == manifest else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .activeTransactionMismatch
+            }
+            return ProviderHandoffGatewayManifestAssemblyResultV1(
+                validatedManifest: validated,
+                gatewayState: state
+            )
+        }
+        guard transaction.token.phase == .quiesced else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .invalidTransactionPhase(transaction.token.phase)
+        }
+        state = try store.update(expectedStoreRevision: state.storeRevision) {
+            try ProviderHandoffGatewayStateMachine.bindManifest(
+                validated,
+                tokenID: tokenID,
+                expectedTokenRevision: transaction.token.tokenRevision,
+                in: &$0,
+                expectedStoreRevision: state.storeRevision
+            )
+        }
+        return ProviderHandoffGatewayManifestAssemblyResultV1(
+            validatedManifest: validated,
+            gatewayState: state
+        )
     }
 
     /// Copies every unique manifest object in bounded chunks, stages every
@@ -1091,6 +1490,601 @@ public actor ProviderHandoffGatewayCoordinator {
             }
         }
         return result
+    }
+
+    private struct ManifestAssembly {
+        var manifest: ProviderHandoffManifestV1
+        var orderedContributions: [ProviderHandoffSourceContributionV1]
+    }
+
+    private static func makeManifestAssembly(
+        token: ProviderHandoffTokenV1,
+        parts: [ProviderHandoffPartV1],
+        contributions: [ProviderHandoffSourceContributionV1],
+        sourceEndpoints: [
+            String: ProviderHandoffGatewayProviderEndpointV1
+        ],
+        destinationPossession:
+        ProviderHandoffGatewayDestinationPossessionV1,
+        proofDigests: [String],
+        trustRegistry: ProviderHandoffValidatedTrustRegistryV1,
+        gatewayIdentity: ProviderHandoffGatewayIdentityV1,
+        secret: ProviderHandoffGatewayTransactionSecretV1,
+        atUnixSeconds: UInt64
+    ) throws -> ManifestAssembly {
+        let sourceRoots = token.orderedSourceStateRootUUIDs
+        guard
+            parts.map(\.kind) == ProviderHandoffPartKindV1.allCases,
+            token.preCommitRootExpectations.map(\.stateRootUUID)
+            == sourceRoots + [token.destinationStateRootUUID],
+            Set(sourceEndpoints.keys) == Set(sourceRoots),
+            !proofDigests.isEmpty
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        let destinationExpectation = try requireLast(
+            token.preCommitRootExpectations
+        )
+        let sourceIndex = Dictionary(
+            uniqueKeysWithValues: sourceRoots.enumerated().map {
+                ($1, $0)
+            }
+        )
+        let partIndex = Dictionary(
+            uniqueKeysWithValues:
+            ProviderHandoffPartKindV1.allCases.enumerated().map {
+                ($1, $0)
+            }
+        )
+        let partByKind = Dictionary(
+            uniqueKeysWithValues: parts.map { ($0.kind, $0) }
+        )
+        var seenContributionKeys = Set<String>()
+        var rootsByPart: [ProviderHandoffPartKindV1: [String]] = [:]
+        var sourceRecords: [String: ProviderHandoffSourceV1] = [:]
+        var sourceEnvelopes: [
+            String: DestinationSealedLineageKeyEnvelopeV1
+        ] = [:]
+
+        for contribution in contributions {
+            let root = contribution.sourceStateRootUUID
+            let duplicateKey =
+                "\(contribution.partKind.rawValue)\u{0}\(root)"
+            guard seenContributionKeys.insert(duplicateKey).inserted else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .duplicateContribution(contribution.partKind, root)
+            }
+            guard
+                let endpoint = sourceEndpoints[root],
+                endpoint.fingerprint.digest
+                == contribution.sourceProviderFingerprint,
+                endpoint.fingerprint.stateRootUUID.uuidString.lowercased()
+                == root,
+                let expectedSourceIndex = sourceIndex[root],
+                let part = partByKind[contribution.partKind],
+                contribution.schemaVersion
+                == ProviderHandoffSourceContributionV1
+                .currentSchemaVersion,
+                contribution.tokenID == token.tokenID,
+                contribution.manifestID == token.manifestID,
+                contribution.trustRegistryRevision
+                == token.trustRegistryRevision,
+                contribution.destinationProviderFingerprint
+                == token.destinationProviderFingerprint,
+                contribution.destinationStateRootUUID
+                == token.destinationStateRootUUID,
+                contribution.destinationPreCommitExpectation
+                == destinationExpectation,
+                contribution.destinationKeyPossessionProofDigestsSHA256
+                == proofDigests,
+                contribution.resultingAuthorityLineageUUID
+                == token.resultingAuthorityLineageUUID,
+                contribution.resultingLineageDigestKeyVersion
+                == token.resultingLineageDigestKeyVersion,
+                contribution.sourcePreCommitExpectation
+                == token.preCommitRootExpectations[
+                    expectedSourceIndex
+                ],
+                contribution.part == part,
+                part.sourceStateRootUUIDs.contains(root),
+                try contribution.contributionDigestSHA256
+                == (ProviderHandoffSourceControlCodec
+                    .contributionDigest(contribution)),
+                contribution.sourceObjectRecord.state == .verified,
+                contribution.sourceObjectRecord.bundleObjectID
+                == part.payload.bundleObjectID,
+                contribution.sourceObjectRecord.transportByteLength
+                == part.payload.transportByteLength,
+                contribution.sourceObjectRecord.transportDigestSHA256
+                == part.payload.transportDigestSHA256,
+                contribution.sourceObjectRecord.receivedByteCount
+                == part.payload.transportByteLength,
+                contribution.destinationSealedLineageKeyEnvelope
+                .sourceStateRootUUID == root,
+                contribution.destinationSealedLineageKeyEnvelope
+                .authorityLineageUUID
+                == contribution.authorityLineageUUID,
+                contribution.destinationSealedLineageKeyEnvelope.keyVersion
+                == contribution.lineageDigestKeyVersion,
+                contribution.destinationSealedLineageKeyEnvelope
+                .destinationKeyPurpose
+                == .destinationLineageKeyEncryption,
+                contribution.destinationSealedLineageKeyEnvelope
+                .destinationKeyID
+                == destinationPossession.lineageEncryptionKey.keyID,
+                part.payload.destinationEncryption.map({
+                    $0.destinationKeyPurpose
+                        == .destinationPayloadEncryption
+                        && $0.destinationKeyID
+                        == destinationPossession.payloadEncryptionKey.keyID
+                }) ?? true
+            else {
+                if sourceEndpoints[root] == nil {
+                    throw ProviderHandoffGatewayCoordinatorError
+                        .missingSourceEndpoint(root)
+                }
+                throw ProviderHandoffGatewayCoordinatorError
+                    .invalidPartReceipt(contribution.partKind)
+            }
+            rootsByPart[contribution.partKind, default: []].append(root)
+
+            let signingKey = try sourceSigningKey(
+                providerFingerprint:
+                contribution.sourceProviderFingerprint,
+                stateRootUUID: root,
+                trustRegistry: trustRegistry,
+                atUnixSeconds: atUnixSeconds
+            )
+            let source = ProviderHandoffSourceV1(
+                providerFingerprint:
+                contribution.sourceProviderFingerprint,
+                stateRootUUID: root,
+                authorityLineageUUID:
+                contribution.authorityLineageUUID,
+                lineageDigestKeyVersion:
+                contribution.lineageDigestKeyVersion,
+                preCommitExpectation:
+                contribution.sourcePreCommitExpectation,
+                sourceSignature: placeholderSignature(
+                    signingKey,
+                    trustRegistryRevision: token.trustRegistryRevision
+                )
+            )
+            if let existing = sourceRecords[root] {
+                guard existing == source else {
+                    throw ProviderHandoffGatewayCoordinatorError
+                        .invalidPartReceipt(contribution.partKind)
+                }
+            } else {
+                sourceRecords[root] = source
+            }
+            let envelope =
+                contribution.destinationSealedLineageKeyEnvelope
+            if let existing = sourceEnvelopes[root] {
+                guard existing == envelope else {
+                    throw ProviderHandoffGatewayCoordinatorError
+                        .invalidPartReceipt(contribution.partKind)
+                }
+            } else {
+                sourceEnvelopes[root] = envelope
+            }
+        }
+
+        guard
+            Set(sourceRecords.keys) == Set(sourceRoots),
+            Set(sourceEnvelopes.keys) == Set(sourceRoots)
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        for part in parts {
+            let roots = (rootsByPart[part.kind] ?? []).sorted {
+                (sourceIndex[$0] ?? .max) < (sourceIndex[$1] ?? .max)
+            }
+            guard roots == part.sourceStateRootUUIDs else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .invalidPartReceipt(part.kind)
+            }
+        }
+        let sources = try sourceRoots.map { root in
+            guard let source = sourceRecords[root] else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .missingSourceEndpoint(root)
+            }
+            return source
+        }
+        var envelopes = try sourceRoots.map { root in
+            guard let envelope = sourceEnvelopes[root] else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .missingSourceEndpoint(root)
+            }
+            return envelope
+        }
+        try envelopes.append(
+            gatewayIdentity.sealLineageKey(
+                ProviderHandoffEnvelopeLineageKeyV1(
+                    sourceStateRootUUID: nil,
+                    authorityLineageUUID:
+                    token.resultingAuthorityLineageUUID,
+                    keyVersion:
+                    token.resultingLineageDigestKeyVersion,
+                    rawHMACSHA256Key: secret.derive(
+                        domain: "resulting-lineage-key-v1",
+                        count: 32
+                    )
+                ),
+                envelopeID:
+                "resulting-lineage:\(token.resultingAuthorityLineageUUID):\(token.resultingLineageDigestKeyVersion)",
+                tokenID: token.tokenID,
+                manifestID: token.manifestID,
+                destinationProviderFingerprint:
+                token.destinationProviderFingerprint,
+                destinationStateRootUUID:
+                token.destinationStateRootUUID,
+                destinationKeyID:
+                destinationPossession.lineageEncryptionKey.keyID,
+                destinationPublicKey:
+                destinationPossession.lineageEncryptionKey.rawPublicKey,
+                nonce: secret.derive(
+                    domain: "resulting-lineage-nonce-v1",
+                    count: 24
+                ),
+                trustRegistryRevision: token.trustRegistryRevision,
+                ephemeralPrivateKey: secret.derive(
+                    domain: "resulting-lineage-ephemeral-v1",
+                    count: 32
+                )
+            )
+        )
+        let coordinatorKey = try gatewayIdentity.trustKey(
+            for: .coordinatorManifestSigning
+        )
+        let manifest = ProviderHandoffManifestV1(
+            manifestID: token.manifestID,
+            tokenID: token.tokenID,
+            trustRegistryRevision: token.trustRegistryRevision,
+            destinationKeyPossessionProofDigestsSHA256:
+            proofDigests,
+            sources: sources,
+            resultingAuthorityLineageUUID:
+            token.resultingAuthorityLineageUUID,
+            resultingLineageDigestKeyVersion:
+            token.resultingLineageDigestKeyVersion,
+            destinationSealedLineageKeyEnvelopes: envelopes,
+            destinationProviderFingerprint:
+            token.destinationProviderFingerprint,
+            destinationStateRootUUID: token.destinationStateRootUUID,
+            destinationPreCommitExpectation: destinationExpectation,
+            parts: parts,
+            manifestDigest: String(repeating: "0", count: 64),
+            coordinatorSignature: placeholderSignature(
+                coordinatorKey,
+                trustRegistryRevision: token.trustRegistryRevision
+            )
+        )
+        return ManifestAssembly(
+            manifest: manifest,
+            orderedContributions: contributions.sorted {
+                let leftPart = partIndex[$0.partKind] ?? .max
+                let rightPart = partIndex[$1.partKind] ?? .max
+                if leftPart != rightPart {
+                    return leftPart < rightPart
+                }
+                return (sourceIndex[$0.sourceStateRootUUID] ?? .max)
+                    < (sourceIndex[$1.sourceStateRootUUID] ?? .max)
+            }
+        )
+    }
+
+    private static func normalizedUnsignedManifest(
+        _ manifest: ProviderHandoffManifestV1,
+        using unsigned: ProviderHandoffManifestV1
+    ) -> ProviderHandoffManifestV1 {
+        guard manifest.sources.count == unsigned.sources.count else {
+            return manifest
+        }
+        var result = manifest
+        for index in result.sources.indices {
+            result.sources[index].sourceSignature =
+                unsigned.sources[index].sourceSignature
+        }
+        for index in result.destinationSealedLineageKeyEnvelopes.indices {
+            guard
+                result.destinationSealedLineageKeyEnvelopes[index]
+                .sourceStateRootUUID == nil,
+                let replacement = unsigned
+                .destinationSealedLineageKeyEnvelopes.first(where: {
+                    $0.envelopeID
+                        == result.destinationSealedLineageKeyEnvelopes[index]
+                        .envelopeID
+                        && $0.sourceStateRootUUID == nil
+                })
+            else { continue }
+            result.destinationSealedLineageKeyEnvelopes[index]
+                .envelopeSignature = replacement.envelopeSignature
+        }
+        result.manifestDigest = unsigned.manifestDigest
+        result.coordinatorSignature = unsigned.coordinatorSignature
+        return result
+    }
+
+    private static func requiredPossessionProofs(
+        _ proofs: [ProviderHandoffValidatedPossessionProofV1],
+        parts: [ProviderHandoffPartV1],
+        destinationPossession:
+        ProviderHandoffGatewayDestinationPossessionV1
+    ) throws -> [ProviderHandoffValidatedPossessionProofV1] {
+        var uses: [(ProviderHandoffKeyPurposeV1, String)] = [
+            (
+                .destinationLineageKeyEncryption,
+                destinationPossession.lineageEncryptionKey.keyID
+            )
+        ]
+        for part in parts {
+            guard let encryption = part.payload.destinationEncryption else {
+                continue
+            }
+            guard
+                encryption.destinationKeyPurpose
+                == .destinationPayloadEncryption,
+                encryption.destinationKeyID
+                == destinationPossession.payloadEncryptionKey.keyID
+            else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .invalidPartReceipt(part.kind)
+            }
+            if !uses.contains(where: {
+                $0.0 == encryption.destinationKeyPurpose
+                    && $0.1 == encryption.destinationKeyID
+            }) {
+                uses.append((
+                    encryption.destinationKeyPurpose,
+                    encryption.destinationKeyID
+                ))
+            }
+        }
+        uses.sort {
+            if $0.0.rawValue != $1.0.rawValue {
+                return $0.0.rawValue.utf8.lexicographicallyPrecedes(
+                    $1.0.rawValue.utf8
+                )
+            }
+            return $0.1.utf8.lexicographicallyPrecedes($1.1.utf8)
+        }
+        return try uses.map { purpose, keyID in
+            let matches = proofs.filter {
+                $0.proof.destinationKeyPurpose == purpose
+                    && $0.proof.destinationKeyID == keyID
+            }
+            guard matches.count == 1, let proof = matches.first else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .activeTransactionMismatch
+            }
+            return proof
+        }
+    }
+
+    private static func validateDestinationPossession(
+        _ possession: ProviderHandoffGatewayDestinationPossessionV1,
+        token: ProviderHandoffTokenV1,
+        authority: ProviderHandoffGatewayManifestAuthorityV1,
+        trustRegistry: ProviderHandoffValidatedTrustRegistryV1,
+        secret: ProviderHandoffGatewayTransactionSecretV1,
+        atUnixSeconds: UInt64
+    ) throws -> [ProviderHandoffValidatedPossessionProofV1] {
+        let expectedKeys = try [
+            ProviderHandoffKeyPurposeV1.destinationLineageKeyEncryption,
+            .destinationPayloadEncryption
+        ].map {
+            try destinationKey(
+                purpose: $0,
+                token: token,
+                trustRegistry: trustRegistry,
+                atUnixSeconds: atUnixSeconds
+            )
+        }
+        guard
+            expectedKeys.first(where: {
+                $0.purpose == .destinationLineageKeyEncryption
+            }) == possession.lineageEncryptionKey,
+            expectedKeys.first(where: {
+                $0.purpose == .destinationPayloadEncryption
+            }) == possession.payloadEncryptionKey,
+            possession.proofs.count == expectedKeys.count
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        var validated: [ProviderHandoffValidatedPossessionProofV1] = []
+        for key in expectedKeys {
+            let matches = possession.proofs.filter {
+                $0.destinationKeyPurpose == key.purpose
+                    && $0.destinationKeyID == key.keyID
+            }
+            guard matches.count == 1, let proof = matches.first else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .activeTransactionMismatch
+            }
+            let challenge = try possessionChallenge(
+                token: token,
+                key: key,
+                secret: secret
+            )
+            let value = try ProviderHandoffPossessionProofCodec.verify(
+                proof,
+                challenge: challenge,
+                trustRegistry: trustRegistry,
+                atUnixSeconds: atUnixSeconds
+            )
+            guard
+                try authority.possessionProofStore.store(proof)
+                == value.proofRecordDigestSHA256
+            else {
+                throw ProviderHandoffGatewayCoordinatorError
+                    .activeTransactionMismatch
+            }
+            validated.append(value)
+        }
+        return validated.sorted {
+            if $0.proof.destinationKeyPurpose.rawValue
+                != $1.proof.destinationKeyPurpose.rawValue
+            {
+                return $0.proof.destinationKeyPurpose.rawValue.utf8
+                    .lexicographicallyPrecedes(
+                        $1.proof.destinationKeyPurpose.rawValue.utf8
+                    )
+            }
+            return $0.proof.destinationKeyID.utf8
+                .lexicographicallyPrecedes(
+                    $1.proof.destinationKeyID.utf8
+                )
+        }
+    }
+
+    private static func possessionChallenge(
+        token: ProviderHandoffTokenV1,
+        key: ProviderHandoffTrustKeyV1,
+        secret: ProviderHandoffGatewayTransactionSecretV1
+    ) throws -> ProviderHandoffPendingPossessionChallengeV1 {
+        let discriminator = possessionDiscriminator(key)
+        let proofID = "possession:" + ProviderHandoffDigest.sha256(
+            Data(
+                "\(token.tokenID)\u{0}\(token.manifestID)\u{0}\(discriminator)"
+                    .utf8
+            )
+        )
+        return try ProviderHandoffPossessionProofCodec.prepareChallenge(
+            proofID: proofID,
+            tokenID: token.tokenID,
+            manifestID: token.manifestID,
+            destinationProviderFingerprint:
+            token.destinationProviderFingerprint,
+            destinationStateRootUUID: token.destinationStateRootUUID,
+            destinationKeyPurpose: key.purpose,
+            destinationKeyID: key.keyID,
+            destinationPublicKey: key.rawPublicKey,
+            nonce: secret.derive(
+                domain: "destination-possession-nonce-v1",
+                discriminator: discriminator,
+                count: 24
+            ),
+            challengePlaintext: secret.derive(
+                domain: "destination-possession-plaintext-v1",
+                discriminator: discriminator,
+                count: 32
+            ),
+            ephemeralPrivateKey: secret.derive(
+                domain: "destination-possession-ephemeral-v1",
+                discriminator: discriminator,
+                count: 32
+            )
+        )
+    }
+
+    private static func possessionDiscriminator(
+        _ key: ProviderHandoffTrustKeyV1
+    ) -> String {
+        ProviderHandoffDigest.sha256(
+            Data("\(key.purpose.rawValue)\u{0}\(key.keyID)".utf8)
+        )
+    }
+
+    private static func destinationKey(
+        purpose: ProviderHandoffKeyPurposeV1,
+        token: ProviderHandoffTokenV1,
+        trustRegistry: ProviderHandoffValidatedTrustRegistryV1,
+        atUnixSeconds: UInt64
+    ) throws -> ProviderHandoffTrustKeyV1 {
+        let matches = trustRegistry.registry.keys.filter {
+            $0.purpose == purpose
+                && $0.role == .destinationProvider
+                && $0.providerFingerprint
+                == token.destinationProviderFingerprint
+                && $0.stateRootUUID == token.destinationStateRootUUID
+                && $0.algorithm == .x25519V1
+        }
+        guard matches.count == 1, let key = matches.first else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        return try trustRegistry.key(
+            identifier: key.keyID,
+            purpose: purpose,
+            role: .destinationProvider,
+            providerFingerprint: token.destinationProviderFingerprint,
+            stateRootUUID: token.destinationStateRootUUID,
+            atUnixSeconds: atUnixSeconds
+        )
+    }
+
+    private static func sourceSigningKey(
+        providerFingerprint: String,
+        stateRootUUID: String,
+        trustRegistry: ProviderHandoffValidatedTrustRegistryV1,
+        atUnixSeconds: UInt64
+    ) throws -> ProviderHandoffTrustKeyV1 {
+        let matches = trustRegistry.registry.keys.filter {
+            $0.purpose == .sourceManifestSigning
+                && $0.role == .sourceProvider
+                && $0.providerFingerprint == providerFingerprint
+                && $0.stateRootUUID == stateRootUUID
+                && $0.algorithm == .ed25519V1
+        }
+        guard matches.count == 1, let key = matches.first else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        return try trustRegistry.key(
+            identifier: key.keyID,
+            purpose: .sourceManifestSigning,
+            role: .sourceProvider,
+            providerFingerprint: providerFingerprint,
+            stateRootUUID: stateRootUUID,
+            atUnixSeconds: atUnixSeconds
+        )
+    }
+
+    private static func placeholderSignature(
+        _ key: ProviderHandoffTrustKeyV1,
+        trustRegistryRevision: UInt64
+    ) -> ProviderHandoffSignatureV1 {
+        ProviderHandoffSignatureV1(
+            purpose: key.purpose,
+            signerKeyID: key.keyID,
+            signerRole: key.role,
+            providerFingerprint: key.providerFingerprint,
+            stateRootUUID: key.stateRootUUID,
+            trustRegistryRevision: trustRegistryRevision,
+            signedProjectionDigestSHA256:
+            String(repeating: "0", count: 64),
+            signature: Data(repeating: 0, count: 64)
+        )
+    }
+
+    private static func secretBinding(
+        _ token: ProviderHandoffTokenV1
+    ) -> ProviderHandoffGatewayTransactionSecretBindingV1 {
+        ProviderHandoffGatewayTransactionSecretBindingV1(
+            tokenID: token.tokenID,
+            manifestID: token.manifestID,
+            trustRegistryRevision: token.trustRegistryRevision,
+            destinationProviderFingerprint:
+            token.destinationProviderFingerprint,
+            destinationStateRootUUID: token.destinationStateRootUUID,
+            resultingAuthorityLineageUUID:
+            token.resultingAuthorityLineageUUID,
+            resultingLineageDigestKeyVersion:
+            token.resultingLineageDigestKeyVersion
+        )
+    }
+
+    private static func requireLast<T>(_ values: [T]) throws -> T {
+        guard let value = values.last else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        return value
     }
 
     private func requireTransaction(

@@ -74,7 +74,9 @@ public enum ProviderHandoffRecordValidator {
             guard manifest.trustRegistryRevision == trustRegistry.registry.registryRevision else {
                 throw ProviderHandoffRecordValidationError.invalidManifest
             }
-            let proofDigests = possessionProofs.map(\.proofRecordDigestSHA256)
+            let proofDigests = possessionProofs
+                .map(\.proofRecordDigestSHA256)
+                .sorted()
             guard
                 proofDigests == manifest.destinationKeyPossessionProofDigestsSHA256,
                 Set(proofDigests).count == proofDigests.count
@@ -87,6 +89,13 @@ public enum ProviderHandoffRecordValidator {
                     purpose: $0.proof.destinationKeyPurpose,
                     keyID: $0.proof.destinationKeyID
                 )
+            }.sorted {
+                if $0.purpose.rawValue != $1.purpose.rawValue {
+                    return $0.purpose.rawValue.utf8.lexicographicallyPrecedes(
+                        $1.purpose.rawValue.utf8
+                    )
+                }
+                return $0.keyID.utf8.lexicographicallyPrecedes($1.keyID.utf8)
             }
             guard
                 proofKeys == requiredEncryptionKeys,

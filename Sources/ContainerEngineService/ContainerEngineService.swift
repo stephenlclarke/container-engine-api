@@ -104,10 +104,35 @@ public enum ContainerEngineServiceRunner {
             )
         }
         let selected = descriptor.fingerprint
+        let configuredNow = trustConfiguration.nowUnixSeconds
         let handoffCoordinator = handoffTrust.gatewayIdentity.map {
             ProviderHandoffGatewayCoordinator(
                 store: handoffStore,
-                bootstrap: $0.bootstrap
+                bootstrap: $0.bootstrap,
+                manifestAuthority:
+                ProviderHandoffGatewayManifestAuthorityV1(
+                    gatewayIdentity: $0,
+                    trustRegistryStore:
+                    trustConfiguration.trustRegistryStore,
+                    possessionProofStore:
+                    ProviderHandoffPossessionProofStore(
+                        root: stateDirectory
+                            .appendingPathComponent(
+                                "provider-handoff",
+                                isDirectory: true
+                            )
+                            .appendingPathComponent(
+                                "possession-proofs",
+                                isDirectory: true
+                            )
+                    ),
+                    nowUnixSeconds: {
+                        if let configuredNow {
+                            return configuredNow
+                        }
+                        return try currentUnixSeconds()
+                    }
+                )
             )
         }
 
