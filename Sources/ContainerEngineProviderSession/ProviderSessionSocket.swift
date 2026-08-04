@@ -3,6 +3,7 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
+import ContainerEngineRuntimeSPI
 import Darwin
 import Foundation
 
@@ -20,13 +21,15 @@ final class ProviderSessionSocket: @unchecked Sendable {
     init(descriptor: Int32) throws {
         self.descriptor = descriptor
         var enabled: Int32 = 1
-        guard setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_NOSIGPIPE,
-            &enabled,
-            socklen_t(MemoryLayout<Int32>.size)
-        ) == 0 else {
+        guard
+            setsockopt(
+                descriptor,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &enabled,
+                socklen_t(MemoryLayout<Int32>.size)
+            ) == 0
+        else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
@@ -107,6 +110,36 @@ final class ProviderSessionSocket: @unchecked Sendable {
             _ = shutdown(descriptor, SHUT_RDWR)
             Darwin.close(descriptor)
         }
+    }
+
+    func peerCodeIdentity() throws -> ProviderHandoffCodeIdentityV1 {
+        var peerPID: pid_t = 0
+        var peerPIDLength = socklen_t(MemoryLayout<pid_t>.size)
+        guard
+            getsockopt(
+                descriptor,
+                SOL_LOCAL,
+                LOCAL_PEERPID,
+                &peerPID,
+                &peerPIDLength
+            ) == 0,
+            peerPID > 0,
+            peerPIDLength == socklen_t(MemoryLayout<pid_t>.size)
+        else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        var path = [CChar](repeating: 0, count: 4_096)
+        let count = proc_pidpath(
+            peerPID,
+            &path,
+            UInt32(path.count)
+        )
+        guard count > 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return try ProviderHandoffCodeIdentity.load(
+            at: URL(fileURLWithFileSystemRepresentation: path, isDirectory: false, relativeTo: nil)
+        )
     }
 
     private func readExactly(into bytes: inout [UInt8]) throws {
@@ -250,10 +283,10 @@ enum ProviderSessionUnixSocket {
         Darwin.close(listener.descriptor)
         var status = stat()
         if lstat(path, &status) == 0,
-           status.st_uid == getuid(),
-           status.st_mode & S_IFMT == S_IFSOCK,
-           status.st_dev == listener.device,
-           status.st_ino == listener.inode
+            status.st_uid == getuid(),
+            status.st_mode & S_IFMT == S_IFSOCK,
+            status.st_dev == listener.device,
+            status.st_ino == listener.inode
         {
             try? FileManager.default.removeItem(atPath: path)
         }

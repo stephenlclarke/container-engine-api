@@ -11,8 +11,10 @@ import Foundation
 public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
     public let socketPath: String
     public let fingerprint: ContainerEngineProviderFingerprint
+    public let codeIdentity: ProviderHandoffCodeIdentityV1
 
     private let responder: any DockerHTTPResponder
+    private let handoffControlResponder: (any ContainerEngineProviderHandoffControlResponder)?
     private let lock = NSLock()
     private var listener: ProviderSessionUnixSocket.Listener?
     private var acceptTask: Task<Void, Never>?
@@ -21,16 +23,20 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
 
     public init(
         responder: any DockerHTTPResponder,
+        handoffControlResponder:
+            (any ContainerEngineProviderHandoffControlResponder)? = nil,
         socketPath: String,
         declaration: ContainerEngineProviderDeclaration,
         stateRootUUID: UUID
     ) throws {
         self.responder = responder
+        self.handoffControlResponder = handoffControlResponder
         self.socketPath = socketPath
         fingerprint = try ContainerEngineProviderFingerprint(
             declaration: declaration,
             stateRootUUID: stateRootUUID
         )
+        codeIdentity = try ProviderHandoffCodeIdentity.current()
     }
 
     deinit {
@@ -69,9 +75,11 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             connections.removeAll()
             return (acceptTask, listener != nil)
         }
-        if state.1, let wakeConnection = try? ProviderSessionUnixSocket.connect(
-            path: socketPath
-        ) {
+        if state.1,
+            let wakeConnection = try? ProviderSessionUnixSocket.connect(
+                path: socketPath
+            )
+        {
             wakeConnection.close()
         }
         await state.0?.value
@@ -130,25 +138,51 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
         do {
             var hello = ProviderSessionFrame(kind: .providerHello)
             hello.fingerprint = fingerprint
+            hello.codeIdentity = codeIdentity
             try await connection.writeFrame(hello)
             let gatewayHello = try await connection.readFrame()
             guard
                 gatewayHello.kind == .gatewayHello,
-                gatewayHello.expectedFingerprintDigest == fingerprint.digest
+                gatewayHello.expectedFingerprintDigest == fingerprint.digest,
+                let claimedGatewayIdentity = gatewayHello.codeIdentity,
+                claimedGatewayIdentity == (try connection.peerCodeIdentity())
             else {
-                throw ContainerEngineProviderSessionError.fingerprintMismatch(
-                    expected: fingerprint.digest,
-                    received: gatewayHello.expectedFingerprintDigest ?? "missing"
-                )
+                if gatewayHello.expectedFingerprintDigest != fingerprint.digest {
+                    throw ContainerEngineProviderSessionError.fingerprintMismatch(
+                        expected: fingerprint.digest,
+                        received: gatewayHello.expectedFingerprintDigest ?? "missing"
+                    )
+                }
+                throw ContainerEngineProviderSessionError.codeIdentityMismatch
             }
             try await connection.writeFrame(ProviderSessionFrame(kind: .ready))
             let frame = try await connection.readFrame()
             if frame.kind == .cancel {
                 return
             }
+            if frame.kind == .controlRequest,
+                let request = frame.controlRequest
+            {
+                try await serveControl(
+                    request,
+                    body: try await readRequestBody(
+                        on: connection,
+                        maximumBytes:
+                            ContainerEngineProviderHandoffControlRequestV1
+                            .maximumBodyBytes
+                    ),
+                    context: ContainerEngineProviderHandoffControlContextV1(
+                        providerFingerprint: fingerprint,
+                        authenticatedGatewayCodeIdentity:
+                            claimedGatewayIdentity
+                    ),
+                    on: connection
+                )
+                return
+            }
             guard frame.kind == .request, let request = frame.request else {
                 throw ContainerEngineProviderSessionError.protocolViolation(
-                    "expected one request after handshake"
+                    "expected one Docker or handoff-control request after handshake"
                 )
             }
             let body = try await readRequestBody(on: connection)
@@ -171,10 +205,11 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
     }
 
     private func readRequestBody(
-        on connection: ProviderSessionSocket
+        on connection: ProviderSessionSocket,
+        maximumBytes: Int = ProviderSessionSocket.maximumBufferedRequestBodyBytes
     ) async throws -> Data {
         var accumulator = ProviderRequestBodyAccumulator(
-            maximumBytes: ProviderSessionSocket.maximumBufferedRequestBodyBytes
+            maximumBytes: maximumBytes
         )
         while true {
             let frame = try await connection.readFrame()
@@ -184,12 +219,40 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
         }
     }
 
+    private func serveControl(
+        _ request: ContainerEngineProviderHandoffControlRequestV1,
+        body: Data,
+        context: ContainerEngineProviderHandoffControlContextV1,
+        on connection: ProviderSessionSocket
+    ) async throws {
+        try request.validate(body: body)
+        guard let handoffControlResponder else {
+            throw ContainerEngineProviderSessionError.providerFailure(
+                "selected provider does not support handoff control"
+            )
+        }
+        let result = await handoffControlResponder.respond(
+            to: request,
+            body: body,
+            context: context
+        )
+        guard result.response.requestID == request.requestID else {
+            throw ContainerEngineProviderSessionError.invalidControlMessage
+        }
+        try result.response.validate(body: result.body)
+        var frame = ProviderSessionFrame(kind: .controlResponse)
+        frame.controlResponse = result.response
+        try await connection.writeFrame(frame)
+        try await writeData(result.body, channel: nil, on: connection)
+        try await connection.writeFrame(ProviderSessionFrame(kind: .responseEnd))
+    }
+
     private func serve(
         _ response: DockerHTTPResponse,
         on connection: ProviderSessionSocket
     ) async throws {
         switch response.body {
-        case let .bytes(data):
+        case .bytes(let data):
             try await writeHead(
                 response,
                 bodyKind: .bytes,
@@ -198,7 +261,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             )
             try await writeData(data, channel: nil, on: connection)
             try await connection.writeFrame(ProviderSessionFrame(kind: .responseEnd))
-        case let .managedStream(session):
+        case .managedStream(let session):
             try await writeHead(
                 response,
                 bodyKind: .stream,
@@ -206,7 +269,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveManagedStream(session, on: connection)
-        case let .stream(stream):
+        case .stream(let stream):
             try await writeHead(
                 response,
                 bodyKind: .stream,
@@ -214,7 +277,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveLegacyStream(stream, on: connection)
-        case let .hijack(session, terminal):
+        case .hijack(let session, let terminal):
             try await writeHead(
                 response,
                 bodyKind: .hijack,
@@ -222,7 +285,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveHijack(session, on: connection)
-        case let .webSocket(session):
+        case .webSocket(let session):
             try await writeHead(
                 response,
                 bodyKind: .webSocket,
@@ -260,7 +323,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
             var frame = ProviderSessionFrame(kind: .responseBody)
-            frame.data = data.subdata(in: offset ..< end)
+            frame.data = data.subdata(in: offset..<end)
             frame.channel = channel
             try await connection.writeFrame(frame)
             offset = end
@@ -281,19 +344,18 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             let command = try await connection.readFrame()
             switch command.kind {
             case .next:
-                if let data = try await session.nextChunk() {
-                    try await writeData(
-                        data,
-                        channel: nil,
-                        finishChunk: true,
-                        on: connection
-                    )
-                } else {
+                guard let data = try await session.nextChunk() else {
                     try await connection.writeFrame(
                         ProviderSessionFrame(kind: .responseEnd)
                     )
                     return
                 }
+                try await writeData(
+                    data,
+                    channel: nil,
+                    finishChunk: true,
+                    on: connection
+                )
             case .cancel:
                 await session.cancel()
                 return
@@ -314,19 +376,18 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             let command = try await connection.readFrame()
             switch command.kind {
             case .next:
-                if let data = try await iterator.next() {
-                    try await writeData(
-                        data,
-                        channel: nil,
-                        finishChunk: true,
-                        on: connection
-                    )
-                } else {
+                guard let data = try await iterator.next() else {
                     try await connection.writeFrame(
                         ProviderSessionFrame(kind: .responseEnd)
                     )
                     return
                 }
+                try await writeData(
+                    data,
+                    channel: nil,
+                    finishChunk: true,
+                    on: connection
+                )
             case .cancel:
                 return
             default:
