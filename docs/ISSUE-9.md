@@ -17,3 +17,4 @@ The package must expose one reusable service library for argument parsing, immut
 - GitHub issue: [#9](https://github.com/stephenlclarke/container-engine-api/issues/9)
 - The focused service suite starts a real private provider session, starts the reusable public gateway, verifies both Unix endpoints through `/_ping` and `/info`, confirms the selected fingerprint, and proves exact socket cleanup.
 - The matched enhanced Container package links the library product, stages and signs its thin executable, writes a private launchd plist, and treats provider-backed health as a system-start/status requirement.
+- Clean signed code head `8d01a2388c749add99e70180d44f060749da8616` passes all 66 same-host performance samples against Docker; all three candidate lanes are directionally better.

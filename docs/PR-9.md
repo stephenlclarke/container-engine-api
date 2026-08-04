@@ -16,7 +16,7 @@ Expose the provider-selection and public-listener lifecycle as `ContainerEngineS
 
 ## Validation
 
-The four focused service tests pass with real private and public Unix sockets, provider-backed `/info`, bounded failure, fingerprint comparison, and exact cleanup. The complete local gate passes all 87 tests in four suites, exact dependency resolution, generated-source and helper checks, formatting, Markdown lint, warnings-as-errors builds, and all eight DocC modules. Clean signed-head performance, hosted CI, and the matched enhanced Container adopter gate remain required before issue closure; their exact commands and results will be recorded in the issue comment and synchronized stack documentation.
+The four focused service tests pass with real private and public Unix sockets, provider-backed `/info`, bounded failure, fingerprint comparison, and exact cleanup. The complete local gate passes all 87 tests in four suites, exact dependency resolution, generated-source and helper checks, formatting, Markdown lint, warnings-as-errors builds, and all eight DocC modules. Clean signed code head `8d01a2388c749add99e70180d44f060749da8616` passed all 66 same-host performance samples against Docker, with 0.39x resize, 0.51x 32-byte WebSocket, and 0.60x 1 MiB WebSocket median ratios; all three lanes were directionally better. Hosted CI and the matched enhanced Container adopter gate remain required before issue closure.
 
 ## Compatibility
 

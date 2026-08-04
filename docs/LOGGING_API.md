@@ -61,7 +61,7 @@ The legacy generic `AsyncThrowingStream<Data>` response remains source-compatibl
 
 The candidate fixture includes the public Unix listener, gateway route ledger, private provider session, logging controller, bounded input pump, and WebSocket framing. Its in-memory echo/resize backend deliberately excludes Container process lookup and terminal control, so this lane proves shared transport overhead only. Production Container, provider, logging-driver, Compose foreground, and external-client matrices remain required before end-to-end performance parity is claimed.
 
-The immutable [v0.3.3 transport matrix](performance/engine-streaming-v0.3.3/timing-matrix.md) and its adjacent raw TSV, fingerprints, summary JSON, and JUnit evidence identify clean signed code head `6edd44ae092d2d8eb083c96045f5e4539370524c`, the candidate binary digest, same-host Docker Engine, environment, and all 66 successful samples. Candidate/Docker medians were 0.40x for resize, 0.78x for a 32-byte WebSocket round trip, and 0.44x for a 1 MiB WebSocket round trip. Resize and 1 MiB WebSocket were directionally better, the sub-millisecond 32-byte WebSocket lane was comparable, and every gate passed.
+The immutable [v0.3.5 transport matrix](performance/engine-streaming-v0.3.5/timing-matrix.md) and its adjacent raw TSV, fingerprints, summary JSON, and JUnit evidence identify clean signed code head `8d01a2388c749add99e70180d44f060749da8616`, the candidate binary digest, same-host Docker Engine, environment, and all 66 successful samples. Candidate/Docker medians were 0.39x for resize, 0.51x for a 32-byte WebSocket round trip, and 0.60x for a 1 MiB WebSocket round trip. All three lanes were directionally better and every gate passed.
 
 ## Adoption Checklist
 
