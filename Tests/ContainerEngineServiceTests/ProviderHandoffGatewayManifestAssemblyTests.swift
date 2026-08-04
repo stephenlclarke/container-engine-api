@@ -129,6 +129,185 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
         #expect(await transport.sourceSignCount() == export.parts.count)
     }
 
+    @Test
+    func `generic source responder exports and replays a sealed logging contribution`() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let lineageService = "source-lineage-\(UUID().uuidString.lowercased())"
+        defer {
+            SecItemDelete([
+                kSecClass: kSecClassGenericPassword,
+                kSecAttrService: lineageService
+            ] as CFDictionary)
+        }
+        let expectations = try Self.expectations(
+            sourceProvider: fixture.sourceEndpoint.fingerprint.digest
+        )
+        let token = ProviderHandoffTokenV1(
+            tokenID: Self.tokenID,
+            tokenRevision: 1,
+            orderedSourceStateRootUUIDs: [Self.sourceRoot],
+            destinationProviderFingerprint:
+            fixture.destinationEndpoint.fingerprint.digest,
+            destinationStateRootUUID: Self.destinationRoot,
+            trustRegistryRevision: 1,
+            resultingAuthorityLineageUUID: Self.resultingLineage,
+            resultingLineageDigestKeyVersion: 2,
+            phase: .draining,
+            preCommitRootExpectations: [],
+            destinationKeyPossessionProofDigestsSHA256: [],
+            manifestID: Self.manifestID
+        )
+        let transport = ManifestAssemblyTransport(
+            sourceEndpoint: fixture.sourceEndpoint,
+            destinationEndpoint: fixture.destinationEndpoint,
+            sourceIdentity: fixture.sourceIdentity,
+            destinationIdentity: fixture.destinationIdentity
+        )
+        let coordinator = ProviderHandoffGatewayCoordinator(
+            store: fixture.gatewayStore,
+            bootstrap: fixture.gatewayIdentity.bootstrap,
+            manifestAuthority: ProviderHandoffGatewayManifestAuthorityV1(
+                gatewayIdentity: fixture.gatewayIdentity,
+                trustRegistryStore: fixture.trustRegistryStore,
+                possessionProofStore: ProviderHandoffPossessionProofStore(
+                    root: fixture.root.appendingPathComponent("source-proof")
+                ),
+                transactionSecretStore:
+                ProviderHandoffGatewayTransactionSecretStore(
+                    service: fixture.secretService
+                ),
+                nowUnixSeconds: { Self.useTime }
+            ),
+            transport: transport
+        )
+        _ = try await coordinator.begin(token)
+        _ = try await coordinator.quiesce(
+            tokenID: token.tokenID,
+            expectations: expectations
+        )
+        let possession = try await coordinator
+            .proveDestinationKeyPossession(
+                tokenID: token.tokenID,
+                destination: fixture.destinationEndpoint
+            )
+
+        let objectStore = ProviderHandoffBundleObjectStore(
+            root: fixture.root.appendingPathComponent("source-objects")
+        )
+        let counter = SourceExportCounter()
+        let responder = try ContainerEngineProviderSourceHandoffResponder(
+            partKind: .logging,
+            mediaType: ProviderHandoffPortableLoggingPayloadCodec.mediaType,
+            requiredCapabilities: ["engine.handoff.part.logging.v1"],
+            objectStore: objectStore,
+            contributionStore: ProviderHandoffSourceContributionStore(
+                root: fixture.root.appendingPathComponent("source-contributions")
+            ),
+            lineageKeyStore: ProviderHandoffLineageKeyStore(
+                service: lineageService
+            ),
+            trustRegistryStore: fixture.trustRegistryStore,
+            providerIdentity: fixture.sourceIdentity,
+            exportPackage: { request in
+                guard request.selectedResourceIDs == ["container-1"] else {
+                    throw ContainerEngineProviderSourceHandoffError
+                        .invalidRequest
+                }
+                await counter.increment()
+                return try ProviderHandoffPortableLoggingPayloadCodec.package(
+                    containers: [
+                        ProviderHandoffPortableLoggingContainerV1(
+                            containerID: "container-1",
+                            providerID: "test-provider",
+                            providerVersion: "1",
+                            records: []
+                        )
+                    ],
+                    sourceStateRootUUID: Self.sourceRoot
+                )
+            },
+            nowUnixSeconds: { Self.useTime }
+        )
+        let export = ProviderHandoffPartExportRequestV1(
+            partKind: .logging,
+            bootstrap: fixture.gatewayIdentity.bootstrap,
+            tokenID: Self.tokenID,
+            manifestID: Self.manifestID,
+            trustRegistryRevision: 1,
+            sourceProviderFingerprint:
+            fixture.sourceEndpoint.fingerprint.digest,
+            sourceStateRootUUID: Self.sourceRoot,
+            authorityLineageUUID: Self.sourceLineage,
+            lineageDigestKeyVersion: 1,
+            sourcePreCommitExpectation: expectations[0],
+            destinationProviderFingerprint:
+            fixture.destinationEndpoint.fingerprint.digest,
+            destinationStateRootUUID: Self.destinationRoot,
+            destinationPreCommitExpectation: expectations[1],
+            destinationPayloadEncryptionKey:
+            possession.payloadEncryptionKey,
+            destinationLineageKeyEncryptionKey:
+            possession.lineageEncryptionKey,
+            destinationKeyPossessionProofs: possession.proofs,
+            resultingAuthorityLineageUUID: Self.resultingLineage,
+            resultingLineageDigestKeyVersion: 2,
+            selectedResourceIDs: ["container-1"]
+        )
+        let body = try ProviderHandoffSourceControlCodec
+            .encodeExportRequest(export)
+        let control = try ContainerEngineProviderHandoffControlRequestV1(
+            requestID: "source-export-logging",
+            operation: .partExport,
+            bodyMediaType:
+            ProviderHandoffSourceControlCodec.exportRequestMediaType,
+            body: body
+        )
+        let context = ContainerEngineProviderHandoffControlContextV1(
+            providerFingerprint: fixture.sourceEndpoint.fingerprint,
+            authenticatedGatewayCodeIdentity: ProviderHandoffCodeIdentityV1(
+                signingIdentifier: "gateway-test",
+                teamIdentifier: nil,
+                designatedRequirementDigestSHA256:
+                fixture.gatewayIdentity.bootstrap
+                    .codeRequirementDigestSHA256
+            )
+        )
+
+        let first = await responder.respond(
+            to: control,
+            body: body,
+            context: context
+        )
+        #expect(first.response.disposition == .completed)
+        let contribution = try ProviderHandoffSourceControlCodec
+            .decodeContribution(first.body)
+        #expect(contribution.part.kind == .logging)
+        #expect(
+            contribution.part.payload.mediaType
+                == ProviderHandoffPortableLoggingPayloadCodec.mediaType
+        )
+        #expect(
+            try objectStore.load(
+                bundleObjectID: contribution.sourceObjectRecord.bundleObjectID
+            ).state == .verified
+        )
+        #expect(await counter.value() == 1)
+
+        let replay = await responder.respond(
+            to: control,
+            body: body,
+            context: context
+        )
+        #expect(replay.response.disposition == .completed)
+        #expect(
+            try ProviderHandoffSourceControlCodec.decodeContribution(
+                replay.body
+            ) == contribution
+        )
+        #expect(await counter.value() == 1)
+    }
+
     private static func contributions(
         fixture: Fixture,
         expectations: [ProviderHandoffHeaderExpectationV1],
@@ -571,6 +750,18 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 )
             )
         }
+    }
+}
+
+private actor SourceExportCounter {
+    private var count = 0
+
+    func increment() {
+        count += 1
+    }
+
+    func value() -> Int {
+        count
     }
 }
 
