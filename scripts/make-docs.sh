@@ -36,6 +36,7 @@ arguments=(
     --target ContainerEngineProviderSession
     --target ContainerEngineRouter
     --target ContainerEngineRuntimeSPI
+    --target ContainerEngineService
     --target ContainerEngineWire
     --target ContainerUnixHTTPServer
     --output-path "$output_path"

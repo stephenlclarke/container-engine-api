@@ -29,8 +29,9 @@ let package = Package(
         .library(name: "ContainerEngineProviderSession", targets: ["ContainerEngineProviderSession"]),
         .library(name: "ContainerEngineGateway", targets: ["ContainerEngineGateway"]),
         .library(name: "ContainerEngineRuntimeSPI", targets: ["ContainerEngineRuntimeSPI"]),
+        .library(name: "ContainerEngineService", targets: ["ContainerEngineService"]),
         .library(name: "ContainerUnixHTTPServer", targets: ["ContainerUnixHTTPServer"]),
-        .executable(name: "container-engine", targets: ["ContainerEngineService"])
+        .executable(name: "container-engine", targets: ["ContainerEngineServiceExecutable"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
@@ -81,7 +82,7 @@ let package = Package(
                 .product(name: "NIOWebSocket", package: "swift-nio")
             ]
         ),
-        .executableTarget(
+        .target(
             name: "ContainerEngineService",
             dependencies: [
                 "ContainerEngineGateway",
@@ -90,6 +91,11 @@ let package = Package(
                 "ContainerUnixHTTPServer",
                 .product(name: "Logging", package: "swift-log")
             ]
+        ),
+        .executableTarget(
+            name: "ContainerEngineServiceExecutable",
+            dependencies: ["ContainerEngineService"],
+            path: "Sources/ContainerEngineServiceExecutable"
         ),
         .executableTarget(
             name: "ContainerEngineStreamingPerformanceFixture",
@@ -145,6 +151,15 @@ let package = Package(
                 "ContainerEngineWire",
                 "ContainerUnixHTTPServer",
                 .product(name: "Logging", package: "swift-log")
+            ]
+        ),
+        .testTarget(
+            name: "ContainerEngineServiceTests",
+            dependencies: [
+                "ContainerEngineProviderSession",
+                "ContainerEngineRuntimeSPI",
+                "ContainerEngineService",
+                "ContainerEngineWire"
             ]
         ),
         .testTarget(

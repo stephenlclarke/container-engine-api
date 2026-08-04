@@ -12,23 +12,35 @@ import Dispatch
 import Foundation
 import Logging
 
-@main
-struct ContainerEngineService {
-    static func main() async {
-        do {
-            try await run(arguments: Array(CommandLine.arguments.dropFirst()))
-        } catch {
-            FileHandle.standardError.write(Data("container-engine: \(error)\n".utf8))
-            Foundation.exit(EXIT_FAILURE)
-        }
-    }
-
-    private static func run(arguments: [String]) async throws {
+public enum ContainerEngineServiceRunner {
+    public static func run(arguments: [String]) async throws {
         if arguments.contains("--help") || arguments.contains("-h") {
             print(usage)
             return
         }
-        let options = try Options(arguments: arguments)
+        let runtime = try await start(
+            options: ContainerEngineServiceOptions(arguments: arguments)
+        )
+        let signals = terminationSignals()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await runtime.wait()
+            }
+            group.addTask {
+                for await _ in signals {
+                    return
+                }
+            }
+            _ = try await group.next()
+            try await runtime.shutdown()
+            group.cancelAll()
+            while try await group.next() != nil {}
+        }
+    }
+
+    public static func start(
+        options: ContainerEngineServiceOptions
+    ) async throws -> ContainerEngineServiceRuntime {
         let descriptor = try await ContainerEngineProviderSessionClient.probe(
             socketPath: options.providerSocket
         )
@@ -65,22 +77,11 @@ struct ContainerEngineService {
                 "socket": .string(options.socket)
             ]
         )
-
-        let signals = terminationSignals()
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await server.wait()
-            }
-            group.addTask {
-                for await _ in signals {
-                    return
-                }
-            }
-            _ = try await group.next()
-            try await server.shutdown()
-            group.cancelAll()
-            while try await group.next() != nil {}
-        }
+        return ContainerEngineServiceRuntime(
+            server: server,
+            fingerprint: selected,
+            socketPath: options.socket
+        )
     }
 
     private static func terminationSignals() -> AsyncStream<Int32> {
@@ -106,7 +107,7 @@ struct ContainerEngineService {
         }
     }
 
-    private static let usage = """
+    public static let usage = """
     Usage: container-engine --socket PATH --provider-socket PATH --state-directory PATH
 
       --socket PATH           Public current-user Docker Engine Unix socket.
@@ -115,12 +116,60 @@ struct ContainerEngineService {
     """
 }
 
-private struct Options {
-    var socket: String
-    var providerSocket: String
-    var stateDirectory: String
+public final class ContainerEngineServiceRuntime: @unchecked Sendable {
+    public let fingerprint: ContainerEngineProviderFingerprint
+    public let socketPath: String
 
-    init(arguments: [String]) throws {
+    private let server: ContainerUnixHTTPServer
+
+    fileprivate init(
+        server: ContainerUnixHTTPServer,
+        fingerprint: ContainerEngineProviderFingerprint,
+        socketPath: String
+    ) {
+        self.server = server
+        self.fingerprint = fingerprint
+        self.socketPath = socketPath
+    }
+
+    public func wait() async throws {
+        try await server.wait()
+    }
+
+    public func shutdown() async throws {
+        try await server.shutdown()
+    }
+}
+
+public struct ContainerEngineServiceOptions: Equatable, Sendable {
+    public var socket: String
+    public var providerSocket: String
+    public var stateDirectory: String
+
+    public init(
+        socket: String,
+        providerSocket: String,
+        stateDirectory: String
+    ) throws {
+        guard !socket.isEmpty else {
+            throw ContainerEngineServiceOptionError.missingArgument("--socket")
+        }
+        guard !providerSocket.isEmpty else {
+            throw ContainerEngineServiceOptionError.missingArgument(
+                "--provider-socket"
+            )
+        }
+        guard !stateDirectory.isEmpty else {
+            throw ContainerEngineServiceOptionError.missingArgument(
+                "--state-directory"
+            )
+        }
+        self.socket = socket
+        self.providerSocket = providerSocket
+        self.stateDirectory = stateDirectory
+    }
+
+    public init(arguments: [String]) throws {
         var values: [String: String] = [:]
         var index = 0
         while index < arguments.count {
@@ -129,16 +178,18 @@ private struct Options {
                 ["--socket", "--provider-socket", "--state-directory"].contains(name),
                 index + 1 < arguments.count
             else {
-                throw OptionError.invalidArgument(name)
+                throw ContainerEngineServiceOptionError.invalidArgument(name)
             }
             guard values.updateValue(arguments[index + 1], forKey: name) == nil else {
-                throw OptionError.duplicateArgument(name)
+                throw ContainerEngineServiceOptionError.duplicateArgument(name)
             }
             index += 2
         }
-        socket = try Self.require("--socket", in: values)
-        providerSocket = try Self.require("--provider-socket", in: values)
-        stateDirectory = try Self.require("--state-directory", in: values)
+        try self.init(
+            socket: Self.require("--socket", in: values),
+            providerSocket: Self.require("--provider-socket", in: values),
+            stateDirectory: Self.require("--state-directory", in: values)
+        )
     }
 
     private static func require(
@@ -146,18 +197,23 @@ private struct Options {
         in values: [String: String]
     ) throws -> String {
         guard let value = values[name], !value.isEmpty else {
-            throw OptionError.missingArgument(name)
+            throw ContainerEngineServiceOptionError.missingArgument(name)
         }
         return value
     }
 }
 
-private enum OptionError: Error, CustomStringConvertible {
+public enum ContainerEngineServiceOptionError:
+    Error,
+    Equatable,
+    CustomStringConvertible,
+    Sendable
+{
     case duplicateArgument(String)
     case invalidArgument(String)
     case missingArgument(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case let .duplicateArgument(name):
             "duplicate argument \(name)"
