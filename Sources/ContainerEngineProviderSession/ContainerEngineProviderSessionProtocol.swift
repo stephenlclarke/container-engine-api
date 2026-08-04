@@ -84,6 +84,8 @@ public enum ContainerEngineProviderHandoffOperationV1:
     case rootPrepare
     case rootApply
     case rootRelease
+    case partExport
+    case sourceSignManifest
     case partStage
     case partCompensate
     case partPromote
@@ -215,11 +217,11 @@ public struct ContainerEngineProviderHandoffControlResponseV1:
             bodyMediaType.utf8.count <= 256,
             !bodyMediaType.utf8.contains(0),
             body.count
-                <= ContainerEngineProviderHandoffControlRequestV1
-                .maximumBodyBytes,
+            <= ContainerEngineProviderHandoffControlRequestV1
+            .maximumBodyBytes,
             bodyByteLength == UInt64(body.count),
             ProviderHandoffDigest.sha256(body) == bodyDigestSHA256,
-            message?.utf8.count ?? 0 <= 1_024,
+            message?.utf8.count ?? 0 <= 1024,
             !(message?.utf8.contains(0) ?? false)
         else {
             throw ContainerEngineProviderSessionError.invalidControlMessage
@@ -372,33 +374,33 @@ public enum ContainerEngineProviderSessionError:
 
     public var description: String {
         switch self {
-        case .bodyTooLarge(let size):
+        case let .bodyTooLarge(size):
             "provider response body exceeds the limit (\(size) bytes)"
         case .connectionClosed:
             "provider session connection closed"
         case .codeIdentityMismatch:
             "provider session code identity does not match its Unix-socket peer"
-        case .fingerprintMismatch(let expected, let received):
+        case let .fingerprintMismatch(expected, received):
             "provider fingerprint mismatch: expected \(expected), received \(received)"
-        case .frameTooLarge(let size):
+        case let .frameTooLarge(size):
             "provider session frame exceeds the limit (\(size) bytes)"
-        case .invalidFrame(let message):
+        case let .invalidFrame(message):
             "invalid provider session frame: \(message)"
         case .invalidControlMessage:
             "invalid provider handoff control message"
-        case .invalidSocketPath(let path):
+        case let .invalidSocketPath(path):
             "invalid provider Unix socket path: \(path)"
-        case .providerFailure(let message):
+        case let .providerFailure(message):
             "provider request failed: \(message)"
-        case .protocolViolation(let message):
+        case let .protocolViolation(message):
             "provider session protocol violation: \(message)"
-        case .requestBodyTooLarge(let size):
+        case let .requestBodyTooLarge(size):
             "provider request body exceeds the limit (\(size) bytes)"
-        case .unsupportedProtocolVersion(let version):
+        case let .unsupportedProtocolVersion(version):
             "unsupported provider session protocol version \(version)"
-        case .unsafeSocketDirectory(let path):
+        case let .unsafeSocketDirectory(path):
             "unsafe provider socket directory: \(path)"
-        case .unsafeSocketPath(let path):
+        case let .unsafeSocketPath(path):
             "unsafe provider socket path: \(path)"
         }
     }

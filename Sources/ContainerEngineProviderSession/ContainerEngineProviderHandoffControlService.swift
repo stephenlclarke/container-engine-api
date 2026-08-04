@@ -47,7 +47,7 @@ public struct ContainerEngineProviderHandoffControlService:
         }
         guard
             request.bodyMediaType
-                == ProviderHandoffBundleObjectControlCodec.requestMediaType
+            == ProviderHandoffBundleObjectControlCodec.requestMediaType
         else {
             return Self.failure(
                 requestID: request.requestID,
@@ -60,7 +60,7 @@ public struct ContainerEngineProviderHandoffControlService:
             case .objectDeclare:
                 let value =
                     try ProviderHandoffBundleObjectControlCodec
-                    .decodeDeclare(body)
+                        .decodeDeclare(body)
                 let record = try objectStore.declare(
                     bundleObjectID: value.bundleObjectID,
                     transportByteLength: value.transportByteLength,
@@ -72,12 +72,12 @@ public struct ContainerEngineProviderHandoffControlService:
                         record
                     ),
                     mediaType:
-                        ProviderHandoffBundleObjectControlCodec.recordMediaType
+                    ProviderHandoffBundleObjectControlCodec.recordMediaType
                 )
             case .objectAppend:
                 let value =
                     try ProviderHandoffBundleObjectControlCodec
-                    .decodeAppend(body)
+                        .decodeAppend(body)
                 let record = try objectStore.append(
                     bundleObjectID: value.bundleObjectID,
                     offset: value.offset,
@@ -90,12 +90,12 @@ public struct ContainerEngineProviderHandoffControlService:
                         record
                     ),
                     mediaType:
-                        ProviderHandoffBundleObjectControlCodec.recordMediaType
+                    ProviderHandoffBundleObjectControlCodec.recordMediaType
                 )
             case .objectVerify:
                 let value =
                     try ProviderHandoffBundleObjectControlCodec
-                    .decodeReference(body)
+                        .decodeReference(body)
                 let record = try objectStore.verify(
                     bundleObjectID: value.bundleObjectID,
                     expectedObjectRevision: value.expectedObjectRevision
@@ -106,12 +106,12 @@ public struct ContainerEngineProviderHandoffControlService:
                         record
                     ),
                     mediaType:
-                        ProviderHandoffBundleObjectControlCodec.recordMediaType
+                    ProviderHandoffBundleObjectControlCodec.recordMediaType
                 )
             case .objectRead:
                 let value =
                     try ProviderHandoffBundleObjectControlCodec
-                    .decodeRead(body)
+                        .decodeRead(body)
                 let bytes = try objectStore.readVerifiedChunk(
                     bundleObjectID: value.bundleObjectID,
                     offset: value.offset,
@@ -127,11 +127,12 @@ public struct ContainerEngineProviderHandoffControlService:
                         )
                     ),
                     mediaType:
-                        ProviderHandoffBundleObjectControlCodec.chunkMediaType
+                    ProviderHandoffBundleObjectControlCodec.chunkMediaType
                 )
             case .destinationKeyPossession, .destinationKeySnapshot,
-                .partActivate, .partCompensate, .partPromote, .partStage,
-                .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
+                 .partActivate, .partCompensate, .partExport, .partPromote,
+                 .partStage, .sourceSignManifest,
+                 .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
                 preconditionFailure("non-object operation passed object switch")
             }
         } catch {
@@ -150,8 +151,9 @@ public struct ContainerEngineProviderHandoffControlService:
         case .objectAppend, .objectDeclare, .objectRead, .objectVerify:
             true
         case .destinationKeyPossession, .destinationKeySnapshot,
-            .partActivate, .partCompensate, .partPromote, .partStage,
-            .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
+             .partActivate, .partCompensate, .partExport, .partPromote,
+             .partStage, .sourceSignManifest,
+             .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
             false
         }
     }
@@ -161,8 +163,8 @@ public struct ContainerEngineProviderHandoffControlService:
         body: Data,
         mediaType: String
     ) throws -> ContainerEngineProviderHandoffControlResultV1 {
-        ContainerEngineProviderHandoffControlResultV1(
-            response: try ContainerEngineProviderHandoffControlResponseV1(
+        try ContainerEngineProviderHandoffControlResultV1(
+            response: ContainerEngineProviderHandoffControlResponseV1(
                 requestID: requestID,
                 disposition: .completed,
                 bodyMediaType: mediaType,
@@ -184,7 +186,7 @@ public struct ContainerEngineProviderHandoffControlService:
             bodyMediaType: "application/vnd.io.github.stephenlclarke.container.handoff-error.v1+json",
             body: body,
             validatedMessage: String(
-                decoding: message.utf8.prefix(1_024),
+                decoding: message.utf8.prefix(1024),
                 as: UTF8.self
             )
         )
@@ -199,11 +201,11 @@ public struct ContainerEngineProviderHandoffControlService:
     ) -> ContainerEngineProviderHandoffDispositionV1 {
         switch error {
         case ProviderHandoffBundleObjectStoreError.conflictingChunk,
-            ProviderHandoffBundleObjectStoreError.identityMismatch,
-            ProviderHandoffBundleObjectStoreError.revisionMismatch:
+             ProviderHandoffBundleObjectStoreError.identityMismatch,
+             ProviderHandoffBundleObjectStoreError.revisionMismatch:
             .conflict
         case ProviderHandoffBundleObjectStoreError.integrityMismatch,
-            ProviderHandoffBundleObjectStoreError.invalidMetadata:
+             ProviderHandoffBundleObjectStoreError.invalidMetadata:
             .recoveryRequired
         case ProviderHandoffBundleObjectStoreError.ioFailure:
             .retryableFailure

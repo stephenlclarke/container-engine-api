@@ -37,7 +37,7 @@ public struct ContainerEngineProviderIdentityControlResponder:
         do {
             guard
                 context.providerFingerprint.digest
-                    == identity.context.providerFingerprint
+                == identity.context.providerFingerprint
             else {
                 throw ProviderHandoffProviderKeyStoreError.bindingMismatch
             }
@@ -45,8 +45,8 @@ public struct ContainerEngineProviderIdentityControlResponder:
             case .destinationKeySnapshot:
                 guard
                     request.bodyMediaType
-                        == ProviderHandoffProviderKeyControlCodec
-                        .snapshotRequestMediaType
+                    == ProviderHandoffProviderKeyControlCodec
+                    .snapshotRequestMediaType
                 else {
                     return Self.failure(
                         requestID: request.requestID,
@@ -55,10 +55,10 @@ public struct ContainerEngineProviderIdentityControlResponder:
                 }
                 let value =
                     try ProviderHandoffProviderKeyControlCodec
-                    .decodeSnapshotRequest(body)
+                        .decodeSnapshotRequest(body)
                 guard
                     value.expectedProviderFingerprint
-                        == identity.context.providerFingerprint,
+                    == identity.context.providerFingerprint,
                     value.expectedStateRootUUID == identity.context.stateRootUUID
                 else {
                     throw ProviderHandoffProviderKeyStoreError.bindingMismatch
@@ -77,8 +77,8 @@ public struct ContainerEngineProviderIdentityControlResponder:
             case .destinationKeyPossession:
                 guard
                     request.bodyMediaType
-                        == ProviderHandoffProviderKeyControlCodec
-                        .possessionChallengeMediaType
+                    == ProviderHandoffProviderKeyControlCodec
+                    .possessionChallengeMediaType
                 else {
                     return Self.failure(
                         requestID: request.requestID,
@@ -87,7 +87,7 @@ public struct ContainerEngineProviderIdentityControlResponder:
                 }
                 let value =
                     try ProviderHandoffProviderKeyControlCodec
-                    .decodePossessionChallenge(body)
+                        .decodePossessionChallenge(body)
                 let proof = try identity.respond(
                     to: value.challenge,
                     trustRegistryRevision: value.trustRegistryRevision
@@ -96,14 +96,15 @@ public struct ContainerEngineProviderIdentityControlResponder:
                 return try Self.success(
                     requestID: request.requestID,
                     body:
-                        ProviderHandoffProviderKeyControlCodec
+                    ProviderHandoffProviderKeyControlCodec
                         .encodePossessionProof(proof),
                     mediaType: ProviderHandoffProviderKeyControlCodec
                         .possessionProofMediaType
                 )
             case .objectAppend, .objectDeclare, .objectRead, .objectVerify,
-                .partActivate, .partCompensate, .partPromote, .partStage,
-                .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
+                 .partActivate, .partCompensate, .partExport, .partPromote,
+                 .partStage, .sourceSignManifest,
+                 .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
                 guard let downstream else {
                     return Self.failure(
                         requestID: request.requestID,
@@ -129,8 +130,8 @@ public struct ContainerEngineProviderIdentityControlResponder:
         body: Data,
         mediaType: String
     ) throws -> ContainerEngineProviderHandoffControlResultV1 {
-        ContainerEngineProviderHandoffControlResultV1(
-            response: try ContainerEngineProviderHandoffControlResponseV1(
+        try ContainerEngineProviderHandoffControlResultV1(
+            response: ContainerEngineProviderHandoffControlResponseV1(
                 requestID: requestID,
                 disposition: .completed,
                 bodyMediaType: mediaType,
@@ -152,7 +153,7 @@ public struct ContainerEngineProviderIdentityControlResponder:
                 bodyMediaType: "application/vnd.io.github.stephenlclarke.container.handoff-error.v1+json",
                 body: body,
                 validatedMessage: String(
-                    decoding: message.utf8.prefix(1_024),
+                    decoding: message.utf8.prefix(1024),
                     as: UTF8.self
                 )
             ),

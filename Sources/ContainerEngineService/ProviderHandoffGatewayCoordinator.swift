@@ -228,6 +228,137 @@ public actor ProviderHandoffGatewayCoordinator {
         }
     }
 
+    /// Requests a source controller to produce one immutable,
+    /// destination-sealed part contribution. Replays use the same stable
+    /// request ID, and the source must return the exact durable contribution.
+    public func exportPart(
+        _ request: ProviderHandoffPartExportRequestV1,
+        source: ProviderHandoffGatewayProviderEndpointV1
+    ) async throws -> ProviderHandoffSourceContributionV1 {
+        guard
+            source.fingerprint.digest == request.sourceProviderFingerprint
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .activeTransactionMismatch
+        }
+        let body = try ProviderHandoffSourceControlCodec
+            .encodeExportRequest(request)
+        let result = try await perform(
+            operation: .partExport,
+            mediaType:
+            ProviderHandoffSourceControlCodec.exportRequestMediaType,
+            responseMediaType:
+            ProviderHandoffSourceControlCodec.contributionMediaType,
+            body: body,
+            endpoint: source,
+            identity:
+            "\(request.tokenID):\(request.manifestID):\(request.partKind.rawValue)"
+        )
+        let contribution = try ProviderHandoffSourceControlCodec
+            .decodeContribution(result.body)
+        let proofDigests = try request.destinationKeyPossessionProofs.map {
+            try ProviderHandoffProjections
+                .destinationPossessionProofRecordDigest($0)
+        }.sorted()
+        let exportRequestDigest = try ProviderHandoffSourceControlCodec
+            .exportRequestDigest(request)
+        guard
+            contribution.partKind == request.partKind,
+            contribution.tokenID == request.tokenID,
+            contribution.manifestID == request.manifestID,
+            contribution.trustRegistryRevision
+            == request.trustRegistryRevision,
+            contribution.exportRequestDigestSHA256
+            == exportRequestDigest,
+            contribution.sourceProviderFingerprint
+            == request.sourceProviderFingerprint,
+            contribution.sourceStateRootUUID
+            == request.sourceStateRootUUID,
+            contribution.authorityLineageUUID
+            == request.authorityLineageUUID,
+            contribution.lineageDigestKeyVersion
+            == request.lineageDigestKeyVersion,
+            contribution.sourcePreCommitExpectation
+            == request.sourcePreCommitExpectation,
+            contribution.destinationProviderFingerprint
+            == request.destinationProviderFingerprint,
+            contribution.destinationStateRootUUID
+            == request.destinationStateRootUUID,
+            contribution.destinationPreCommitExpectation
+            == request.destinationPreCommitExpectation,
+            contribution.destinationKeyPossessionProofDigestsSHA256
+            == proofDigests,
+            contribution.resultingAuthorityLineageUUID
+            == request.resultingAuthorityLineageUUID,
+            contribution.resultingLineageDigestKeyVersion
+            == request.resultingLineageDigestKeyVersion,
+            contribution.destinationSealedLineageKeyEnvelope
+            .destinationKeyID
+            == request.destinationLineageKeyEncryptionKey.keyID,
+            contribution.destinationSealedLineageKeyEnvelope
+            .sourceStateRootUUID == request.sourceStateRootUUID
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .invalidPartReceipt(request.partKind)
+        }
+        return contribution
+    }
+
+    /// Obtains the source provider's signature only after the gateway has
+    /// assembled the complete candidate manifest. The source independently
+    /// binds the request to its durable export contribution before signing.
+    public func signSourceManifest(
+        _ request: ProviderHandoffSourceManifestSignRequestV1,
+        source: ProviderHandoffGatewayProviderEndpointV1
+    ) async throws -> ProviderHandoffSourceManifestSignReceiptV1 {
+        let body = try ProviderHandoffSourceControlCodec
+            .encodeSignRequest(request)
+        let manifest = request.candidateManifest
+        let result = try await perform(
+            operation: .sourceSignManifest,
+            mediaType: ProviderHandoffSourceControlCodec.signRequestMediaType,
+            responseMediaType:
+            ProviderHandoffSourceControlCodec.signReceiptMediaType,
+            body: body,
+            endpoint: source,
+            identity:
+            "\(manifest.tokenID):\(manifest.manifestID):\(request.partKind.rawValue):\(request.contributionDigestSHA256)"
+        )
+        let receipt = try ProviderHandoffSourceControlCodec
+            .decodeSignReceipt(result.body)
+        guard
+            let manifestSource = manifest.sources.first(where: {
+                $0.stateRootUUID == receipt.sourceStateRootUUID
+                    && $0.providerFingerprint == source.fingerprint.digest
+            })
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .invalidPartReceipt(request.partKind)
+        }
+        let expectedProjectionDigest = try ProviderHandoffProjections
+            .sourceManifestDigest(
+                source: manifestSource,
+                manifest: manifest
+            )
+        guard
+            receipt.partKind == request.partKind,
+            receipt.tokenID == manifest.tokenID,
+            receipt.manifestID == manifest.manifestID,
+            receipt.contributionDigestSHA256
+            == request.contributionDigestSHA256,
+            receipt.sourceSignature.providerFingerprint
+            == source.fingerprint.digest,
+            receipt.sourceSignature.trustRegistryRevision
+            == manifest.trustRegistryRevision,
+            receipt.sourceProjectionDigestSHA256
+            == expectedProjectionDigest
+        else {
+            throw ProviderHandoffGatewayCoordinatorError
+                .invalidPartReceipt(request.partKind)
+        }
+        return receipt
+    }
+
     /// Copies every unique manifest object in bounded chunks, stages every
     /// closed-inventory controller part, and atomically freezes the exact
     /// manifest-order import expectations in the gateway token.
