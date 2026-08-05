@@ -139,6 +139,13 @@ public struct ProviderHandoffLineageKeyStore: Sendable {
         var query = baseQuery(account: account)
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
+        let interactionStatus =
+            ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)
+        guard interactionStatus == errSecSuccess else {
+            throw ProviderHandoffLineageKeyStoreError.keychain(
+                interactionStatus
+            )
+        }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {

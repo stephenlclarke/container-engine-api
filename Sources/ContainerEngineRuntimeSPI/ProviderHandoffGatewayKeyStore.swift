@@ -344,6 +344,13 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
         var query = baseQuery()
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
+        let interactionStatus =
+            ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)
+        guard interactionStatus == errSecSuccess else {
+            throw ProviderHandoffGatewayKeyStoreError.keychain(
+                interactionStatus
+            )
+        }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {
