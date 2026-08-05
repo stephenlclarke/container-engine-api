@@ -1,15 +1,15 @@
-# Docker Logging Engine API
+# Docker Discovery and Logging Engine API
 
 | Item | Value |
 | --- | --- |
-| Status | Implemented runtime-neutral logging surface, WebSocket attach, resize, fail-closed whole-response composition, tested provider-to-public-gateway streaming, and maintained paired transport performance evidence; production-runtime and external-client certification remain |
+| Status | Implemented runtime-neutral version discovery, container listing, logging surface, WebSocket attach, resize, fail-closed whole-response composition, tested provider-to-public-gateway streaming, and maintained paired transport performance evidence; broader route and external-client certification remain |
 | Reference | Docker Engine 29.2.1, API 1.53, minimum API 1.44 |
 | Products | `ContainerEngineLogging`, `ContainerEngineRouter`, `ContainerEngineWire`, `ContainerUnixHTTPServer` |
 | Runtime dependency | None; adopters supply one `DockerLoggingBackend` |
 
 ## Contract
 
-`DockerLoggingAPIController` is the HTTP presentation boundary for logging. It never opens a bundle path, local store, cache, provider, or live process itself. One `DockerLoggingBackend` supplies the effective default/catalog, resolved inspect configuration, historical reader, and live attach session so native and Docker clients cannot drift onto separate state or read sources. The same selected authority may also supply one `DockerLoggingSharedResponseBackend` containing complete non-logging `/info` and inspect JSON documents; this is composition inside one provider, not a gateway merge between competing authorities.
+`DockerLoggingAPIController` is the HTTP presentation boundary for discovery and logging. It never opens a bundle path, local store, cache, provider, or live process itself. One `DockerLoggingBackend` supplies the effective default/catalog, resolved inspect configuration, historical reader, and live attach session so native and Docker clients cannot drift onto separate state or read sources. The same selected authority may also supply one `DockerLoggingSharedResponseBackend` containing complete non-logging `/info` and inspect JSON documents and one `DockerEngineDiscoveryBackend` containing complete system-version and container-list JSON; this is composition inside one provider, not a gateway merge between competing authorities.
 
 The backend must resolve container names and IDs authoritatively, generation-fence any effectful reader or attach session, return only public-safe errors through `DockerLoggingBackendError`, and make `close` and `cancel` idempotent. A stopped-container reader and a running reader use the same protocol. An unsupported native/cache/provider reader throws `.unsupportedLogReader` before a streaming response starts.
 
@@ -17,6 +17,8 @@ The backend must resolve container names and IDs authoritatively, generation-fen
 
 | Method and route | Mapping |
 | --- | --- |
+| `GET /version` | Returns one complete Docker `system.Version` document after validating every non-optional top-level field required by Moby 29.2.1. |
+| `GET /containers/json` | Parses `all`, `limit`, `size`, modern array filters, and legacy Boolean filter maps, rejects malformed values before backend contact, and returns one complete validated array of Docker container summaries from the selected authority. |
 | `GET /info` | Returns `LoggingDriver` and sorted, de-duplicated `Plugins.Log`; Docker's special `none` driver is not advertised as a plugin. With a shared-response backend, it preserves the complete authority document and replaces only those two logging-owned fields. |
 | `GET /containers/{id}/json` | Returns `HostConfig.LogConfig.Type`, the full resolved string option map at `HostConfig.LogConfig.Config`, `Config.Tty`, and top-level `LogPath`. `LogPath` is non-empty only for `json-file`; local/cache/provider paths are suppressed. With a shared-response backend, it preserves every other complete authority field. |
 | `GET /containers/{id}/logs` | Validates Docker booleans and stream selection, normalizes `tail`, `since`, and `until`, then maps the backend's exact record sequence to raw TTY bytes or Docker multiplex frames. |
@@ -74,6 +76,7 @@ The immutable [v0.3.5 transport matrix](performance/engine-streaming-v0.3.5/timi
 - Supply complete `/info` and inspect documents through `DockerLoggingSharedResponseBackend` from the same selected authority, then advertise `SystemInfo` and `ContainerInspect` only after the fail-closed composition tests pass.
 - Implement `DockerTerminalResizeBackend` only when the provider can resize the exact active terminal process; otherwise leave `ContainerResize` unadvertised so the gateway returns `501`.
 - Advertise WebSocket attach only after the same live session has passed the provider-to-gateway-to-public-listener binary-stream test.
+- Implement `DockerEngineDiscoveryBackend` over the same native container authority and advertise `SystemVersion`/`ContainerList` only after complete-response, query/filter, unmodified Docker CLI, and cleanup tests pass.
 
 ## Upstream Applicability Audit
 
