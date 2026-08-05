@@ -139,8 +139,6 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
     public static let maximumHistoryBytes = 64 * 1024 * 1024
     /// The maximum encoded JSON-file bytes carried by one portable store.
     public static let maximumHistoryChunkBytes = 8 * 1024 * 1024
-    /// The defensive upper bound on stores in one portable history set.
-    public static let maximumHistoryChunkCount: UInt64 = 4096
     /// The stable store identifier used when history fits in one store.
     public static let historyStoreID = "docker-json-file-active"
 
@@ -155,7 +153,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         index: UInt64,
         count: UInt64
     ) -> String {
-        precondition(count > 1 && count <= maximumHistoryChunkCount)
+        precondition(count > 1)
         precondition(index < count)
         return String(
             format: "%@.chunk.%08llu.%08llu",
@@ -180,7 +178,6 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             let index = UInt64(fields[0]),
             let count = UInt64(fields[1]),
             count > 1,
-            count <= maximumHistoryChunkCount,
             index < count,
             historyChunkStoreID(index: index, count: count) == storeID
         else { return nil }
@@ -194,8 +191,26 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         containers: [ProviderHandoffPortableLoggingContainerV1],
         sourceStateRootUUID: String
     ) throws -> ProviderHandoffPayloadPackageV1 {
+        try package(
+            containers: containers,
+            sourceStateRootUUID: sourceStateRootUUID,
+            maximumHistoryStoreBytes: maximumHistoryChunkBytes
+        )
+    }
+
+    /// Test-only store sizing makes the aggregate store-count contract
+    /// executable without allocating the corresponding multi-gigabyte
+    /// production history.
+    @_spi(Testing)
+    public static func package(
+        containers: [ProviderHandoffPortableLoggingContainerV1],
+        sourceStateRootUUID: String,
+        maximumHistoryStoreBytes: Int
+    ) throws -> ProviderHandoffPayloadPackageV1 {
         guard
             !containers.isEmpty,
+            maximumHistoryStoreBytes > 0,
+            maximumHistoryStoreBytes <= maximumHistoryChunkBytes,
             let sourceRoot = UUID(uuidString: sourceStateRootUUID),
             sourceRoot.uuidString.lowercased() == sourceStateRootUUID
         else {
@@ -217,7 +232,8 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             try validate(container)
             let historySegments = try encodeHistory(
                 container.records,
-                containerID: container.containerID
+                containerID: container.containerID,
+                maximumHistoryStoreBytes: maximumHistoryStoreBytes
             )
             let segmentCount = UInt64(historySegments.count)
             let histories = try historySegments.enumerated().map {
@@ -225,11 +241,11 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 bytes -> (id: String, value: ProviderHandoffCanonicalValue) in
                 let storeID =
                     segmentCount == 1
-                        ? historyStoreID
-                        : historyChunkStoreID(
-                            index: UInt64(index),
-                            count: segmentCount
-                        )
+                    ? historyStoreID
+                    : historyChunkStoreID(
+                        index: UInt64(index),
+                        count: segmentCount
+                    )
                 return try (
                     id: historyEntryID(
                         containerID: container.containerID,
@@ -454,7 +470,8 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
 
     private static func encodeHistory(
         _ records: [ProviderHandoffPortableLogRecordV1],
-        containerID: String
+        containerID: String,
+        maximumHistoryStoreBytes: Int
     ) throws -> [Data] {
         var outputs = [Data()]
         for record in records {
@@ -474,15 +491,12 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                     )
                 }
                 if let current = outputs.last,
-                   !current.isEmpty,
-                   current.count + encoded.count > maximumHistoryChunkBytes
+                    !current.isEmpty,
+                    current.count + encoded.count > maximumHistoryStoreBytes
                 {
                     outputs.append(Data())
                 }
-                guard
-                    encoded.count <= maximumHistoryChunkBytes,
-                    outputs.count <= Int(maximumHistoryChunkCount)
-                else {
+                guard encoded.count <= maximumHistoryStoreBytes else {
                     throw ProviderHandoffPortableLoggingPayloadError.historyTooLarge(
                         containerID
                     )

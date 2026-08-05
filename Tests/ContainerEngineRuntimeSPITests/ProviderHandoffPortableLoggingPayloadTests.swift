@@ -3,7 +3,7 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
-import ContainerEngineRuntimeSPI
+@_spi(Testing) import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
 
@@ -151,6 +151,57 @@ struct ProviderHandoffPortableLoggingPayloadTests {
         #expect(
             byteCount
                 > ProviderHandoffPortableLoggingPayloadCodec.maximumHistoryBytes
+        )
+        #expect(
+            try ProviderHandoffPayloadCodec.decode(
+                ProviderHandoffPayloadCodec.encode(
+                    package,
+                    sourceOrder: [sourceRoot]
+                ),
+                expectedPartKind: .logging,
+                sourceOrder: [sourceRoot]
+            ) == package
+        )
+    }
+
+    @Test
+    func `portable history crosses former store count ceiling`() throws {
+        let formerMaximum = 4096
+        let package = try ProviderHandoffPortableLoggingPayloadCodec.package(
+            containers: [
+                ProviderHandoffPortableLoggingContainerV1(
+                    containerID: "container-1",
+                    providerID: "devcontainer.apple-container",
+                    providerVersion: "1",
+                    records: (0...formerMaximum).map { index in
+                        ProviderHandoffPortableLogRecordV1(
+                            secondsSinceUnixEpoch: Int64(index),
+                            nanoseconds: 0,
+                            stream: .stdout,
+                            data: Data("x\n".utf8)
+                        )
+                    }
+                )
+            ],
+            sourceStateRootUUID: sourceRoot,
+            maximumHistoryStoreBytes: 96
+        )
+        let histories = package.entries.filter {
+            $0.recordKind == "logging-history-store-v1"
+        }
+        #expect(histories.count == formerMaximum + 1)
+        let last = try map(
+            ProviderHandoffCanonicalCBOR.decode(
+                #require(histories.last).canonicalRecordBytes
+            )
+        )
+        #expect(
+            try ProviderHandoffPortableLoggingPayloadCodec
+                .parseHistoryChunkStoreID(text(last["storeID"]))
+                == ProviderHandoffPortableLoggingHistoryChunkV1(
+                    index: UInt64(formerMaximum),
+                    count: UInt64(formerMaximum + 1)
+                )
         )
         #expect(
             try ProviderHandoffPayloadCodec.decode(
