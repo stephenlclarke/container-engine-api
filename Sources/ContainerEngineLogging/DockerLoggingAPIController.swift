@@ -27,6 +27,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     private let backend: any DockerLoggingBackend
     private let discoveryBackend: (any DockerEngineDiscoveryBackend)?
     private let imageDiscoveryBackend: (any DockerImageDiscoveryBackend)?
+    private let imageMutationBackend: (any DockerImageMutationBackend)?
     private let lifecycleBackend: (any DockerContainerLifecycleBackend)?
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
     private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
@@ -40,16 +41,19 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         let lifecycleBackend = backend as? any DockerContainerLifecycleBackend
         let discoveryBackend = backend as? any DockerEngineDiscoveryBackend
         let imageDiscoveryBackend = backend as? any DockerImageDiscoveryBackend
+        let imageMutationBackend = backend as? any DockerImageMutationBackend
         routeLedger = try Self.makeRouteLedger(
             minimum: minimumAPIVersion,
             maximum: maximumAPIVersion,
             includesLifecycle: lifecycleBackend != nil,
             includesDiscovery: discoveryBackend != nil,
-            includesImageDiscovery: imageDiscoveryBackend != nil
+            includesImageDiscovery: imageDiscoveryBackend != nil,
+            includesImageMutation: imageMutationBackend != nil
         )
         self.backend = backend
         self.discoveryBackend = discoveryBackend
         self.imageDiscoveryBackend = imageDiscoveryBackend
+        self.imageMutationBackend = imageMutationBackend
         self.lifecycleBackend = lifecycleBackend
         self.sharedResponseBackend = sharedResponseBackend
         terminalResizeBackend = backend as? any DockerTerminalResizeBackend
@@ -138,6 +142,18 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         case RouteIdentifier.imageInspect:
             return await imageInspectResponse(
                 name: match.parameters["name"] ?? ""
+            )
+        case RouteIdentifier.imagePull:
+            return await imagePullResponse(request: request, target: match.target)
+        case RouteIdentifier.imageTag:
+            return await imageTagResponse(
+                name: match.parameters["name"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.imageDelete:
+            return await imageDeleteResponse(
+                name: match.parameters["name"] ?? "",
+                target: match.target
             )
         case RouteIdentifier.create:
             return await createResponse(request: request, target: match.target)
@@ -271,6 +287,70 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 requiredKeys: Self.imageInspectRequiredKeys
             )
             return try Self.jsonObjectLineResponse(object)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func imagePullResponse(
+        request: DockerHTTPRequest,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let imageMutationBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let pullRequest = try Self.imagePullRequest(
+                request: request,
+                target: target
+            )
+            let result = try await imageMutationBackend.pullImage(
+                request: pullRequest
+            )
+            return Self.imagePullResponse(result)
+        } catch let error as QueryError {
+            return Self.errorResponse(status: error.status, message: error.message)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func imageTagResponse(
+        name: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let imageMutationBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            try await imageMutationBackend.tagImage(
+                name: name,
+                request: Self.imageTagRequest(target: target)
+            )
+            return .empty(status: 201)
+        } catch let error as QueryError {
+            return Self.errorResponse(status: error.status, message: error.message)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func imageDeleteResponse(
+        name: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let imageMutationBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let results = try await imageMutationBackend.deleteImage(
+                name: name,
+                request: DockerImageDeleteRequest(
+                    force: Self.boolValue(target.first("force")),
+                    prune: !Self.boolValue(target.first("noprune"))
+                )
+            )
+            return Self.jsonLineResponse(results)
         } catch {
             return Self.backendErrorResponse(error)
         }
@@ -691,6 +771,43 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         )
     }
 
+    private static func imagePullRequest(
+        request: DockerHTTPRequest,
+        target: DockerRequestTarget
+    ) throws -> DockerImagePullRequest {
+        guard let fromImage = target.first("fromImage"), !fromImage.isEmpty else {
+            throw QueryError(status: 400, message: "fromImage is required")
+        }
+        let registryAuth: String?
+        do {
+            registryAuth = try request.uniqueHeader("X-Registry-Auth")
+        } catch {
+            throw QueryError(
+                status: 400,
+                message: "X-Registry-Auth must occur at most once"
+            )
+        }
+        return DockerImagePullRequest(
+            fromImage: fromImage,
+            tag: target.first("tag").flatMap { $0.isEmpty ? nil : $0 },
+            platform: target.first("platform").flatMap { $0.isEmpty ? nil : $0 },
+            registryAuth: registryAuth
+        )
+    }
+
+    private static func imageTagRequest(
+        target: DockerRequestTarget
+    ) throws -> DockerImageTagRequest {
+        guard let repository = target.first("repo"), !repository.isEmpty else {
+            throw QueryError(status: 400, message: "repo is required")
+        }
+        return DockerImageTagRequest(
+            repository: repository,
+            tag: target.first("tag").flatMap { $0.isEmpty ? nil : $0 }
+                ?? "latest"
+        )
+    }
+
     private static func imageListFilters(
         _ raw: String?
     ) throws -> [String: [String]] {
@@ -1080,12 +1197,69 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         }
     }
 
+    private static func imagePullResponse(
+        _ result: DockerImagePullResult
+    ) -> DockerHTTPResponse {
+        let components = imageReferenceComponents(result.displayReference)
+        let pullRepository = components.repository.contains("/")
+            ? components.repository
+            : "library/\(components.repository)"
+        let finalStatus = result.upToDate
+            ? "Image is up to date for \(result.displayReference)"
+            : "Downloaded newer image for \(result.displayReference)"
+        let updates = [
+            ImagePullProgress(
+                status: "Pulling from \(pullRepository)",
+                id: components.tag
+            ),
+            ImagePullProgress(status: "Digest: \(result.digest)"),
+            ImagePullProgress(status: "Status: \(finalStatus)")
+        ]
+        do {
+            var data = Data()
+            for update in updates {
+                try data.append(DockerJSON.encoder.encode(update))
+                data.append(UInt8(ascii: "\n"))
+            }
+            return DockerHTTPResponse(
+                status: 200,
+                headers: ["Content-Type": "application/json"],
+                body: .bytes(data)
+            )
+        } catch {
+            return errorResponse(status: 500, message: "server error")
+        }
+    }
+
+    private static func imageReferenceComponents(
+        _ reference: String
+    ) -> (repository: String, tag: String?) {
+        let withoutDigest = reference.split(separator: "@", maxSplits: 1)
+            .first.map(String.init) ?? reference
+        let slash = withoutDigest.lastIndex(of: "/")
+        let suffixStart = slash.map { withoutDigest.index(after: $0) }
+            ?? withoutDigest.startIndex
+        let suffix = withoutDigest[suffixStart...]
+        guard let colon = suffix.lastIndex(of: ":") else {
+            return (withoutDigest, nil)
+        }
+        let absoluteColon = withoutDigest.index(
+            suffixStart,
+            offsetBy: suffix.distance(from: suffix.startIndex, to: colon)
+        )
+        return (
+            String(withoutDigest[..<absoluteColon]),
+            String(withoutDigest[withoutDigest.index(after: absoluteColon)...])
+        )
+    }
+
     private static func makeRouteLedger(
         minimum: DockerAPIVersion,
         maximum: DockerAPIVersion,
         includesLifecycle: Bool,
         includesDiscovery: Bool,
-        includesImageDiscovery: Bool
+        includesImageDiscovery: Bool,
+        includesImageMutation: Bool
     ) throws -> DockerRouteLedger {
         var routes = try [
             DockerRouteMetadata(
@@ -1213,6 +1387,34 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 )
             ])
         }
+        if includesImageMutation {
+            try routes.append(contentsOf: [
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.imagePull,
+                    method: .post,
+                    pattern: DockerRoutePattern("/images/create"),
+                    introduced: minimum,
+                    responseMode: .stream,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.imageTag,
+                    method: .post,
+                    pattern: DockerRoutePattern("/images/{name...}/tag"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.imageDelete,
+                    method: .delete,
+                    pattern: DockerRoutePattern("/images/{name...}"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                )
+            ])
+        }
         return try DockerRouteLedger(
             minimumAPIVersion: minimum,
             maximumAPIVersion: maximum,
@@ -1240,6 +1442,30 @@ private enum RouteIdentifier {
     static let version = "system.version"
     static let imageList = "image.list"
     static let imageInspect = "image.inspect"
+    static let imagePull = "image.pull"
+    static let imageTag = "image.tag"
+    static let imageDelete = "image.delete"
+}
+
+private struct ImagePullProgress: Encodable {
+    let status: String
+    let id: String?
+
+    init(status: String, id: String? = nil) {
+        self.status = status
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case id
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(id, forKey: .id)
+    }
 }
 
 private struct CreateResponse: Encodable {

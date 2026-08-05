@@ -298,6 +298,107 @@ func `image list rejects malformed filters before calling its backend`() async t
 }
 
 @Test
+func `image pull tag and delete use the native mutation authority`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let pullRequest = try DockerHTTPRequest(
+        method: .post,
+        target:
+        "/v1.53/images/create?fromImage=docker.io%2Flibrary%2Falpine&tag=3.20&platform=linux%2Farm64%2Fv8",
+        uniqueHeaders: ["X-Registry-Auth": "e30="]
+    )
+
+    let pull = await controller.respond(to: pullRequest)
+    #expect(pull.status == 200)
+    #expect(pull.headers["Content-Type"] == "application/json")
+    let updates = try responseData(pull)
+        .split(separator: UInt8(ascii: "\n"))
+        .map { try DockerJSON.decoder.decode(PullStatusPayload.self, from: Data($0)) }
+    #expect(
+        updates == [
+            PullStatusPayload(status: "Pulling from library/alpine", id: "3.20"),
+            PullStatusPayload(status: "Digest: sha256:image-index"),
+            PullStatusPayload(status: "Status: Image is up to date for alpine:3.20")
+        ]
+    )
+    #expect(
+        backend.lastImagePullRequest
+            == DockerImagePullRequest(
+                fromImage: "docker.io/library/alpine",
+                tag: "3.20",
+                platform: "linux/arm64/v8",
+                registryAuth: "e30="
+            )
+    )
+
+    let tag = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target:
+            "/images/docker.io/library/alpine:3.20/tag?repo=fixture.local%2Falpine&tag=copy"
+        )
+    )
+    #expect(tag.status == 201)
+    #expect(try responseData(tag).isEmpty)
+    #expect(backend.lastImageTagName == "docker.io/library/alpine:3.20")
+    #expect(
+        backend.lastImageTagRequest
+            == DockerImageTagRequest(repository: "fixture.local/alpine", tag: "copy")
+    )
+
+    let delete = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .delete,
+            target: "/images/fixture.local/alpine:copy?force=1&noprune=1"
+        )
+    )
+    #expect(delete.status == 200)
+    #expect(
+        try DockerJSON.decoder.decode(
+            [DockerImageDeleteResult].self,
+            from: responseData(delete)
+        ) == [DockerImageDeleteResult(untagged: "fixture.local/alpine:copy")]
+    )
+    #expect(backend.lastImageDeleteName == "fixture.local/alpine:copy")
+    #expect(
+        backend.lastImageDeleteRequest
+            == DockerImageDeleteRequest(force: true, prune: false)
+    )
+}
+
+@Test
+func `image mutation validates queries and preserves not found errors`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let missingFromImage = await controller.respond(
+        to: DockerHTTPRequest(method: .post, target: "/images/create")
+    )
+    #expect(missingFromImage.status == 400)
+    #expect(try errorMessage(missingFromImage) == "fromImage is required")
+    #expect(backend.lastImagePullRequest == nil)
+
+    let missingRepository = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/images/alpine:3.20/tag"
+        )
+    )
+    #expect(missingRepository.status == 400)
+    #expect(try errorMessage(missingRepository) == "repo is required")
+    #expect(backend.lastImageTagRequest == nil)
+
+    let missingImage = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .delete,
+            target: "/images/missing:latest"
+        )
+    )
+    #expect(missingImage.status == 404)
+    #expect(try errorMessage(missingImage) == "No such image: missing:latest")
+}
+
+@Test
 func `logging routes enforce API version range and Docker error envelopes`() async throws {
     let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
     let controller = try DockerLoggingAPIController(backend: backend)
@@ -992,11 +1093,22 @@ private struct InspectLogConfigPayload: Decodable {
     }
 }
 
+private struct PullStatusPayload: Codable, Equatable {
+    let status: String
+    let id: String?
+
+    init(status: String, id: String? = nil) {
+        self.status = status
+        self.id = id
+    }
+}
+
 private final class FakeLoggingBackend:
     DockerLoggingBackend,
     DockerContainerLifecycleBackend,
     DockerEngineDiscoveryBackend,
     DockerImageDiscoveryBackend,
+    DockerImageMutationBackend,
     DockerTerminalResizeBackend,
     @unchecked Sendable
 {
@@ -1014,6 +1126,11 @@ private final class FakeLoggingBackend:
     private var capturedListRequest: DockerContainerListRequest?
     private var capturedImageListRequest: DockerImageListRequest?
     private var capturedImageInspectName: String?
+    private var capturedImagePullRequest: DockerImagePullRequest?
+    private var capturedImageTagName: String?
+    private var capturedImageTagRequest: DockerImageTagRequest?
+    private var capturedImageDeleteName: String?
+    private var capturedImageDeleteRequest: DockerImageDeleteRequest?
 
     init(
         reader: FakeLogReadSession,
@@ -1061,6 +1178,26 @@ private final class FakeLoggingBackend:
 
     var lastImageInspectName: String? {
         lock.withLock { capturedImageInspectName }
+    }
+
+    var lastImagePullRequest: DockerImagePullRequest? {
+        lock.withLock { capturedImagePullRequest }
+    }
+
+    var lastImageTagName: String? {
+        lock.withLock { capturedImageTagName }
+    }
+
+    var lastImageTagRequest: DockerImageTagRequest? {
+        lock.withLock { capturedImageTagRequest }
+    }
+
+    var lastImageDeleteName: String? {
+        lock.withLock { capturedImageDeleteName }
+    }
+
+    var lastImageDeleteRequest: DockerImageDeleteRequest? {
+        lock.withLock { capturedImageDeleteRequest }
     }
 
     func systemVersionJSON() async throws -> Data {
@@ -1161,6 +1298,46 @@ private final class FakeLoggingBackend:
                 "Variant": "v8"
             ]
         )
+    }
+
+    func pullImage(
+        request: DockerImagePullRequest
+    ) async throws -> DockerImagePullResult {
+        lock.withLock {
+            capturedImagePullRequest = request
+        }
+        return DockerImagePullResult(
+            displayReference: "alpine:3.20",
+            digest: "sha256:image-index",
+            upToDate: true
+        )
+    }
+
+    func tagImage(
+        name: String,
+        request: DockerImageTagRequest
+    ) async throws {
+        lock.withLock {
+            capturedImageTagName = name
+            capturedImageTagRequest = request
+        }
+        if name == "missing:latest" {
+            throw DockerLoggingBackendError.imageNotFound(name)
+        }
+    }
+
+    func deleteImage(
+        name: String,
+        request: DockerImageDeleteRequest
+    ) async throws -> [DockerImageDeleteResult] {
+        lock.withLock {
+            capturedImageDeleteName = name
+            capturedImageDeleteRequest = request
+        }
+        if name == "missing:latest" {
+            throw DockerLoggingBackendError.imageNotFound(name)
+        }
+        return [DockerImageDeleteResult(untagged: name)]
     }
 
     func createContainer(
