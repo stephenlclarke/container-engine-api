@@ -329,7 +329,7 @@ func `logging routes enforce API version range and Docker error envelopes`() asy
     )
 
     let missingRoute = await controller.respond(
-        to: DockerHTTPRequest(method: .get, target: "/v1.53/images/json")
+        to: DockerHTTPRequest(method: .get, target: "/v1.53/not-a-docker-route")
     )
     #expect(missingRoute.status == 404)
     #expect(try errorMessage(missingRoute) == "page not found")
