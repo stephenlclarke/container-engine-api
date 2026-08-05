@@ -580,10 +580,8 @@ public enum ProviderHandoffPayloadCodec {
         )
     }
 
-    /// Opens a framed payload through bounded authenticated windows. The
-    /// canonical bytes remain file-backed until the existing v1 package
-    /// decoder is invoked; callers may retain the file for a streaming entry
-    /// decoder or remove it after this compatibility return path.
+    /// Compatibility opener that materializes entry values after using the
+    /// bounded file-backed decoder.
     public static func openSealedFile(
         _ payload: ProviderHandoffPreparedPayloadFileV2,
         canonicalFileURL: URL,
@@ -596,6 +594,61 @@ public enum ProviderHandoffPayloadCodec {
         destinationStateRootUUID: String,
         destinationPrivateKey: Data
     ) throws -> ProviderHandoffPayloadPackageV1 {
+        let recordDirectoryURL = canonicalFileURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                ".provider-handoff-records-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: recordDirectoryURL,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: recordDirectoryURL) }
+        let source = try openSealedFileSource(
+            payload,
+            canonicalFileURL: canonicalFileURL,
+            recordDirectoryURL: recordDirectoryURL,
+            expectedPartKind: expectedPartKind,
+            tokenID: tokenID,
+            manifestID: manifestID,
+            sourceOrder: sourceOrder,
+            lineageKeys: lineageKeys,
+            destinationProviderFingerprint: destinationProviderFingerprint,
+            destinationStateRootUUID: destinationStateRootUUID,
+            destinationPrivateKey: destinationPrivateKey
+        )
+        return ProviderHandoffPayloadPackageV1(
+            partKind: source.partKind,
+            entries: try source.entries.map { entry in
+                ProviderHandoffPayloadPackageEntryV1(
+                    entryID: entry.entryID,
+                    sourceStateRootUUID: entry.sourceStateRootUUID,
+                    recordKind: entry.recordKind,
+                    schemaVersion: entry.schemaVersion,
+                    canonicalRecordBytes: try mappedRecordData(
+                        entry.canonicalRecord
+                    )
+                )
+            }
+        )
+    }
+
+    /// Opens and validates a framed payload while keeping each canonical
+    /// record in a separate caller-owned file.
+    public static func openSealedFileSource(
+        _ payload: ProviderHandoffPreparedPayloadFileV2,
+        canonicalFileURL: URL,
+        recordDirectoryURL: URL,
+        expectedPartKind: ProviderHandoffPartKindV1,
+        tokenID: String,
+        manifestID: String,
+        sourceOrder: [String],
+        lineageKeys: [ProviderHandoffLineageKeyV1],
+        destinationProviderFingerprint: String,
+        destinationStateRootUUID: String,
+        destinationPrivateKey: Data
+    ) throws -> ProviderHandoffPayloadPackageSourceV2 {
         let descriptor = payload.descriptor
         guard
             descriptor.canonicalEncoding == .deterministicCBORV1,
@@ -717,14 +770,12 @@ public enum ProviderHandoffPayloadCodec {
         }
         try output.synchronize()
         completed = true
-        let canonical = try Data(
-            contentsOf: canonicalFileURL,
-            options: .mappedIfSafe
-        )
-        let package = try decode(
-            canonical,
+        let package = try ProviderHandoffPayloadPackageFileDecoder.decode(
+            canonicalFileURL: canonicalFileURL,
+            recordDirectoryURL: recordDirectoryURL,
             expectedPartKind: expectedPartKind,
-            sourceOrder: sourceOrder
+            maximumCollectionEntries: 1_000_000,
+            maximumCanonicalRecordBytes: 64 * 1024 * 1024
         )
         let digest = try sealedContentDigest(
             package,

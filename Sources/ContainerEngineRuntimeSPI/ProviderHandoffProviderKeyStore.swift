@@ -342,6 +342,43 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
             destinationPrivateKey: privateKey
         )
     }
+
+    public func openFileSource(
+        _ payload: ProviderHandoffPreparedPayloadFileV2,
+        canonicalFileURL: URL,
+        recordDirectoryURL: URL,
+        expectedPartKind: ProviderHandoffPartKindV1,
+        tokenID: String,
+        manifestID: String,
+        sourceOrder: [String],
+        lineageKeys: [ProviderHandoffLineageKeyV1]
+    ) throws -> ProviderHandoffPayloadPackageSourceV2 {
+        guard
+            payload.descriptor.destinationEncryption?.destinationKeyPurpose
+                == .destinationPayloadEncryption,
+            let keyID = payload.descriptor.destinationEncryption?
+                .destinationKeyID,
+            try trustKey(for: .destinationPayloadEncryption).keyID == keyID,
+            let privateKey = privateKeysByPurpose[
+                .destinationPayloadEncryption
+            ]
+        else {
+            throw ProviderHandoffProviderKeyStoreError.bindingMismatch
+        }
+        return try ProviderHandoffPayloadCodec.openSealedFileSource(
+            payload,
+            canonicalFileURL: canonicalFileURL,
+            recordDirectoryURL: recordDirectoryURL,
+            expectedPartKind: expectedPartKind,
+            tokenID: tokenID,
+            manifestID: manifestID,
+            sourceOrder: sourceOrder,
+            lineageKeys: lineageKeys,
+            destinationProviderFingerprint: context.providerFingerprint,
+            destinationStateRootUUID: context.stateRootUUID,
+            destinationPrivateKey: privateKey
+        )
+    }
 }
 
 /// Current-user Keychain persistence for provider-owned handoff private keys.

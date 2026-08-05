@@ -321,6 +321,37 @@ struct ProviderHandoffCodecTests {
                 destinationPrivateKey: destinationPrivateKey
             ) == package
         )
+        let recordDirectory = root.appendingPathComponent(
+            "opened-records",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: recordDirectory,
+            withIntermediateDirectories: false
+        )
+        let opened = try ProviderHandoffPayloadCodec.openSealedFileSource(
+            payload,
+            canonicalFileURL: root.appendingPathComponent("canonical-source"),
+            recordDirectoryURL: recordDirectory,
+            expectedPartKind: .logging,
+            tokenID: "token-1",
+            manifestID: "manifest-1",
+            sourceOrder: [source],
+            lineageKeys: [lineageKey],
+            destinationProviderFingerprint: "sha256:destination",
+            destinationStateRootUUID: destination,
+            destinationPrivateKey: destinationPrivateKey
+        )
+        #expect(opened.entries.count == 1)
+        guard
+            case let .file(openedRecordURL, openedByteLength) =
+                opened.entries[0].canonicalRecord
+        else {
+            Issue.record("expected a file-backed canonical record")
+            return
+        }
+        #expect(openedByteLength == UInt64(record.count))
+        #expect(try Data(contentsOf: openedRecordURL) == record)
     }
 
     @Test
