@@ -280,6 +280,10 @@ public struct ProviderHandoffGatewayIdentityV1: Sendable {
 public struct ProviderHandoffGatewayKeyStore: Sendable {
     public static let maximumKeySetBytes = 64 * 1024
 
+    public static func account(forStateRootUUID stateRootUUID: UUID) -> String {
+        "gateway-private-keys-v1.\(stateRootUUID.uuidString.lowercased())"
+    }
+
     public let service: String
     public let account: String
     public let accessGroup: String?

@@ -12,6 +12,36 @@ import Testing
 @testable import ContainerEngineService
 
 struct ContainerEngineServiceTests {
+    @Test func `production trust stores are scoped to selected provider root`() {
+        let firstRoot = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let secondRoot = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+        let first = ContainerEngineServiceTrustConfiguration.production.scoped(
+            to: firstRoot
+        )
+        let second = ContainerEngineServiceTrustConfiguration.production.scoped(
+            to: secondRoot
+        )
+
+        #expect(first.gatewayKeyStore.account != second.gatewayKeyStore.account)
+        #expect(first.trustRegistryStore.account != second.trustRegistryStore.account)
+        #expect(
+            first.gatewayKeyStore.account
+                == "gateway-private-keys-v1.11111111-2222-3333-4444-555555555555"
+        )
+        #expect(
+            first.trustRegistryStore.account
+                == "trust-registry-v1.11111111-2222-3333-4444-555555555555"
+        )
+
+        let injected = ContainerEngineServiceTrustConfiguration(
+            gatewayKeyStore: ProviderHandoffGatewayKeyStore(account: "gateway"),
+            trustRegistryStore: ProviderHandoffTrustRegistryStore(account: "registry"),
+            nowUnixSeconds: 1
+        ).scoped(to: firstRoot)
+        #expect(injected.gatewayKeyStore.account == "gateway")
+        #expect(injected.trustRegistryStore.account == "registry")
+    }
+
     @Test func `parses required options in any order`() throws {
         let options = try ContainerEngineServiceOptions(
             arguments: [

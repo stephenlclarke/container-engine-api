@@ -54,11 +54,14 @@ public enum ContainerEngineServiceRunner {
         let descriptor = try await ContainerEngineProviderSessionClient.probe(
             socketPath: options.providerSocket
         )
+        let scopedTrustConfiguration = trustConfiguration.scoped(
+            to: descriptor.fingerprint.stateRootUUID
+        )
         let stateDirectory = URL(fileURLWithPath: options.stateDirectory, isDirectory: true)
         let handoffTrust = try await prepareProviderHandoffTrust(
             descriptor: descriptor,
             providerSocket: options.providerSocket,
-            configuration: trustConfiguration
+            configuration: scopedTrustConfiguration
         )
         let trustRegistryRevision = handoffTrust.registryRevision
         let handoffStore = ProviderHandoffGatewayStore(
@@ -104,7 +107,7 @@ public enum ContainerEngineServiceRunner {
             )
         }
         let selected = descriptor.fingerprint
-        let configuredNow = trustConfiguration.nowUnixSeconds
+        let configuredNow = scopedTrustConfiguration.nowUnixSeconds
         let handoffCoordinator = handoffTrust.gatewayIdentity.map {
             ProviderHandoffGatewayCoordinator(
                 store: handoffStore,
@@ -113,7 +116,7 @@ public enum ContainerEngineServiceRunner {
                 ProviderHandoffGatewayManifestAuthorityV1(
                     gatewayIdentity: $0,
                     trustRegistryStore:
-                    trustConfiguration.trustRegistryStore,
+                    scopedTrustConfiguration.trustRegistryStore,
                     possessionProofStore:
                     ProviderHandoffPossessionProofStore(
                         root: stateDirectory
@@ -367,11 +370,50 @@ struct ContainerEngineServiceTrustConfiguration: Sendable {
     var gatewayKeyStore: ProviderHandoffGatewayKeyStore
     var trustRegistryStore: ProviderHandoffTrustRegistryStore
     var nowUnixSeconds: UInt64?
+    var scopesKeychainAccountsToProviderRoot: Bool
+
+    init(
+        gatewayKeyStore: ProviderHandoffGatewayKeyStore,
+        trustRegistryStore: ProviderHandoffTrustRegistryStore,
+        nowUnixSeconds: UInt64?,
+        scopesKeychainAccountsToProviderRoot: Bool = false
+    ) {
+        self.gatewayKeyStore = gatewayKeyStore
+        self.trustRegistryStore = trustRegistryStore
+        self.nowUnixSeconds = nowUnixSeconds
+        self.scopesKeychainAccountsToProviderRoot =
+            scopesKeychainAccountsToProviderRoot
+    }
+
+    func scoped(to stateRootUUID: UUID) -> Self {
+        guard scopesKeychainAccountsToProviderRoot else {
+            return self
+        }
+        return Self(
+            gatewayKeyStore: ProviderHandoffGatewayKeyStore(
+                service: gatewayKeyStore.service,
+                account: ProviderHandoffGatewayKeyStore.account(
+                    forStateRootUUID: stateRootUUID
+                ),
+                accessGroup: gatewayKeyStore.accessGroup
+            ),
+            trustRegistryStore: ProviderHandoffTrustRegistryStore(
+                service: trustRegistryStore.service,
+                account: ProviderHandoffTrustRegistryStore.account(
+                    forStateRootUUID: stateRootUUID
+                ),
+                accessGroup: trustRegistryStore.accessGroup
+            ),
+            nowUnixSeconds: nowUnixSeconds,
+            scopesKeychainAccountsToProviderRoot: true
+        )
+    }
 
     static let production = ContainerEngineServiceTrustConfiguration(
         gatewayKeyStore: ProviderHandoffGatewayKeyStore(),
         trustRegistryStore: ProviderHandoffTrustRegistryStore(),
-        nowUnixSeconds: nil
+        nowUnixSeconds: nil,
+        scopesKeychainAccountsToProviderRoot: true
     )
 }
 

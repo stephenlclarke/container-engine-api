@@ -56,6 +56,10 @@ public enum ProviderHandoffTrustRegistryStoreError:
 public struct ProviderHandoffTrustRegistryStore: Sendable {
     public static let maximumRegistryBytes = 4 * 1024 * 1024
 
+    public static func account(forStateRootUUID stateRootUUID: UUID) -> String {
+        "trust-registry-v1.\(stateRootUUID.uuidString.lowercased())"
+    }
+
     public let service: String
     public let account: String
     public let accessGroup: String?
