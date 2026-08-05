@@ -215,6 +215,7 @@ public struct DockerRoutePattern: Codable, Hashable, Sendable {
     private enum Segment: Hashable, Sendable {
         case literal(String)
         case parameter(String)
+        case pathParameter(String)
     }
 
     public let template: String
@@ -230,18 +231,29 @@ public struct DockerRoutePattern: Codable, Hashable, Sendable {
         ).map(String.init)
         var names: Set<String> = []
         var parsed: [Segment] = []
+        var hasPathParameter = false
         for value in values {
             if value.hasPrefix("{"), value.hasSuffix("}") {
-                let name = String(value.dropFirst().dropLast())
+                let rawName = String(value.dropFirst().dropLast())
+                let pathParameter = rawName.hasSuffix("...")
+                let name = pathParameter
+                    ? String(rawName.dropLast(3))
+                    : rawName
                 guard
                     !name.isEmpty,
                     !name.contains("{"),
                     !name.contains("}"),
+                    !(pathParameter && hasPathParameter),
                     names.insert(name).inserted
                 else {
                     throw DockerRoutingError.invalidRoutePattern(template)
                 }
-                parsed.append(.parameter(name))
+                if pathParameter {
+                    parsed.append(.pathParameter(name))
+                    hasPathParameter = true
+                } else {
+                    parsed.append(.parameter(name))
+                }
             } else {
                 guard
                     !value.contains("{"),
@@ -267,16 +279,46 @@ public struct DockerRoutePattern: Codable, Hashable, Sendable {
                 value
             case .parameter:
                 "{}"
+            case .pathParameter:
+                "{...}"
             }
         }.joined(separator: "/")
     }
 
     public func match(_ target: DockerRequestTarget) -> [String: String]? {
-        guard target.segments.count == segments.count else {
+        guard let pathIndex = segments.firstIndex(where: {
+            if case .pathParameter = $0 {
+                return true
+            }
+            return false
+        }) else {
+            guard target.segments.count == segments.count else {
+                return nil
+            }
+            var parameters: [String: String] = [:]
+            for (pattern, actual) in zip(segments, target.segments) {
+                switch pattern {
+                case let .literal(expected):
+                    guard expected == actual else {
+                        return nil
+                    }
+                case let .parameter(name):
+                    parameters[name] = actual
+                case .pathParameter:
+                    return nil
+                }
+            }
+            return parameters
+        }
+
+        let suffixCount = segments.count - pathIndex - 1
+        guard target.segments.count >= segments.count else {
             return nil
         }
         var parameters: [String: String] = [:]
-        for (pattern, actual) in zip(segments, target.segments) {
+        for index in 0 ..< pathIndex {
+            let pattern = segments[index]
+            let actual = target.segments[index]
             switch pattern {
             case let .literal(expected):
                 guard expected == actual else {
@@ -284,6 +326,30 @@ public struct DockerRoutePattern: Codable, Hashable, Sendable {
                 }
             case let .parameter(name):
                 parameters[name] = actual
+            case .pathParameter:
+                return nil
+            }
+        }
+        guard case let .pathParameter(name) = segments[pathIndex] else {
+            return nil
+        }
+        let captureEnd = target.segments.count - suffixCount
+        parameters[name] = target.segments[pathIndex ..< captureEnd]
+            .joined(separator: "/")
+        for offset in 0 ..< suffixCount {
+            let patternIndex = pathIndex + 1 + offset
+            let targetIndex = captureEnd + offset
+            let pattern = segments[patternIndex]
+            let actual = target.segments[targetIndex]
+            switch pattern {
+            case let .literal(expected):
+                guard expected == actual else {
+                    return nil
+                }
+            case let .parameter(parameterName):
+                parameters[parameterName] = actual
+            case .pathParameter:
+                return nil
             }
         }
         return parameters
@@ -292,11 +358,14 @@ public struct DockerRoutePattern: Codable, Hashable, Sendable {
     func isMoreSpecific(than other: DockerRoutePattern) -> Bool {
         for (candidate, current) in zip(segments, other.segments) {
             switch (candidate, current) {
-            case (.literal, .parameter):
+            case (.literal, .parameter), (.literal, .pathParameter),
+                 (.parameter, .pathParameter):
                 return true
-            case (.parameter, .literal):
+            case (.parameter, .literal), (.pathParameter, .literal),
+                 (.pathParameter, .parameter):
                 return false
-            case (.literal, .literal), (.parameter, .parameter):
+            case (.literal, .literal), (.parameter, .parameter),
+                 (.pathParameter, .pathParameter):
                 continue
             }
         }

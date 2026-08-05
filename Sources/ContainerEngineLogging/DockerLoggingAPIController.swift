@@ -1206,7 +1206,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 DockerRouteMetadata(
                     identifier: RouteIdentifier.imageInspect,
                     method: .get,
-                    pattern: DockerRoutePattern("/images/{name}/json"),
+                    pattern: DockerRoutePattern("/images/{name...}/json"),
                     introduced: minimum,
                     responseMode: .bytes,
                     disposition: .implemented

@@ -133,6 +133,51 @@ func `route ledger matches versioned and unversioned requests`() throws {
 }
 
 @Test
+func `path parameters capture unescaped and escaped image references`() throws {
+    let metadata = try DockerRouteMetadata(
+        identifier: "image.inspect",
+        method: .get,
+        pattern: DockerRoutePattern("/images/{name...}/json"),
+        introduced: DockerAPIVersion("1.44"),
+        responseMode: .bytes,
+        disposition: .implemented
+    )
+    let ledger = try DockerRouteLedger(
+        minimumAPIVersion: DockerAPIVersion("1.44"),
+        maximumAPIVersion: DockerAPIVersion("1.53"),
+        routes: [metadata]
+    )
+
+    #expect(
+        try ledger.match(
+            DockerHTTPRequest(
+                method: .get,
+                target: "/images/docker.io/library/alpine:3.20/json"
+            )
+        )?.parameters == ["name": "docker.io/library/alpine:3.20"]
+    )
+    #expect(
+        try ledger.match(
+            DockerHTTPRequest(
+                method: .get,
+                target: "/images/docker.io%2Flibrary%2Falpine:3.20/json"
+            )
+        )?.parameters == ["name": "docker.io/library/alpine:3.20"]
+    )
+    #expect(
+        try ledger.match(
+            DockerHTTPRequest(
+                method: .get,
+                target: "/images/docker.io/library/alpine:3.20/history"
+            )
+        ) == nil
+    )
+    #expect(throws: DockerRoutingError.self) {
+        try DockerRoutePattern("/images/{first...}/{second...}")
+    }
+}
+
+@Test
 func `unknown routes return no match before API version validation`() throws {
     let ledger = try DockerEngineAPIRouteLedger.make()
 

@@ -262,6 +262,15 @@ func `image list and inspect expose complete native discovery documents`() async
     #expect(inspectObject["Id"] as? String == "sha256:image-index")
     #expect(backend.lastImageInspectName == "alpine:3.20")
 
+    let normalizedInspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/docker.io/library/alpine:3.20/json"
+        )
+    )
+    #expect(normalizedInspect.status == 200)
+    #expect(backend.lastImageInspectName == "docker.io/library/alpine:3.20")
+
     let missing = await controller.respond(
         to: DockerHTTPRequest(
             method: .get,
