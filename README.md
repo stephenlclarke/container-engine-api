@@ -1,12 +1,22 @@
-<!-- markdownlint-disable MD033 -->
-<h1>
-  <img
-    alt="container-engine-api icon: frosted engine and container panel"
-    src="docs/images/container-engine-api-icon.png"
-    width="70"
-    valign="middle">
-  &nbsp;container-engine-api
-</h1>
+# container-engine-api
+
+<!-- markdownlint-disable MD013 MD033 -->
+<p>
+  <img align="left" hspace="20" src="docs/images/container-engine-api-icon.png" width="147" alt="container-engine-api icon: a frosted engine over the standard three-row container service panel" />
+  <a href="https://github.com/stephenlclarke/container-engine-api/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/stephenlclarke/container-engine-api/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
+  <a href="https://github.com/stephenlclarke/container-engine-api/actions/workflows/codeql.yml?query=branch%3Amain"><img alt="CodeQL" src="https://github.com/stephenlclarke/container-engine-api/actions/workflows/codeql.yml/badge.svg?branch=main" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=alert_status" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Coverage" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=coverage" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Bugs" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=bugs" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Code Smells" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=code_smells" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Security Rating" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=security_rating" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Maintainability Rating" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=sqale_rating" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Duplicated Lines" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=duplicated_lines_density" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=stephenlclarke_container-engine-api"><img alt="Lines of Code" src="https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_container-engine-api&amp;metric=ncloc" /></a>
+  <img alt="Repo Visitors" src="https://visitor-badge.laobi.icu/badge?page_id=stephenlclarke.container-engine-api" />
+</p>
+<br clear="left" />
+<br>
 <!-- markdownlint-enable MD033 -->
 
 `container-engine-api` is a runtime-neutral Swift package for Docker-compatible Engine HTTP transport. It contains no Dev Container policy, Compose policy, runtime state, or Apple Container imports.
