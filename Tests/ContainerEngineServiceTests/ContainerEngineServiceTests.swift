@@ -181,6 +181,24 @@ struct ContainerEngineServiceTests {
         #expect(socketPath == socket)
     }
 
+    @Test func `provider health attempts receive a realistic bounded budget`() {
+        #expect(
+            ContainerEngineHealthProbe.attemptTimeoutMilliseconds(
+                remaining: .seconds(5)
+            ) == 1000
+        )
+        #expect(
+            ContainerEngineHealthProbe.attemptTimeoutMilliseconds(
+                remaining: .milliseconds(350)
+            ) == 350
+        )
+        #expect(
+            ContainerEngineHealthProbe.attemptTimeoutMilliseconds(
+                remaining: .zero
+            ) == 1
+        )
+    }
+
     @Test func `attested provider enrollment installs trust before serving`() async throws {
         let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent(
