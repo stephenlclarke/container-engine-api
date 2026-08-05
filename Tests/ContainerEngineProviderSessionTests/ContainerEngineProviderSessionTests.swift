@@ -13,8 +13,116 @@ import Testing
 @Suite(.serialized)
 struct ContainerEngineProviderSessionTests {
     @Test
+    func `peer identity cache reuses only the exact executable image`() throws {
+        let cache = ProviderSessionPeerIdentityCache(capacity: 4)
+        let identity = Self.testCodeIdentity(identifier: "provider")
+        var loadCount = 0
+        let key = Self.peerProcessKey(processIdentifier: 41, startTimeSeconds: 100)
+
+        let first = try cache.identity(for: key) {
+            loadCount += 1
+            return identity
+        }
+        let second = try cache.identity(for: key) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "unexpected")
+        }
+        let recycledPID = try cache.identity(
+            for: Self.peerProcessKey(processIdentifier: 41, startTimeSeconds: 101)
+        ) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "replacement")
+        }
+        let executedImage = try cache.identity(
+            for: Self.peerProcessKey(
+                processIdentifier: 41,
+                startTimeSeconds: 101,
+                processVersion: 2
+            )
+        ) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "executed")
+        }
+        let relocatedImage = try cache.identity(
+            for: Self.peerProcessKey(
+                processIdentifier: 41,
+                startTimeSeconds: 101,
+                processVersion: 2,
+                executablePath: "/tmp/replacement"
+            )
+        ) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "relocated")
+        }
+
+        #expect(first == identity)
+        #expect(second == identity)
+        #expect(recycledPID.signingIdentifier == "replacement")
+        #expect(executedImage.signingIdentifier == "executed")
+        #expect(relocatedImage.signingIdentifier == "relocated")
+        #expect(loadCount == 4)
+    }
+
+    @Test
+    func `peer identity cache retains only successful bounded entries`() throws {
+        let cache = ProviderSessionPeerIdentityCache(capacity: 2)
+        let firstKey = Self.peerProcessKey(processIdentifier: 1)
+        var firstLoadCount = 0
+
+        #expect(throws: ProviderSessionTestError.expectedIdentityLoadFailure) {
+            _ = try cache.identity(for: firstKey) {
+                firstLoadCount += 1
+                throw ProviderSessionTestError.expectedIdentityLoadFailure
+            }
+        }
+        _ = try cache.identity(for: firstKey) {
+            firstLoadCount += 1
+            return Self.testCodeIdentity(identifier: "first")
+        }
+        _ = try cache.identity(for: Self.peerProcessKey(processIdentifier: 2)) {
+            Self.testCodeIdentity(identifier: "second")
+        }
+        _ = try cache.identity(for: Self.peerProcessKey(processIdentifier: 3)) {
+            Self.testCodeIdentity(identifier: "third")
+        }
+        _ = try cache.identity(for: firstKey) {
+            firstLoadCount += 1
+            return Self.testCodeIdentity(identifier: "first-reloaded")
+        }
+
+        #expect(firstLoadCount == 3)
+    }
+
+    @Test
     func `shutdown wakes an idle provider listener`() async throws {
         try await withServer { _, _, _ in }
+    }
+
+    private static func peerProcessKey(
+        processIdentifier: pid_t,
+        startTimeSeconds: UInt64 = 100,
+        processVersion: UInt32 = 1,
+        executablePath: String = "/tmp/provider"
+    ) -> ProviderSessionPeerProcessKey {
+        ProviderSessionPeerProcessKey(
+            processIdentifier: processIdentifier,
+            peerAuditToken: withUnsafeBytes(of: processVersion.bigEndian) {
+                Data($0)
+            },
+            startTimeSeconds: startTimeSeconds,
+            startTimeMicroseconds: 200,
+            executablePath: executablePath
+        )
+    }
+
+    private static func testCodeIdentity(
+        identifier: String
+    ) -> ProviderHandoffCodeIdentityV1 {
+        ProviderHandoffCodeIdentityV1(
+            signingIdentifier: identifier,
+            teamIdentifier: nil,
+            designatedRequirementDigestSHA256: "digest-\(identifier)"
+        )
     }
 
     @Test
@@ -882,6 +990,7 @@ private struct RequestBodyResponder: DockerHTTPResponder {
 }
 
 private enum ProviderSessionTestError: Error {
+    case expectedIdentityLoadFailure
     case expectedHijack
 }
 

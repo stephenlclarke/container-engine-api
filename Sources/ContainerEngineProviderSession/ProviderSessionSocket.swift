@@ -11,6 +11,8 @@ final class ProviderSessionSocket: @unchecked Sendable {
     static let maximumFrameBytes = 48 * 1024 * 1024
     static let maximumBufferedBodyBytes = 128 * 1024 * 1024
     static let maximumBufferedRequestBodyBytes = 1024 * 1024 * 1024
+    private static let peerIdentityCache =
+        ProviderSessionPeerIdentityCache(capacity: 32)
 
     private let descriptor: Int32
     private let readLock = NSLock()
@@ -128,6 +130,21 @@ final class ProviderSessionSocket: @unchecked Sendable {
         else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+        var peerToken = audit_token_t()
+        var peerTokenLength = socklen_t(MemoryLayout<audit_token_t>.size)
+        guard
+            getsockopt(
+                descriptor,
+                SOL_LOCAL,
+                LOCAL_PEERTOKEN,
+                &peerToken,
+                &peerTokenLength
+            ) == 0,
+            peerTokenLength == socklen_t(MemoryLayout<audit_token_t>.size)
+        else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let peerAuditToken = withUnsafeBytes(of: &peerToken) { Data($0) }
         var path = [CChar](repeating: 0, count: 4_096)
         let count = proc_pidpath(
             peerPID,
@@ -137,9 +154,36 @@ final class ProviderSessionSocket: @unchecked Sendable {
         guard count > 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        return try ProviderHandoffCodeIdentity.load(
-            at: URL(fileURLWithFileSystemRepresentation: path, isDirectory: false, relativeTo: nil)
+        var processInformation = proc_bsdinfo()
+        let processInformationSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard
+            proc_pidinfo(
+                peerPID,
+                PROC_PIDTBSDINFO,
+                0,
+                &processInformation,
+                processInformationSize
+            ) == processInformationSize,
+            processInformation.pbi_pid == UInt32(peerPID)
+        else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let executableURL = URL(
+            fileURLWithFileSystemRepresentation: path,
+            isDirectory: false,
+            relativeTo: nil
         )
+        let executablePath = executableURL.path
+        let key = ProviderSessionPeerProcessKey(
+            processIdentifier: peerPID,
+            peerAuditToken: peerAuditToken,
+            startTimeSeconds: processInformation.pbi_start_tvsec,
+            startTimeMicroseconds: processInformation.pbi_start_tvusec,
+            executablePath: executablePath
+        )
+        return try Self.peerIdentityCache.identity(for: key) {
+            try ProviderHandoffCodeIdentity.load(at: executableURL)
+        }
     }
 
     private func readExactly(into bytes: inout [UInt8]) throws {
@@ -181,6 +225,47 @@ final class ProviderSessionSocket: @unchecked Sendable {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
             offset += result
+        }
+    }
+}
+
+struct ProviderSessionPeerProcessKey: Hashable, Sendable {
+    var processIdentifier: pid_t
+    var peerAuditToken: Data
+    var startTimeSeconds: UInt64
+    var startTimeMicroseconds: UInt64
+    var executablePath: String
+}
+
+final class ProviderSessionPeerIdentityCache: @unchecked Sendable {
+    private let capacity: Int
+    private let lock = NSLock()
+    private var identities: [
+        ProviderSessionPeerProcessKey: ProviderHandoffCodeIdentityV1
+    ] = [:]
+    private var insertionOrder: [ProviderSessionPeerProcessKey] = []
+
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+
+    func identity(
+        for key: ProviderSessionPeerProcessKey,
+        load: () throws -> ProviderHandoffCodeIdentityV1
+    ) throws -> ProviderHandoffCodeIdentityV1 {
+        try lock.withLock {
+            if let identity = identities[key] {
+                return identity
+            }
+            let identity = try load()
+            if identities.count == capacity, let oldest = insertionOrder.first {
+                identities.removeValue(forKey: oldest)
+                insertionOrder.removeFirst()
+            }
+            identities[key] = identity
+            insertionOrder.append(key)
+            return identity
         }
     }
 }
