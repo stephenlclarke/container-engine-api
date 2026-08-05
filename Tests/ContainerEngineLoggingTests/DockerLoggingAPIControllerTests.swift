@@ -153,6 +153,72 @@ func `complete shared responses reject fragments before replacing whole routes`(
 }
 
 @Test
+func `version and container list expose complete discovery documents`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let version = await controller.respond(
+        to: DockerHTTPRequest(method: .get, target: "/version")
+    )
+    #expect(version.status == 200)
+    let versionObject = try responseJSONObject(version)
+    #expect(versionObject["ApiVersion"] as? String == "1.53")
+    #expect(versionObject["MinAPIVersion"] as? String == "1.44")
+
+    let filters = try #require(
+        #"{"label":["compose.project=fixture"],"status":{"exited":true,"running":false}}"#
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    )
+    let list = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/v1.53/containers/json?all=1&limit=7&size=true&filters=\(filters)"
+        )
+    )
+    #expect(list.status == 200)
+    let listObject = try responseJSONArray(list)
+    #expect(listObject.count == 1)
+    #expect(listObject[0]["Id"] as? String == "fixture-id")
+    #expect(
+        backend.lastListRequest
+            == DockerContainerListRequest(
+                all: true,
+                limit: 7,
+                size: true,
+                filters: [
+                    "label": ["compose.project=fixture"],
+                    "status": ["exited"]
+                ]
+            )
+    )
+}
+
+@Test
+func `container list rejects malformed queries before calling its backend`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let invalidLimit = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/containers/json?limit=-1"
+        )
+    )
+    #expect(invalidLimit.status == 400)
+    #expect(try errorMessage(invalidLimit) == "invalid limit: -1")
+
+    let invalidFilters = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/containers/json?filters=%7B%22label%22%3A1%7D"
+        )
+    )
+    #expect(invalidFilters.status == 400)
+    #expect(try errorMessage(invalidFilters) == "invalid filters JSON")
+    #expect(backend.lastListRequest == nil)
+}
+
+@Test
 func `logging routes enforce API version range and Docker error envelopes`() async throws {
     let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
     let controller = try DockerLoggingAPIController(backend: backend)
@@ -641,6 +707,13 @@ private func responseJSONObject(
     return try #require(value as? [String: Any])
 }
 
+private func responseJSONArray(
+    _ response: DockerHTTPResponse
+) throws -> [[String: Any]] {
+    let value = try JSONSerialization.jsonObject(with: responseData(response))
+    return try #require(value as? [[String: Any]])
+}
+
 private func completeInfoBase() -> [String: Any] {
     [
         "Architecture": "aarch64",
@@ -843,6 +916,7 @@ private struct InspectLogConfigPayload: Decodable {
 private final class FakeLoggingBackend:
     DockerLoggingBackend,
     DockerContainerLifecycleBackend,
+    DockerEngineDiscoveryBackend,
     DockerTerminalResizeBackend,
     @unchecked Sendable
 {
@@ -857,6 +931,7 @@ private final class FakeLoggingBackend:
     private var capturedCreatedRequest: DockerContainerCreateRequest?
     private var capturedRequestedName: String?
     private var capturedLifecycleCalls = [String]()
+    private var capturedListRequest: DockerContainerListRequest?
 
     init(
         reader: FakeLogReadSession,
@@ -892,6 +967,53 @@ private final class FakeLoggingBackend:
 
     var lifecycleCalls: [String] {
         lock.withLock { capturedLifecycleCalls }
+    }
+
+    var lastListRequest: DockerContainerListRequest? {
+        lock.withLock { capturedListRequest }
+    }
+
+    func systemVersionJSON() async throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "ApiVersion": "1.53",
+                "Arch": "arm64",
+                "BuildTime": "2026-01-01T00:00:00Z",
+                "Components": [],
+                "GitCommit": "fixture",
+                "GoVersion": "",
+                "KernelVersion": "",
+                "MinAPIVersion": "1.44",
+                "Os": "linux",
+                "Platform": ["Name": "container"],
+                "Version": "fixture"
+            ]
+        )
+    }
+
+    func containerListJSON(
+        request: DockerContainerListRequest
+    ) async throws -> Data {
+        lock.withLock {
+            capturedListRequest = request
+        }
+        return try JSONSerialization.data(
+            withJSONObject: [[
+                "Command": "/bin/true",
+                "Created": 1_767_225_600,
+                "HostConfig": ["NetworkMode": "default"],
+                "Id": "fixture-id",
+                "Image": "fixture:latest",
+                "ImageID": "sha256:fixture",
+                "Labels": ["compose.project": "fixture"],
+                "Mounts": [],
+                "Names": ["/fixture-id"],
+                "NetworkSettings": ["Networks": [:]],
+                "Ports": [],
+                "State": "exited",
+                "Status": "Exited (0) 1 second ago"
+            ]]
+        )
     }
 
     func createContainer(

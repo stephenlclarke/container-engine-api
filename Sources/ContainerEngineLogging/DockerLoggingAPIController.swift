@@ -25,6 +25,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     public let routeLedger: DockerRouteLedger
 
     private let backend: any DockerLoggingBackend
+    private let discoveryBackend: (any DockerEngineDiscoveryBackend)?
     private let lifecycleBackend: (any DockerContainerLifecycleBackend)?
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
     private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
@@ -36,12 +37,15 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         minimumAPIVersion = try DockerAPIVersion("1.44")
         maximumAPIVersion = try DockerAPIVersion("1.53")
         let lifecycleBackend = backend as? any DockerContainerLifecycleBackend
+        let discoveryBackend = backend as? any DockerEngineDiscoveryBackend
         routeLedger = try Self.makeRouteLedger(
             minimum: minimumAPIVersion,
             maximum: maximumAPIVersion,
-            includesLifecycle: lifecycleBackend != nil
+            includesLifecycle: lifecycleBackend != nil,
+            includesDiscovery: discoveryBackend != nil
         )
         self.backend = backend
+        self.discoveryBackend = discoveryBackend
         self.lifecycleBackend = lifecycleBackend
         self.sharedResponseBackend = sharedResponseBackend
         terminalResizeBackend = backend as? any DockerTerminalResizeBackend
@@ -121,6 +125,10 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         }
 
         switch match.metadata.identifier {
+        case RouteIdentifier.version:
+            return await versionResponse()
+        case RouteIdentifier.list:
+            return await listResponse(target: match.target)
         case RouteIdentifier.create:
             return await createResponse(request: request, target: match.target)
         case RouteIdentifier.start:
@@ -167,6 +175,50 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             )
         default:
             return Self.errorResponse(status: 500, message: "server error")
+        }
+    }
+
+    private func versionResponse() async -> DockerHTTPResponse {
+        guard let discoveryBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let data = try await discoveryBackend.systemVersionJSON()
+            let object = try Self.completeJSONObject(
+                data,
+                route: "SystemVersion",
+                requiredKeys: Self.systemVersionRequiredKeys
+            )
+            return try Self.jsonObjectLineResponse(object)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func listResponse(
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let discoveryBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        let request: DockerContainerListRequest
+        do {
+            request = try Self.containerListRequest(target: target)
+        } catch let error as QueryError {
+            return Self.errorResponse(status: error.status, message: error.message)
+        } catch {
+            return Self.errorResponse(status: 500, message: "server error")
+        }
+        do {
+            let data = try await discoveryBackend.containerListJSON(request: request)
+            let objects = try Self.completeJSONArray(
+                data,
+                route: "ContainerList",
+                requiredKeys: Self.containerListRequiredKeys
+            )
+            return try Self.jsonArrayLineResponse(objects)
+        } catch {
+            return Self.backendErrorResponse(error)
         }
     }
 
@@ -406,6 +458,35 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         return object
     }
 
+    private static func completeJSONArray(
+        _ data: Data,
+        route: String,
+        requiredKeys: Set<String>
+    ) throws -> [[String: Any]] {
+        let value: Any
+        do {
+            value = try JSONSerialization.jsonObject(
+                with: data,
+                options: [.fragmentsAllowed]
+            )
+        } catch {
+            throw DockerLoggingBackendError.server(
+                "complete \(route) response is not valid JSON"
+            )
+        }
+        guard let objects = value as? [[String: Any]] else {
+            throw DockerLoggingBackendError.server(
+                "complete \(route) response is not a JSON array"
+            )
+        }
+        guard objects.allSatisfy({ requiredKeys.isSubset(of: $0.keys) }) else {
+            throw DockerLoggingBackendError.server(
+                "complete \(route) response is missing required fields"
+            )
+        }
+        return objects
+    }
+
     private static func jsonObjectLineResponse(
         _ object: [String: Any]
     ) throws -> DockerHTTPResponse {
@@ -425,6 +506,38 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             body: .bytes(data)
         )
     }
+
+    private static func jsonArrayLineResponse(
+        _ objects: [[String: Any]]
+    ) throws -> DockerHTTPResponse {
+        guard JSONSerialization.isValidJSONObject(objects) else {
+            throw DockerLoggingBackendError.server(
+                "complete Engine response is not JSON encodable"
+            )
+        }
+        var data = try JSONSerialization.data(
+            withJSONObject: objects,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        data.append(UInt8(ascii: "\n"))
+        return DockerHTTPResponse(
+            status: 200,
+            headers: ["Content-Type": "application/json"],
+            body: .bytes(data)
+        )
+    }
+
+    private static let systemVersionRequiredKeys: Set<String> = [
+        "ApiVersion", "Arch", "BuildTime", "Components", "GitCommit",
+        "GoVersion", "KernelVersion", "MinAPIVersion", "Os", "Platform",
+        "Version"
+    ]
+
+    private static let containerListRequiredKeys: Set<String> = [
+        "Command", "Created", "HostConfig", "Id", "Image", "ImageID",
+        "Labels", "Mounts", "Names", "NetworkSettings", "Ports", "State",
+        "Status"
+    ]
 
     private static let systemInfoRequiredKeys: Set<String> = [
         "Architecture", "CDISpecDirs", "CPUShares", "CPUSet", "CgroupDriver",
@@ -447,6 +560,58 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         "MountLabel", "Mounts", "Name", "NetworkSettings", "Path", "Platform",
         "ProcessLabel", "ResolvConfPath", "RestartCount", "State"
     ]
+
+    private static func containerListRequest(
+        target: DockerRequestTarget
+    ) throws -> DockerContainerListRequest {
+        let limit: Int?
+        if let rawLimit = target.first("limit"), !rawLimit.isEmpty {
+            guard let parsed = Int(rawLimit), parsed >= 0 else {
+                throw QueryError(
+                    status: 400,
+                    message: "invalid limit: \(rawLimit)"
+                )
+            }
+            limit = parsed
+        } else {
+            limit = nil
+        }
+        return try DockerContainerListRequest(
+            all: boolValue(target.first("all")),
+            limit: limit,
+            size: boolValue(target.first("size")),
+            filters: containerListFilters(target.first("filters"))
+        )
+    }
+
+    private static func containerListFilters(
+        _ raw: String?
+    ) throws -> [String: [String]] {
+        guard let raw, !raw.isEmpty else {
+            return [:]
+        }
+        let value: Any
+        do {
+            value = try JSONSerialization.jsonObject(with: Data(raw.utf8))
+        } catch {
+            throw QueryError(status: 400, message: "invalid filters JSON")
+        }
+        guard let object = value as? [String: Any] else {
+            throw QueryError(status: 400, message: "invalid filters JSON")
+        }
+        var result = [String: [String]]()
+        for (name, values) in object {
+            if let strings = values as? [String] {
+                result[name] = strings
+            } else if let flags = values as? [String: Bool] {
+                result[name] = flags.compactMap { $0.value ? $0.key : nil }
+                    .sorted(by: utf8Less)
+            } else {
+                throw QueryError(status: 400, message: "invalid filters JSON")
+            }
+        }
+        return result
+    }
 
     private func logsResponse(
         containerID: String,
@@ -811,13 +976,14 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     private static func makeRouteLedger(
         minimum: DockerAPIVersion,
         maximum: DockerAPIVersion,
-        includesLifecycle: Bool
+        includesLifecycle: Bool,
+        includesDiscovery: Bool
     ) throws -> DockerRouteLedger {
-        var routes = [
+        var routes = try [
             DockerRouteMetadata(
                 identifier: RouteIdentifier.info,
                 method: .get,
-                pattern: try DockerRoutePattern("/info"),
+                pattern: DockerRoutePattern("/info"),
                 introduced: minimum,
                 responseMode: .bytes,
                 disposition: .implemented
@@ -825,7 +991,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             DockerRouteMetadata(
                 identifier: RouteIdentifier.inspect,
                 method: .get,
-                pattern: try DockerRoutePattern("/containers/{id}/json"),
+                pattern: DockerRoutePattern("/containers/{id}/json"),
                 introduced: minimum,
                 responseMode: .bytes,
                 disposition: .implemented
@@ -833,7 +999,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             DockerRouteMetadata(
                 identifier: RouteIdentifier.logs,
                 method: .get,
-                pattern: try DockerRoutePattern("/containers/{id}/logs"),
+                pattern: DockerRoutePattern("/containers/{id}/logs"),
                 introduced: minimum,
                 responseMode: .stream,
                 disposition: .implemented
@@ -841,7 +1007,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             DockerRouteMetadata(
                 identifier: RouteIdentifier.attach,
                 method: .post,
-                pattern: try DockerRoutePattern("/containers/{id}/attach"),
+                pattern: DockerRoutePattern("/containers/{id}/attach"),
                 introduced: minimum,
                 responseMode: .hijack,
                 disposition: .implemented
@@ -849,7 +1015,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             DockerRouteMetadata(
                 identifier: RouteIdentifier.attachWebSocket,
                 method: .get,
-                pattern: try DockerRoutePattern("/containers/{id}/attach/ws"),
+                pattern: DockerRoutePattern("/containers/{id}/attach/ws"),
                 introduced: minimum,
                 responseMode: .hijack,
                 disposition: .implemented
@@ -857,18 +1023,18 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             DockerRouteMetadata(
                 identifier: RouteIdentifier.resize,
                 method: .post,
-                pattern: try DockerRoutePattern("/containers/{id}/resize"),
+                pattern: DockerRoutePattern("/containers/{id}/resize"),
                 introduced: minimum,
                 responseMode: .bytes,
                 disposition: .implemented
-            ),
+            )
         ]
         if includesLifecycle {
-            routes.append(contentsOf: [
+            try routes.append(contentsOf: [
                 DockerRouteMetadata(
                     identifier: RouteIdentifier.create,
                     method: .post,
-                    pattern: try DockerRoutePattern("/containers/create"),
+                    pattern: DockerRoutePattern("/containers/create"),
                     introduced: minimum,
                     responseMode: .bytes,
                     disposition: .implemented
@@ -876,7 +1042,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 DockerRouteMetadata(
                     identifier: RouteIdentifier.start,
                     method: .post,
-                    pattern: try DockerRoutePattern("/containers/{id}/start"),
+                    pattern: DockerRoutePattern("/containers/{id}/start"),
                     introduced: minimum,
                     responseMode: .bytes,
                     disposition: .implemented
@@ -884,7 +1050,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 DockerRouteMetadata(
                     identifier: RouteIdentifier.stop,
                     method: .post,
-                    pattern: try DockerRoutePattern("/containers/{id}/stop"),
+                    pattern: DockerRoutePattern("/containers/{id}/stop"),
                     introduced: minimum,
                     responseMode: .bytes,
                     disposition: .implemented
@@ -892,11 +1058,31 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 DockerRouteMetadata(
                     identifier: RouteIdentifier.delete,
                     method: .delete,
-                    pattern: try DockerRoutePattern("/containers/{id}"),
+                    pattern: DockerRoutePattern("/containers/{id}"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                )
+            ])
+        }
+        if includesDiscovery {
+            try routes.append(contentsOf: [
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.version,
+                    method: .get,
+                    pattern: DockerRoutePattern("/version"),
                     introduced: minimum,
                     responseMode: .bytes,
                     disposition: .implemented
                 ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.list,
+                    method: .get,
+                    pattern: DockerRoutePattern("/containers/json"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                )
             ])
         }
         return try DockerRouteLedger(
@@ -922,6 +1108,8 @@ private enum RouteIdentifier {
     static let inspect = "container.inspect"
     static let logs = "container.logs"
     static let resize = "container.resize"
+    static let list = "container.list"
+    static let version = "system.version"
 }
 
 private struct CreateResponse: Encodable {
