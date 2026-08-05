@@ -33,9 +33,11 @@ struct ProviderHandoffPortableLoggingPayloadTests {
 
         #expect(package.partKind == .logging)
         #expect(package.entries.count == 2)
-        #expect(package.entries.map(\.recordKind) == [
-            "logging-container-v1", "logging-history-store-v1"
-        ])
+        #expect(
+            package.entries.map(\.recordKind) == [
+                "logging-container-v1", "logging-history-store-v1"
+            ]
+        )
         let historyEntry = try #require(package.entries.last)
         let history = try map(
             ProviderHandoffCanonicalCBOR.decode(
@@ -94,6 +96,75 @@ struct ProviderHandoffPortableLoggingPayloadTests {
     }
 
     @Test
+    func `portable history above legacy bound uses canonical ordered stores`() throws {
+        let package = try ProviderHandoffPortableLoggingPayloadCodec.package(
+            containers: [
+                ProviderHandoffPortableLoggingContainerV1(
+                    containerID: "container-1",
+                    providerID: "devcontainer.apple-container",
+                    providerVersion: "1",
+                    terminalHistoryEpoch: 7,
+                    records: [
+                        ProviderHandoffPortableLogRecordV1(
+                            secondsSinceUnixEpoch: 1,
+                            nanoseconds: 0,
+                            stream: .stdout,
+                            data: Data(
+                                repeating: UInt8(ascii: "a"),
+                                count:
+                                ProviderHandoffPortableLoggingPayloadCodec
+                                    .maximumHistoryBytes + 1
+                            )
+                        )
+                    ]
+                )
+            ],
+            sourceStateRootUUID: sourceRoot
+        )
+        let histories = package.entries.filter {
+            $0.recordKind == "logging-history-store-v1"
+        }
+        #expect(histories.count > 1)
+        var byteCount = 0
+        for (index, entry) in histories.enumerated() {
+            let history = try map(
+                ProviderHandoffCanonicalCBOR.decode(
+                    entry.canonicalRecordBytes
+                )
+            )
+            let bytes = try bytes(history["bytes"])
+            byteCount += bytes.count
+            #expect(
+                bytes.count
+                    <= ProviderHandoffPortableLoggingPayloadCodec
+                    .maximumHistoryChunkBytes
+            )
+            #expect(
+                try ProviderHandoffPortableLoggingPayloadCodec
+                    .parseHistoryChunkStoreID(text(history["storeID"]))
+                    == ProviderHandoffPortableLoggingHistoryChunkV1(
+                        index: UInt64(index),
+                        count: UInt64(histories.count)
+                    )
+            )
+        }
+        #expect(
+            byteCount
+                > ProviderHandoffPortableLoggingPayloadCodec.maximumHistoryBytes
+        )
+        #expect(
+            try ProviderHandoffPayloadCodec.decode(
+                ProviderHandoffPayloadCodec.encode(
+                    package,
+                    sourceOrder: [sourceRoot]
+                ),
+                expectedPartKind: .logging,
+                sourceOrder: [sourceRoot]
+            ) == package
+        )
+    }
+
+    @Test
     func `portable logging rejects duplicate containers`() {
         let container = ProviderHandoffPortableLoggingContainerV1(
             containerID: "same",
@@ -102,7 +173,8 @@ struct ProviderHandoffPortableLoggingPayloadTests {
             records: []
         )
         #expect(
-            throws: ProviderHandoffPortableLoggingPayloadError
+            throws:
+            ProviderHandoffPortableLoggingPayloadError
                 .duplicateContainer("same")
         ) {
             try ProviderHandoffPortableLoggingPayloadCodec.package(
@@ -116,7 +188,8 @@ struct ProviderHandoffPortableLoggingPayloadTests {
         _ value: ProviderHandoffCanonicalValue
     ) throws -> [String: ProviderHandoffCanonicalValue] {
         guard case let .map(entries) = value else {
-            throw ProviderHandoffPortableLoggingPayloadError
+            throw
+                ProviderHandoffPortableLoggingPayloadError
                 .invalidContainer("test")
         }
         return Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0.value) })
@@ -126,7 +199,8 @@ struct ProviderHandoffPortableLoggingPayloadTests {
         _ value: ProviderHandoffCanonicalValue?
     ) throws -> String {
         guard case let .textString(text)? = value else {
-            throw ProviderHandoffPortableLoggingPayloadError
+            throw
+                ProviderHandoffPortableLoggingPayloadError
                 .invalidContainer("test")
         }
         return text
@@ -136,7 +210,8 @@ struct ProviderHandoffPortableLoggingPayloadTests {
         _ value: ProviderHandoffCanonicalValue?
     ) throws -> Data {
         guard case let .byteString(bytes)? = value else {
-            throw ProviderHandoffPortableLoggingPayloadError
+            throw
+                ProviderHandoffPortableLoggingPayloadError
                 .invalidContainer("test")
         }
         return bytes

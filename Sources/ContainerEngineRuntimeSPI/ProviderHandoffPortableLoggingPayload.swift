@@ -114,19 +114,81 @@ public enum ProviderHandoffPortableLoggingPayloadError:
     }
 }
 
+/// Identifies one member of a canonical ordered portable logging history set.
+public struct ProviderHandoffPortableLoggingHistoryChunkV1:
+    Equatable,
+    Sendable
+{
+    public var index: UInt64
+    public var count: UInt64
+
+    public init(index: UInt64, count: UInt64) {
+        self.index = index
+        self.count = count
+    }
+}
+
 /// Builds the exact logging-handoff-v1 canonical record schema consumed by a
 /// conforming Container authority while keeping provider implementation types
 /// out of the shared runtime SPI.
 public enum ProviderHandoffPortableLoggingPayloadCodec {
     public static let mediaType =
         "application/vnd.io.github.stephenlclarke.container.handoff-logging.v1+cbor"
+    /// The former aggregate history ceiling, retained as a compatibility-test
+    /// threshold now that large histories are transported in bounded chunks.
     public static let maximumHistoryBytes = 64 * 1024 * 1024
+    /// The maximum encoded JSON-file bytes carried by one portable store.
+    public static let maximumHistoryChunkBytes = 8 * 1024 * 1024
+    /// The defensive upper bound on stores in one portable history set.
+    public static let maximumHistoryChunkCount: UInt64 = 4096
+    /// The stable store identifier used when history fits in one store.
+    public static let historyStoreID = "docker-json-file-active"
 
-    private static let historyStoreID = "docker-json-file-active"
     // Six-byte JSON escaping is the worst case for one input byte. This bound
     // keeps every encoded line below the destination's 1 MiB record ceiling.
     private static let maximumRecordChunkBytes = 128 * 1024
     private static let maximumEncodedRecordBytes = 1 * 1024 * 1024
+
+    /// Returns the canonical store identifier for one multi-store history
+    /// member. The index is zero-based and the count must exceed one.
+    public static func historyChunkStoreID(
+        index: UInt64,
+        count: UInt64
+    ) -> String {
+        precondition(count > 1 && count <= maximumHistoryChunkCount)
+        precondition(index < count)
+        return String(
+            format: "%@.chunk.%08llu.%08llu",
+            historyStoreID,
+            index,
+            count
+        )
+    }
+
+    /// Parses a canonical multi-store history identifier.
+    public static func parseHistoryChunkStoreID(
+        _ storeID: String
+    ) -> ProviderHandoffPortableLoggingHistoryChunkV1? {
+        let prefix = historyStoreID + ".chunk."
+        guard storeID.hasPrefix(prefix) else { return nil }
+        let fields = storeID.dropFirst(prefix.count).split(
+            separator: ".",
+            omittingEmptySubsequences: false
+        )
+        guard
+            fields.count == 2,
+            let index = UInt64(fields[0]),
+            let count = UInt64(fields[1]),
+            count > 1,
+            count <= maximumHistoryChunkCount,
+            index < count,
+            historyChunkStoreID(index: index, count: count) == storeID
+        else { return nil }
+        return ProviderHandoffPortableLoggingHistoryChunkV1(
+            index: index,
+            count: count
+        )
+    }
 
     public static func package(
         containers: [ProviderHandoffPortableLoggingContainerV1],
@@ -153,18 +215,33 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         var entries: [ProviderHandoffPayloadPackageEntryV1] = []
         for container in ordered {
             try validate(container)
-            let historyBytes = try encodeHistory(
+            let historySegments = try encodeHistory(
                 container.records,
                 containerID: container.containerID
             )
-            let history = try historyProjection(
-                bytes: historyBytes,
-                terminalHistoryEpoch: container.terminalHistoryEpoch
-            )
-            let historyID = historyEntryID(
-                containerID: container.containerID,
-                storeID: historyStoreID
-            )
+            let segmentCount = UInt64(historySegments.count)
+            let histories = try historySegments.enumerated().map {
+                index,
+                bytes -> (id: String, value: ProviderHandoffCanonicalValue) in
+                let storeID =
+                    segmentCount == 1
+                        ? historyStoreID
+                        : historyChunkStoreID(
+                            index: UInt64(index),
+                            count: segmentCount
+                        )
+                return try (
+                    id: historyEntryID(
+                        containerID: container.containerID,
+                        storeID: storeID
+                    ),
+                    value: historyProjection(
+                        storeID: storeID,
+                        bytes: bytes,
+                        terminalHistoryEpoch: container.terminalHistoryEpoch
+                    )
+                )
+            }
             let contractDigest = try ProviderHandoffDigest.domain(
                 "container-handoff-portable-logging-contract-v1",
                 projection: .map([
@@ -178,10 +255,14 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 "container-handoff-logging-history-retention-v1",
                 projection: .map([
                     .init("containerID", .textString(container.containerID)),
-                    .init("stores", .array([historyRetentionProjection(
-                        history,
-                        terminalHistoryEpoch: container.terminalHistoryEpoch
-                    )]))
+                    .init(
+                        "stores",
+                        .array(
+                            histories.map {
+                                historyRetentionProjection($0.value)
+                            }
+                        )
+                    )
                 ])
             )
             let terminalCategoryDigest = try ProviderHandoffDigest.domain(
@@ -194,51 +275,72 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             let record = try ProviderHandoffCanonicalCBOR.encode(
                 .map([
                     .init("containerID", .textString(container.containerID)),
-                    .init("historyEntryIDs", .array([.textString(historyID)])),
+                    .init(
+                        "historyEntryIDs",
+                        .array(histories.map { .textString($0.id) })
+                    ),
                     .init("protectedEntryIDs", .array([])),
-                    .init("requested", .map([
-                        .init("driver", .optional(container.requestedDriver)),
-                        .init("protectedOptionNames", .array([])),
-                        .init("safeOptions", stringMap(container.requestedSafeOptions)),
-                        .init("schemaVersion", .unsigned(1))
-                    ])),
-                    .init("schemaVersion", .unsigned(1)),
-                    .init("sourceResolved", .map([
-                        .init("contractDigest", .textString(contractDigest)),
-                        .init("delivery", .map([
-                            .init("effectiveMaxBufferSizeInBytes", .null),
-                            .init("effectiveMode", .textString("blocking")),
-                            .init("maxBufferSizeInBytes", .null),
-                            .init("requestedMode", .null),
+                    .init(
+                        "requested",
+                        .map([
+                            .init("driver", .optional(container.requestedDriver)),
+                            .init("protectedOptionNames", .array([])),
+                            .init("safeOptions", stringMap(container.requestedSafeOptions)),
                             .init("schemaVersion", .unsigned(1))
-                        ])),
-                        .init("driver", .textString("json-file")),
-                        .init("leaseGeneration", .unsigned(container.leaseGeneration)),
-                        .init("protectedOptionNames", .array([])),
-                        .init("providerGenerationAtResolution", .unsigned(container.providerGeneration)),
-                        .init("providerHistoryMigrationReceipt", .null),
-                        .init("providerIdentity", .map([
-                            .init("id", .textString(container.providerID)),
-                            .init("kind", .textString(container.providerKind.rawValue)),
+                        ])
+                    ),
+                    .init("schemaVersion", .unsigned(1)),
+                    .init(
+                        "sourceResolved",
+                        .map([
+                            .init("contractDigest", .textString(contractDigest)),
+                            .init(
+                                "delivery",
+                                .map([
+                                    .init("effectiveMaxBufferSizeInBytes", .null),
+                                    .init("effectiveMode", .textString("blocking")),
+                                    .init("maxBufferSizeInBytes", .null),
+                                    .init("requestedMode", .null),
+                                    .init("schemaVersion", .unsigned(1))
+                                ])
+                            ),
+                            .init("driver", .textString("json-file")),
+                            .init("leaseGeneration", .unsigned(container.leaseGeneration)),
+                            .init("protectedOptionNames", .array([])),
+                            .init("providerGenerationAtResolution", .unsigned(container.providerGeneration)),
+                            .init("providerHistoryMigrationReceipt", .null),
+                            .init(
+                                "providerIdentity",
+                                .map([
+                                    .init("id", .textString(container.providerID)),
+                                    .init("kind", .textString(container.providerKind.rawValue)),
+                                    .init("schemaVersion", .unsigned(1)),
+                                    .init("version", .textString(container.providerVersion))
+                                ])
+                            ),
+                            .init(
+                                "readPolicy",
+                                .map([
+                                    .init("cache", .null),
+                                    .init("schemaVersion", .unsigned(1)),
+                                    .init("source", .textString("direct"))
+                                ])
+                            ),
+                            .init("safeOptions", stringMap(container.resolvedSafeOptions)),
+                            .init("schemaVersion", .unsigned(1))
+                        ])
+                    ),
+                    .init(
+                        "terminalAudit",
+                        .map([
+                            .init("historyRetentionDigestSHA256", digest(historyRetentionDigest)),
                             .init("schemaVersion", .unsigned(1)),
-                            .init("version", .textString(container.providerVersion))
-                        ])),
-                        .init("readPolicy", .map([
-                            .init("cache", .null),
-                            .init("schemaVersion", .unsigned(1)),
-                            .init("source", .textString("direct"))
-                        ])),
-                        .init("safeOptions", stringMap(container.resolvedSafeOptions)),
-                        .init("schemaVersion", .unsigned(1))
-                    ])),
-                    .init("terminalAudit", .map([
-                        .init("historyRetentionDigestSHA256", digest(historyRetentionDigest)),
-                        .init("schemaVersion", .unsigned(1)),
-                        .init("terminalCategoryDigestSHA256", digest(terminalCategoryDigest)),
-                        .init("terminalDetachedCleanupCount", .unsigned(0)),
-                        .init("terminalReaderCount", .unsigned(0)),
-                        .init("terminalWriterCount", .unsigned(0))
-                    ]))
+                            .init("terminalCategoryDigestSHA256", digest(terminalCategoryDigest)),
+                            .init("terminalDetachedCleanupCount", .unsigned(0)),
+                            .init("terminalReaderCount", .unsigned(0)),
+                            .init("terminalWriterCount", .unsigned(0))
+                        ])
+                    )
                 ])
             )
             entries.append(
@@ -251,13 +353,17 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 )
             )
             try entries.append(
-                ProviderHandoffPayloadPackageEntryV1(
-                    entryID: historyID,
-                    sourceStateRootUUID: sourceStateRootUUID,
-                    recordKind: "logging-history-store-v1",
-                    schemaVersion: 1,
-                    canonicalRecordBytes: ProviderHandoffCanonicalCBOR.encode(history)
-                )
+                contentsOf: histories.map {
+                    try ProviderHandoffPayloadPackageEntryV1(
+                        entryID: $0.id,
+                        sourceStateRootUUID: sourceStateRootUUID,
+                        recordKind: "logging-history-store-v1",
+                        schemaVersion: 1,
+                        canonicalRecordBytes: ProviderHandoffCanonicalCBOR.encode(
+                            $0.value
+                        )
+                    )
+                }
             )
         }
         entries.sort { utf8Less($0.entryID, $1.entryID) }
@@ -297,6 +403,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
     }
 
     private static func historyProjection(
+        storeID: String,
         bytes: Data,
         terminalHistoryEpoch: UInt64
     ) throws -> ProviderHandoffCanonicalValue {
@@ -316,14 +423,13 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             .init("schemaVersion", .unsigned(1)),
             .init("sourceDeviceID", .null),
             .init("sourceInode", .null),
-            .init("storeID", .textString(historyStoreID)),
+            .init("storeID", .textString(storeID)),
             .init("terminalHistoryEpoch", .unsigned(terminalHistoryEpoch))
         ])
     }
 
     private static func historyRetentionProjection(
-        _ history: ProviderHandoffCanonicalValue,
-        terminalHistoryEpoch: UInt64
+        _ history: ProviderHandoffCanonicalValue
     ) -> ProviderHandoffCanonicalValue {
         guard case let .map(entries) = history else { preconditionFailure() }
         let values = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0.value) })
@@ -335,27 +441,31 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             .init("kind", .textString("dockerJSONFile")),
             .init("maximumInternalSequence", .unsigned(0)),
             .init("providerExportDigestSHA256", .null),
-            .init("rotationIndex", .unsigned(0)),
+            .init("rotationIndex", values["rotationIndex"] ?? .unsigned(0)),
             .init("sourceDeviceID", .null),
             .init("sourceInode", .null),
-            .init("storeID", .textString(historyStoreID)),
-            .init("terminalHistoryEpoch", .unsigned(terminalHistoryEpoch))
+            .init("storeID", values["storeID"] ?? .textString(historyStoreID)),
+            .init(
+                "terminalHistoryEpoch",
+                values["terminalHistoryEpoch"] ?? .unsigned(0)
+            )
         ])
     }
 
     private static func encodeHistory(
         _ records: [ProviderHandoffPortableLogRecordV1],
         containerID: String
-    ) throws -> Data {
-        var output = Data()
+    ) throws -> [Data] {
+        var outputs = [Data()]
         for record in records {
-            let chunks = record.data.isEmpty
-                ? [Data()]
-                : stride(from: 0, to: record.data.count, by: maximumRecordChunkBytes)
-                .map { offset -> Data in
-                    let upper = min(record.data.count, offset + maximumRecordChunkBytes)
-                    return record.data.subdata(in: offset ..< upper)
-                }
+            let chunks =
+                record.data.isEmpty
+                    ? [Data()]
+                    : stride(from: 0, to: record.data.count, by: maximumRecordChunkBytes)
+                    .map { offset -> Data in
+                        let upper = min(record.data.count, offset + maximumRecordChunkBytes)
+                        return record.data.subdata(in: offset ..< upper)
+                    }
             for chunk in chunks {
                 let encoded = try encodeRecord(record, data: chunk)
                 guard encoded.count <= maximumEncodedRecordBytes else {
@@ -363,15 +473,24 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                         containerID
                     )
                 }
-                output.append(encoded)
-                guard output.count <= maximumHistoryBytes else {
+                if let current = outputs.last,
+                   !current.isEmpty,
+                   current.count + encoded.count > maximumHistoryChunkBytes
+                {
+                    outputs.append(Data())
+                }
+                guard
+                    encoded.count <= maximumHistoryChunkBytes,
+                    outputs.count <= Int(maximumHistoryChunkCount)
+                else {
                     throw ProviderHandoffPortableLoggingPayloadError.historyTooLarge(
                         containerID
                     )
                 }
+                outputs[outputs.count - 1].append(encoded)
             }
         }
-        return output
+        return outputs
     }
 
     private static func encodeRecord(
@@ -545,8 +664,9 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524
                 - dayOfEra / 146_096) / 365
         var year = yearOfEra + era * 400
-        let dayOfYear = dayOfEra
-            - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+        let dayOfYear =
+            dayOfEra
+                - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
         let monthPrime = (5 * dayOfYear + 2) / 153
         let day = dayOfYear - (153 * monthPrime + 2) / 5 + 1
         let month = monthPrime + (monthPrime < 10 ? 3 : -9)
