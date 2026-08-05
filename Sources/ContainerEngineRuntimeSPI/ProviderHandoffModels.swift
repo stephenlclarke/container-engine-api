@@ -52,6 +52,7 @@ public enum ProviderHandoffDigestAlgorithmV1: String, Codable, Equatable, Sendab
 public enum ProviderHandoffPayloadProtectionV1: String, Codable, Equatable, Sendable {
     case authenticatedPlaintext
     case destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1
+    case destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
 }
 
 public enum ProviderHandoffContentDigestScopeV1: String, Codable, Equatable, Sendable {
@@ -368,6 +369,7 @@ public struct ProviderHandoffTrustRegistryV1: Codable, Equatable, Sendable {
 
 public enum ProviderHandoffEnvelopeAlgorithmV1: String, Codable, Equatable, Sendable {
     case x25519HKDFSHA256XChaCha20Poly1305V1
+    case x25519HKDFSHA256XChaCha20Poly1305FramedV2
 }
 
 public enum ProviderHandoffAEADObjectKindV1: String, Codable, Equatable, Sendable {

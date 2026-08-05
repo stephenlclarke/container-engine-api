@@ -41,11 +41,11 @@ public enum ProviderHandoffPartStagingError:
             "provider handoff part staging immutable identity changed"
         case .invalidRecord:
             "provider handoff part staging record is invalid"
-        case .invalidTransition(let from, let to):
+        case let .invalidTransition(from, to):
             "provider handoff part staging transition \(from.rawValue) -> \(to.rawValue) is invalid"
         case .receiptMismatch:
             "provider handoff part staging receipt conflicts with the durable record"
-        case .revisionMismatch(let expected, let actual):
+        case let .revisionMismatch(expected, actual):
             "provider handoff part staging revision mismatch: expected \(expected), found \(actual)"
         case .transportIncomplete:
             "provider handoff part staging transport is incomplete"
@@ -81,7 +81,9 @@ public enum ProviderHandoffPartStagingStateMachine {
         expectedRevision: UInt64
     ) throws {
         try checkRevision(record, expected: expectedRevision)
-        if record.state == .retrieving { return }
+        if record.state == .retrieving {
+            return
+        }
         guard record.state == .declared else {
             throw ProviderHandoffPartStagingError.invalidTransition(
                 record.state,
@@ -109,7 +111,9 @@ public enum ProviderHandoffPartStagingStateMachine {
             record.receivedRanges + ranges,
             transportByteLength: transportByteLength
         )
-        if normalized == record.receivedRanges { return }
+        if normalized == record.receivedRanges {
+            return
+        }
         record.receivedRanges = normalized
         try advance(&record)
     }
@@ -158,7 +162,9 @@ public enum ProviderHandoffPartStagingStateMachine {
         expectedRevision: UInt64
     ) throws {
         try checkRevision(record, expected: expectedRevision)
-        if record.state == .decrypted { return }
+        if record.state == .decrypted {
+            return
+        }
         guard record.state == .transportVerified else {
             throw ProviderHandoffPartStagingError.invalidTransition(
                 record.state,
@@ -185,7 +191,8 @@ public enum ProviderHandoffPartStagingStateMachine {
             guard sourceDigestVerifications.isEmpty else {
                 throw ProviderHandoffPartStagingError.invalidRecord
             }
-        case .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1:
+        case .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1,
+            .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2:
             guard !sourceDigestVerifications.isEmpty else {
                 throw ProviderHandoffPartStagingError.invalidRecord
             }
@@ -271,7 +278,9 @@ public enum ProviderHandoffPartStagingStateMachine {
         expectedRevision: UInt64
     ) throws {
         try checkRevision(record, expected: expectedRevision)
-        if record.state == .compensated { return }
+        if record.state == .compensated {
+            return
+        }
         guard record.state == .compensationRequired else {
             throw ProviderHandoffPartStagingError.invalidTransition(
                 record.state,
@@ -295,7 +304,9 @@ public enum ProviderHandoffPartStagingStateMachine {
                 record.state
             )
         }
-        if record.lastFailureClass == failure { return }
+        if record.lastFailureClass == failure {
+            return
+        }
         record.lastFailureClass = failure
         try advance(&record)
     }

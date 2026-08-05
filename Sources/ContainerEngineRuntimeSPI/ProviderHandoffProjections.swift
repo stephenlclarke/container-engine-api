@@ -32,19 +32,19 @@ public enum ProviderHandoffProjectionError:
 
     public var description: String {
         switch self {
-        case .duplicateController(let identifier):
+        case let .duplicateController(identifier):
             "provider handoff revision vector contains duplicate controller \(identifier)"
-        case .duplicateRoot(let identifier):
+        case let .duplicateRoot(identifier):
             "provider handoff contains duplicate state root \(identifier)"
-        case .invalidDigest(let value):
+        case let .invalidDigest(value):
             "provider handoff digest is invalid: \(value)"
-        case .invalidHeader(let identifier):
+        case let .invalidHeader(identifier):
             "provider handoff state-root header is invalid: \(identifier)"
         case .invalidOrder:
             "provider handoff record is not in canonical order"
         case .invalidRecord:
             "provider handoff record is invalid"
-        case .invalidUUID(let value):
+        case let .invalidUUID(value):
             "provider handoff UUID is not canonical: \(value)"
         }
     }
@@ -115,10 +115,10 @@ public enum ProviderHandoffProjections {
                     header.stateRootUUID
                 )
             }
-            return ProviderHandoffCanonicalValue.map([
+            return try ProviderHandoffCanonicalValue.map([
                 .init(
                     "handoffChainHeadDigestSHA256",
-                    try optionalDigest(header.handoffChainHeadDigest)
+                    optionalDigest(header.handoffChainHeadDigest)
                 ),
                 .init("stateRootUUID", .textString(header.stateRootUUID)),
             ])
@@ -128,7 +128,7 @@ public enum ProviderHandoffProjections {
             projection: .map([
                 .init(
                     "commitDigestSHA256",
-                    .byteString(try digestBytes(commitDigestSHA256))
+                    .byteString(digestBytes(commitDigestSHA256))
                 ),
                 .init("orderedPriorChainHeads", .array(roots)),
             ])
@@ -141,12 +141,12 @@ public enum ProviderHandoffProjections {
         try ProviderHandoffDigest.domain(
             "container-handoff-root-prepare-v1",
             projection: .map([
-                .init("commitDigestSHA256", .byteString(try digestBytes(record.commitDigestSHA256))),
-                .init("expectedHeaderDigestSHA256", .byteString(try digestBytes(record.expectedHeaderDigestSHA256))),
+                .init("commitDigestSHA256", .byteString(digestBytes(record.commitDigestSHA256))),
+                .init("expectedHeaderDigestSHA256", .byteString(digestBytes(record.expectedHeaderDigestSHA256))),
                 .init("manifestID", .textString(record.manifestID)),
-                .init("postCommitHeaderDigestSHA256", .byteString(try digestBytes(record.postCommitHeaderDigestSHA256))),
-                .init("postCommitRevisionVectorDigestSHA256", .byteString(try digestBytes(record.postCommitRevisionVectorDigestSHA256))),
-                .init("preCommitRevisionVectorDigestSHA256", .byteString(try digestBytes(record.preCommitRevisionVectorDigestSHA256))),
+                .init("postCommitHeaderDigestSHA256", .byteString(digestBytes(record.postCommitHeaderDigestSHA256))),
+                .init("postCommitRevisionVectorDigestSHA256", .byteString(digestBytes(record.postCommitRevisionVectorDigestSHA256))),
+                .init("preCommitRevisionVectorDigestSHA256", .byteString(digestBytes(record.preCommitRevisionVectorDigestSHA256))),
                 .init("prepareRevision", .unsigned(record.prepareRevision)),
                 .init("role", .textString(record.role.rawValue)),
                 .init("schemaVersion", .unsigned(UInt64(record.schemaVersion))),
@@ -165,10 +165,10 @@ public enum ProviderHandoffProjections {
         return try ProviderHandoffDigest.domain(
             "container-handoff-outcome-v1",
             projection: .map([
-                .init("manifestDigest", try optionalDigest(outcome.manifestDigest)),
+                .init("manifestDigest", optionalDigest(outcome.manifestDigest)),
                 .init("manifestID", .textString(outcome.manifestID)),
                 .init("phase", .textString(outcome.phase.rawValue)),
-                .init("roots", .array(try outcome.roots.map(terminalRoot))),
+                .init("roots", .array(outcome.roots.map(terminalRoot))),
                 .init("schemaVersion", .unsigned(UInt64(outcome.schemaVersion))),
                 .init("tokenID", .textString(outcome.tokenID)),
             ])
@@ -179,11 +179,11 @@ public enum ProviderHandoffProjections {
         _ header: StateRootHeaderV1
     ) throws -> ProviderHandoffCanonicalValue {
         try validateHeader(header)
-        return .map([
+        return try .map([
             .init("activeHandoffTokenID", .optional(header.activeHandoffTokenID)),
             .init("authorityLineageUUID", .textString(header.authorityLineageUUID)),
             .init("currentDataSchemaVersion", .unsigned(UInt64(header.currentDataSchemaVersion))),
-            .init("handoffChainHeadDigest", try optionalDigest(header.handoffChainHeadDigest)),
+            .init("handoffChainHeadDigest", optionalDigest(header.handoffChainHeadDigest)),
             .init("handoffState", .textString(header.handoffState.rawValue)),
             .init("lineageDigestKeyVersion", .unsigned(header.lineageDigestKeyVersion)),
             .init("minimumWriterSchemaVersion", .unsigned(UInt64(header.minimumWriterSchemaVersion))),
@@ -217,10 +217,10 @@ public enum ProviderHandoffProjections {
         guard sorted == vector.controllerRevisions else {
             throw ProviderHandoffProjectionError.invalidOrder
         }
-        return .map([
+        return try .map([
             .init(
                 "controllerRevisions",
-                .array(try vector.controllerRevisions.map(controllerRevision))
+                .array(vector.controllerRevisions.map(controllerRevision))
             ),
             .init("rootStoreRevision", .unsigned(vector.rootStoreRevision)),
             .init("schemaVersion", .unsigned(UInt64(vector.schemaVersion))),
@@ -243,8 +243,8 @@ public enum ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map([
-            .init("providerRegistrationDigestSHA256", try optionalDigest(record.providerRegistrationDigestSHA256)),
+        return try .map([
+            .init("providerRegistrationDigestSHA256", optionalDigest(record.providerRegistrationDigestSHA256)),
             .init("schemaVersion", .unsigned(UInt64(record.schemaVersion))),
             .init("selectedProviderFingerprint", .optional(record.selectedProviderFingerprint)),
             .init("selectedStateRootUUID", .optional(record.selectedStateRootUUID)),
@@ -300,13 +300,13 @@ public enum ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map([
-            .init("abortHeader", try stateRootHeader(expectation.abortHeader)),
-            .init("abortHeaderDigestSHA256", .byteString(try digestBytes(expectation.abortHeaderDigestSHA256))),
-            .init("abortRevisionVector", try revisionVectorWithDigest(expectation.abortRevisionVector)),
-            .init("expectedHeader", try stateRootHeader(expectation.expectedHeader)),
-            .init("expectedHeaderDigestSHA256", .byteString(try digestBytes(expectation.expectedHeaderDigestSHA256))),
-            .init("preCommitRevisionVector", try revisionVectorWithDigest(expectation.preCommitRevisionVector)),
+        return try .map([
+            .init("abortHeader", stateRootHeader(expectation.abortHeader)),
+            .init("abortHeaderDigestSHA256", .byteString(digestBytes(expectation.abortHeaderDigestSHA256))),
+            .init("abortRevisionVector", revisionVectorWithDigest(expectation.abortRevisionVector)),
+            .init("expectedHeader", stateRootHeader(expectation.expectedHeader)),
+            .init("expectedHeaderDigestSHA256", .byteString(digestBytes(expectation.expectedHeaderDigestSHA256))),
+            .init("preCommitRevisionVector", revisionVectorWithDigest(expectation.preCommitRevisionVector)),
             .init("role", .textString(expectation.role.rawValue)),
             .init("schemaVersion", .unsigned(UInt64(expectation.schemaVersion))),
             .init("stateRootUUID", .textString(expectation.stateRootUUID)),
@@ -316,10 +316,10 @@ public enum ProviderHandoffProjections {
     public static func importExpectation(
         _ expectation: ProviderHandoffPartImportExpectationV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("partKind", .textString(expectation.partKind.rawValue)),
-            .init("payloadDescriptorDigestSHA256", .byteString(try digestBytes(expectation.payloadDescriptorDigestSHA256))),
-            .init("stagedImportReceiptDigestSHA256", .byteString(try digestBytes(expectation.stagedImportReceiptDigestSHA256))),
+            .init("payloadDescriptorDigestSHA256", .byteString(digestBytes(expectation.payloadDescriptorDigestSHA256))),
+            .init("stagedImportReceiptDigestSHA256", .byteString(digestBytes(expectation.stagedImportReceiptDigestSHA256))),
         ])
     }
 
@@ -335,19 +335,19 @@ public enum ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        let encryption: ProviderHandoffCanonicalValue
-        if let value = descriptor.destinationEncryption {
-            encryption = .map([
-                .init("associatedDataDigestSHA256", .byteString(try digestBytes(value.associatedDataDigestSHA256))),
-                .init("destinationKeyID", .textString(value.destinationKeyID)),
-                .init("destinationKeyPurpose", .textString(value.destinationKeyPurpose.rawValue)),
-                .init("encryptionAlgorithm", .textString(value.encryptionAlgorithm.rawValue)),
-                .init("ephemeralPublicKey", .byteString(value.ephemeralPublicKey)),
-                .init("nonce", .byteString(value.nonce)),
-            ])
-        } else {
-            encryption = .null
-        }
+        let encryption: ProviderHandoffCanonicalValue =
+            if let value = descriptor.destinationEncryption {
+                try .map([
+                    .init("associatedDataDigestSHA256", .byteString(digestBytes(value.associatedDataDigestSHA256))),
+                    .init("destinationKeyID", .textString(value.destinationKeyID)),
+                    .init("destinationKeyPurpose", .textString(value.destinationKeyPurpose.rawValue)),
+                    .init("encryptionAlgorithm", .textString(value.encryptionAlgorithm.rawValue)),
+                    .init("ephemeralPublicKey", .byteString(value.ephemeralPublicKey)),
+                    .init("nonce", .byteString(value.nonce)),
+                ])
+            } else {
+                .null
+            }
         switch descriptor.protection {
         case .authenticatedPlaintext:
             guard
@@ -362,6 +362,22 @@ public enum ProviderHandoffProjections {
         case .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1:
             guard
                 let destination = descriptor.destinationEncryption,
+                destination.encryptionAlgorithm
+                    == .x25519HKDFSHA256XChaCha20Poly1305V1,
+                destination.destinationKeyPurpose == .destinationPayloadEncryption,
+                destination.ephemeralPublicKey.count == 32,
+                destination.nonce.count == 24,
+                descriptor.canonicalContentDigest.algorithm != .sha256,
+                descriptor.canonicalContentDigest.scope != .publicSHA256V1,
+                !descriptor.canonicalContentDigest.orderedSourceDigests.isEmpty
+            else {
+                throw ProviderHandoffProjectionError.invalidRecord
+            }
+        case .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2:
+            guard
+                let destination = descriptor.destinationEncryption,
+                destination.encryptionAlgorithm
+                    == .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
                 destination.destinationKeyPurpose == .destinationPayloadEncryption,
                 destination.ephemeralPublicKey.count == 32,
                 destination.nonce.count == 24,
@@ -372,9 +388,9 @@ public enum ProviderHandoffProjections {
                 throw ProviderHandoffProjectionError.invalidRecord
             }
         }
-        return .map([
+        return try .map([
             .init("bundleObjectID", .textString(descriptor.bundleObjectID)),
-            .init("canonicalContentDigest", try canonicalContentDigest(descriptor.canonicalContentDigest)),
+            .init("canonicalContentDigest", canonicalContentDigest(descriptor.canonicalContentDigest)),
             .init("canonicalEncoding", .textString(descriptor.canonicalEncoding.rawValue)),
             .init("canonicalPlaintextByteLength", .unsigned(descriptor.canonicalPlaintextByteLength)),
             .init("destinationEncryption", encryption),
@@ -382,7 +398,7 @@ public enum ProviderHandoffProjections {
             .init("protection", .textString(descriptor.protection.rawValue)),
             .init("schemaVersion", .unsigned(UInt64(descriptor.schemaVersion))),
             .init("transportByteLength", .unsigned(descriptor.transportByteLength)),
-            .init("transportDigestSHA256", .byteString(try digestBytes(descriptor.transportDigestSHA256))),
+            .init("transportDigestSHA256", .byteString(digestBytes(descriptor.transportDigestSHA256))),
         ])
     }
 
@@ -400,19 +416,19 @@ public enum ProviderHandoffProjections {
             throw ProviderHandoffProjectionError.invalidRecord
         }
         try validateCanonicalUUID(intent.resultingAuthorityLineageUUID)
-        return .map([
+        return try .map([
             .init("authoritativeCommitRevision", .unsigned(intent.authoritativeCommitRevision)),
-            .init("destinationKeyPossessionProofDigestsSHA256", .array(try intent.destinationKeyPossessionProofDigestsSHA256.map { .byteString(try digestBytes($0)) })),
-            .init("importedParts", .array(try intent.importedParts.map(importExpectation))),
-            .init("manifestDigest", .byteString(try digestBytes(intent.manifestDigest))),
+            .init("destinationKeyPossessionProofDigestsSHA256", .array(intent.destinationKeyPossessionProofDigestsSHA256.map { try .byteString(digestBytes($0)) })),
+            .init("importedParts", .array(intent.importedParts.map(importExpectation))),
+            .init("manifestDigest", .byteString(digestBytes(intent.manifestDigest))),
             .init("manifestID", .textString(intent.manifestID)),
-            .init("preCommitRootExpectations", .array(try intent.preCommitRootExpectations.map(headerExpectation))),
-            .init("providerSelection", try providerSelectionExpectation(intent.providerSelection)),
+            .init("preCommitRootExpectations", .array(intent.preCommitRootExpectations.map(headerExpectation))),
+            .init("providerSelection", providerSelectionExpectation(intent.providerSelection)),
             .init("resultingAuthorityLineageUUID", .textString(intent.resultingAuthorityLineageUUID)),
             .init("resultingLineageDigestKeyVersion", .unsigned(intent.resultingLineageDigestKeyVersion)),
             .init("resultingMinimumWriterSchemaVersion", .unsigned(UInt64(intent.resultingMinimumWriterSchemaVersion))),
             .init("schemaVersion", .unsigned(UInt64(intent.schemaVersion))),
-            .init("socketSelection", try socketSelectionExpectation(intent.socketSelection)),
+            .init("socketSelection", socketSelectionExpectation(intent.socketSelection)),
             .init("tokenID", .textString(intent.tokenID)),
             .init("trustRegistryRevision", .unsigned(intent.trustRegistryRevision)),
         ])
@@ -421,8 +437,8 @@ public enum ProviderHandoffProjections {
     private static func controllerRevision(
         _ controller: ProviderHandoffControllerRevisionV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
-            .init("canonicalStateDigestSHA256", .byteString(try digestBytes(controller.canonicalStateDigestSHA256))),
+        try .map([
+            .init("canonicalStateDigestSHA256", .byteString(digestBytes(controller.canonicalStateDigestSHA256))),
             .init("controllerID", .textString(controller.controllerID)),
             .init("revision", .unsigned(controller.revision)),
         ])
@@ -431,12 +447,12 @@ public enum ProviderHandoffProjections {
     private static func canonicalContentDigest(
         _ digest: ProviderHandoffCanonicalContentDigestV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("algorithm", .textString(digest.algorithm.rawValue)),
-            .init("digest", .byteString(try digestBytes(digest.digest))),
+            .init("digest", .byteString(digestBytes(digest.digest))),
             .init(
                 "orderedSourceDigests",
-                .array(try digest.orderedSourceDigests.map(contentSourceDigest))
+                .array(digest.orderedSourceDigests.map(contentSourceDigest))
             ),
             .init("scope", .textString(digest.scope.rawValue)),
         ])
@@ -445,11 +461,11 @@ public enum ProviderHandoffProjections {
     private static func contentSourceDigest(
         _ digest: ProviderHandoffContentSourceDigestV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("authorityLineageUUID", .textString(digest.authorityLineageUUID)),
             .init("lineageDigestKeyVersion", .unsigned(digest.lineageDigestKeyVersion)),
             .init("orderedEntryIDs", .array(digest.orderedEntryIDs.map(ProviderHandoffCanonicalValue.textString))),
-            .init("sourceDigestHMACSHA256", .byteString(try digestBytes(digest.sourceDigestHMACSHA256))),
+            .init("sourceDigestHMACSHA256", .byteString(digestBytes(digest.sourceDigestHMACSHA256))),
             .init("sourceStateRootUUID", .textString(digest.sourceStateRootUUID)),
         ])
     }
@@ -460,14 +476,14 @@ public enum ProviderHandoffProjections {
         guard try revisionVectorDigest(vector) == vector.revisionVectorDigestSHA256 else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        guard case .map(let entries) = try revisionVector(vector) else {
+        guard case let .map(entries) = try revisionVector(vector) else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map(
+        return try .map(
             entries + [
                 .init(
                     "revisionVectorDigestSHA256",
-                    .byteString(try digestBytes(vector.revisionVectorDigestSHA256))
+                    .byteString(digestBytes(vector.revisionVectorDigestSHA256))
                 )
             ]
         )
@@ -484,11 +500,11 @@ public enum ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map([
-            .init("expectedRecord", try providerSelection(expectation.expectedRecord)),
-            .init("expectedRecordDigestSHA256", .byteString(try digestBytes(expectation.expectedRecordDigestSHA256))),
-            .init("resultingRecord", try providerSelection(expectation.resultingRecord)),
-            .init("resultingRecordDigestSHA256", .byteString(try digestBytes(expectation.resultingRecordDigestSHA256))),
+        return try .map([
+            .init("expectedRecord", providerSelection(expectation.expectedRecord)),
+            .init("expectedRecordDigestSHA256", .byteString(digestBytes(expectation.expectedRecordDigestSHA256))),
+            .init("resultingRecord", providerSelection(expectation.resultingRecord)),
+            .init("resultingRecordDigestSHA256", .byteString(digestBytes(expectation.resultingRecordDigestSHA256))),
         ])
     }
 
@@ -503,11 +519,11 @@ public enum ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map([
-            .init("expectedRecord", try socketDiscovery(expectation.expectedRecord)),
-            .init("expectedRecordDigestSHA256", .byteString(try digestBytes(expectation.expectedRecordDigestSHA256))),
-            .init("resultingRecord", try socketDiscovery(expectation.resultingRecord)),
-            .init("resultingRecordDigestSHA256", .byteString(try digestBytes(expectation.resultingRecordDigestSHA256))),
+        return try .map([
+            .init("expectedRecord", socketDiscovery(expectation.expectedRecord)),
+            .init("expectedRecordDigestSHA256", .byteString(digestBytes(expectation.expectedRecordDigestSHA256))),
+            .init("resultingRecord", socketDiscovery(expectation.resultingRecord)),
+            .init("resultingRecordDigestSHA256", .byteString(digestBytes(expectation.resultingRecordDigestSHA256))),
         ])
     }
 
@@ -524,12 +540,12 @@ public enum ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map([
+        return try .map([
             .init("role", .textString(root.role.rawValue)),
             .init("stateRootUUID", .textString(root.stateRootUUID)),
-            .init("terminalHeader", try stateRootHeader(root.terminalHeader)),
-            .init("terminalHeaderDigestSHA256", .byteString(try digestBytes(root.terminalHeaderDigestSHA256))),
-            .init("terminalRevisionVector", try revisionVectorWithDigest(root.terminalRevisionVector)),
+            .init("terminalHeader", stateRootHeader(root.terminalHeader)),
+            .init("terminalHeaderDigestSHA256", .byteString(digestBytes(root.terminalHeaderDigestSHA256))),
+            .init("terminalRevisionVector", revisionVectorWithDigest(root.terminalRevisionVector)),
         ])
     }
 
@@ -581,7 +597,7 @@ public enum ProviderHandoffProjections {
 
     private static func optionalDigest(_ value: String?) throws -> ProviderHandoffCanonicalValue {
         guard let value else { return .null }
-        return .byteString(try digestBytes(value))
+        return try .byteString(digestBytes(value))
     }
 
     private static func digestBytes(_ value: String) throws -> Data {

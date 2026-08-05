@@ -24,7 +24,7 @@ extension ProviderHandoffProjections {
             "container-handoff-trust-registry-v1",
             projection: .map([
                 .init("issuedAtUnixSeconds", .unsigned(registry.issuedAtUnixSeconds)),
-                .init("keys", .array(try registry.keys.map(trustKey))),
+                .init("keys", .array(registry.keys.map(trustKey))),
                 .init("registryRevision", .unsigned(registry.registryRevision)),
                 .init("schemaVersion", .unsigned(UInt64(registry.schemaVersion))),
             ])
@@ -39,7 +39,7 @@ extension ProviderHandoffProjections {
             projection: .map([
                 .init("algorithm", .textString(key.algorithm.rawValue)),
                 .init("keyID", .textString(key.keyID)),
-                .init("provenance", try provenance(key.provenance, includeProof: false)),
+                .init("provenance", provenance(key.provenance, includeProof: false)),
                 .init("providerFingerprint", .optional(key.providerFingerprint)),
                 .init("purpose", .textString(key.purpose.rawValue)),
                 .init("rawPublicKey", .byteString(key.rawPublicKey)),
@@ -54,7 +54,7 @@ extension ProviderHandoffProjections {
     ) throws -> String {
         try ProviderHandoffDigest.domain(
             "container-handoff-lineage-key-envelope-v1",
-            projection: try lineageEnvelope(envelope, includeSignature: false)
+            projection: lineageEnvelope(envelope, includeSignature: false)
         )
     }
 
@@ -67,7 +67,7 @@ extension ProviderHandoffProjections {
         }
         return try ProviderHandoffDigest.domain(
             "container-handoff-destination-key-proof-v1",
-            projection: try possessionProof(
+            projection: possessionProof(
                 proof,
                 challengePlaintext: challengePlaintext,
                 includeResponse: false
@@ -118,6 +118,8 @@ extension ProviderHandoffProjections {
             let sourceDigest: ProviderHandoffCanonicalValue
             if part.payload.protection
                 == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1
+                || part.payload.protection
+                    == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
             {
                 guard
                     let digest = part.payload.canonicalContentDigest
@@ -131,8 +133,8 @@ extension ProviderHandoffProjections {
             } else {
                 sourceDigest = .null
             }
-            return ProviderHandoffCanonicalValue.map([
-                .init("part", try handoffPart(part)),
+            return try ProviderHandoffCanonicalValue.map([
+                .init("part", handoffPart(part)),
                 .init("sourceDigest", sourceDigest),
             ])
         }
@@ -140,16 +142,16 @@ extension ProviderHandoffProjections {
             "container-handoff-source-manifest-v1",
             projection: .map([
                 .init("contributedParts", .array(contributedParts)),
-                .init("destinationKeyPossessionProofDigestsSHA256", .array(try manifest.destinationKeyPossessionProofDigestsSHA256.map(digestValue))),
-                .init("destinationPreCommitExpectation", try headerExpectation(manifest.destinationPreCommitExpectation)),
+                .init("destinationKeyPossessionProofDigestsSHA256", .array(manifest.destinationKeyPossessionProofDigestsSHA256.map(digestValue))),
+                .init("destinationPreCommitExpectation", headerExpectation(manifest.destinationPreCommitExpectation)),
                 .init("destinationProviderFingerprint", .textString(manifest.destinationProviderFingerprint)),
-                .init("destinationSealedLineageKeyEnvelopes", .array(try envelopes.map { try lineageEnvelope($0, includeSignature: true) })),
+                .init("destinationSealedLineageKeyEnvelopes", .array(envelopes.map { try lineageEnvelope($0, includeSignature: true) })),
                 .init("destinationStateRootUUID", .textString(manifest.destinationStateRootUUID)),
                 .init("manifestID", .textString(manifest.manifestID)),
                 .init("resultingAuthorityLineageUUID", .textString(manifest.resultingAuthorityLineageUUID)),
                 .init("resultingLineageDigestKeyVersion", .unsigned(manifest.resultingLineageDigestKeyVersion)),
                 .init("schemaVersion", .unsigned(UInt64(manifest.schemaVersion))),
-                .init("source", try handoffSource(source, includeSignature: false)),
+                .init("source", handoffSource(source, includeSignature: false)),
                 .init("tokenID", .textString(manifest.tokenID)),
                 .init("trustRegistryRevision", .unsigned(manifest.trustRegistryRevision)),
             ])
@@ -162,11 +164,11 @@ extension ProviderHandoffProjections {
         try ProviderHandoffDigest.domain(
             "container-handoff-commit-record-v1",
             projection: .map([
-                .init("commitDigestSHA256", try digestValue(record.commitDigestSHA256)),
-                .init("handoffChainHeadDigestSHA256", try digestValue(record.handoffChainHeadDigestSHA256)),
-                .init("intent", try commitIntent(record.intent)),
-                .init("postCommitRoots", .array(try record.postCommitRoots.map(postCommitRoot))),
-                .init("rootPrepareRecordDigestsSHA256", .array(try record.rootPrepareRecordDigestsSHA256.map(digestValue))),
+                .init("commitDigestSHA256", digestValue(record.commitDigestSHA256)),
+                .init("handoffChainHeadDigestSHA256", digestValue(record.handoffChainHeadDigestSHA256)),
+                .init("intent", commitIntent(record.intent)),
+                .init("postCommitRoots", .array(record.postCommitRoots.map(postCommitRoot))),
+                .init("rootPrepareRecordDigestsSHA256", .array(record.rootPrepareRecordDigestsSHA256.map(digestValue))),
                 .init("schemaVersion", .unsigned(UInt64(record.schemaVersion))),
             ])
         )
@@ -175,13 +177,13 @@ extension ProviderHandoffProjections {
     fileprivate static func signature(
         _ value: ProviderHandoffSignatureV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("algorithm", .textString(value.algorithm.rawValue)),
             .init("canonicalBytesVersion", .unsigned(UInt64(value.canonicalBytesVersion))),
             .init("providerFingerprint", .optional(value.providerFingerprint)),
             .init("purpose", .textString(value.purpose.rawValue)),
             .init("signature", .byteString(value.signature)),
-            .init("signedProjectionDigestSHA256", try digestValue(value.signedProjectionDigestSHA256)),
+            .init("signedProjectionDigestSHA256", digestValue(value.signedProjectionDigestSHA256)),
             .init("signerKeyID", .textString(value.signerKeyID)),
             .init("signerRole", .textString(value.signerRole.rawValue)),
             .init("stateRootUUID", .optional(value.stateRootUUID)),
@@ -193,8 +195,8 @@ extension ProviderHandoffProjections {
         _ value: DestinationSealedLineageKeyEnvelopeV1,
         includeSignature: Bool
     ) throws -> ProviderHandoffCanonicalValue {
-        var entries: [ProviderHandoffCanonicalMapEntry] = [
-            .init("associatedDataDigestSHA256", try digestValue(value.associatedDataDigestSHA256)),
+        var entries: [ProviderHandoffCanonicalMapEntry] = try [
+            .init("associatedDataDigestSHA256", digestValue(value.associatedDataDigestSHA256)),
             .init("authorityLineageUUID", .textString(value.authorityLineageUUID)),
             .init("canonicalPlaintextByteLength", .unsigned(value.canonicalPlaintextByteLength)),
             .init("ciphertext", .byteString(value.ciphertext)),
@@ -208,7 +210,7 @@ extension ProviderHandoffProjections {
             .init("sourceStateRootUUID", .optional(value.sourceStateRootUUID)),
         ]
         if includeSignature {
-            entries.append(.init("envelopeSignature", try signature(value.envelopeSignature)))
+            try entries.append(.init("envelopeSignature", signature(value.envelopeSignature)))
         }
         return .map(entries)
     }
@@ -216,10 +218,10 @@ extension ProviderHandoffProjections {
     fileprivate static func canonicalContentDigest(
         _ value: ProviderHandoffCanonicalContentDigestV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("algorithm", .textString(value.algorithm.rawValue)),
-            .init("digest", try digestValue(value.digest)),
-            .init("orderedSourceDigests", .array(try value.orderedSourceDigests.map(contentSourceDigest))),
+            .init("digest", digestValue(value.digest)),
+            .init("orderedSourceDigests", .array(value.orderedSourceDigests.map(contentSourceDigest))),
             .init("scope", .textString(value.scope.rawValue)),
         ])
     }
@@ -227,11 +229,11 @@ extension ProviderHandoffProjections {
     fileprivate static func contentSourceDigest(
         _ value: ProviderHandoffContentSourceDigestV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("authorityLineageUUID", .textString(value.authorityLineageUUID)),
             .init("lineageDigestKeyVersion", .unsigned(value.lineageDigestKeyVersion)),
             .init("orderedEntryIDs", .array(value.orderedEntryIDs.map(ProviderHandoffCanonicalValue.textString))),
-            .init("sourceDigestHMACSHA256", try digestValue(value.sourceDigestHMACSHA256)),
+            .init("sourceDigestHMACSHA256", digestValue(value.sourceDigestHMACSHA256)),
             .init("sourceStateRootUUID", .textString(value.sourceStateRootUUID)),
         ])
     }
@@ -239,12 +241,12 @@ extension ProviderHandoffProjections {
     private static func trustKey(
         _ key: ProviderHandoffTrustKeyV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("algorithm", .textString(key.algorithm.rawValue)),
             .init("keyID", .textString(key.keyID)),
             .init("notAfterUnixSeconds", .unsigned(key.notAfterUnixSeconds)),
             .init("notBeforeUnixSeconds", .unsigned(key.notBeforeUnixSeconds)),
-            .init("provenance", try provenance(key.provenance, includeProof: true)),
+            .init("provenance", provenance(key.provenance, includeProof: true)),
             .init("providerFingerprint", .optional(key.providerFingerprint)),
             .init("purpose", .textString(key.purpose.rawValue)),
             .init("rawPublicKey", .byteString(key.rawPublicKey)),
@@ -260,12 +262,12 @@ extension ProviderHandoffProjections {
         _ value: ProviderHandoffPublicKeyProvenanceV1,
         includeProof: Bool
     ) throws -> ProviderHandoffCanonicalValue {
-        var entries: [ProviderHandoffCanonicalMapEntry] = [
-            .init("codeRequirementDigestSHA256", try digestValue(value.codeRequirementDigestSHA256)),
+        var entries: [ProviderHandoffCanonicalMapEntry] = try [
+            .init("codeRequirementDigestSHA256", digestValue(value.codeRequirementDigestSHA256)),
             .init("enrolledAtUnixSeconds", .unsigned(value.enrolledAtUnixSeconds)),
             .init("enrollmentID", .textString(value.enrollmentID)),
             .init("owningBundleIdentifier", .textString(value.owningBundleIdentifier)),
-            .init("providerRegistrationDigestSHA256", try digestValue(value.providerRegistrationDigestSHA256)),
+            .init("providerRegistrationDigestSHA256", digestValue(value.providerRegistrationDigestSHA256)),
             .init("teamIdentifier", .optional(value.teamIdentifier)),
         ]
         if includeProof {
@@ -279,8 +281,8 @@ extension ProviderHandoffProjections {
         challengePlaintext: Data?,
         includeResponse: Bool
     ) throws -> ProviderHandoffCanonicalValue {
-        var entries: [ProviderHandoffCanonicalMapEntry] = [
-            .init("challengeAssociatedDataDigestSHA256", try digestValue(value.challengeAssociatedDataDigestSHA256)),
+        var entries: [ProviderHandoffCanonicalMapEntry] = try [
+            .init("challengeAssociatedDataDigestSHA256", digestValue(value.challengeAssociatedDataDigestSHA256)),
             .init("challengeCiphertext", .byteString(value.challengeCiphertext)),
             .init("challengeEphemeralPublicKey", .byteString(value.challengeEphemeralPublicKey)),
             .init("challengeNonce", .byteString(value.challengeNonce)),
@@ -294,7 +296,7 @@ extension ProviderHandoffProjections {
             .init("tokenID", .textString(value.tokenID)),
         ]
         if includeResponse {
-            entries.append(.init("responseDigestSHA256", try digestValue(value.responseDigestSHA256)))
+            try entries.append(.init("responseDigestSHA256", digestValue(value.responseDigestSHA256)))
         } else if let challengePlaintext {
             entries.append(.init("challengePlaintext", .byteString(challengePlaintext)))
         } else {
@@ -306,19 +308,19 @@ extension ProviderHandoffProjections {
     private static func manifestProjection(
         _ manifest: ProviderHandoffManifestV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
-            .init("destinationKeyPossessionProofDigestsSHA256", .array(try manifest.destinationKeyPossessionProofDigestsSHA256.map(digestValue))),
-            .init("destinationPreCommitExpectation", try headerExpectation(manifest.destinationPreCommitExpectation)),
+        try .map([
+            .init("destinationKeyPossessionProofDigestsSHA256", .array(manifest.destinationKeyPossessionProofDigestsSHA256.map(digestValue))),
+            .init("destinationPreCommitExpectation", headerExpectation(manifest.destinationPreCommitExpectation)),
             .init("destinationProviderFingerprint", .textString(manifest.destinationProviderFingerprint)),
-            .init("destinationSealedLineageKeyEnvelopes", .array(try manifest.destinationSealedLineageKeyEnvelopes.map { try lineageEnvelope($0, includeSignature: true) })),
+            .init("destinationSealedLineageKeyEnvelopes", .array(manifest.destinationSealedLineageKeyEnvelopes.map { try lineageEnvelope($0, includeSignature: true) })),
             .init("destinationStateRootUUID", .textString(manifest.destinationStateRootUUID)),
             .init("manifestDigestAlgorithm", .textString(manifest.manifestDigestAlgorithm.rawValue)),
             .init("manifestID", .textString(manifest.manifestID)),
-            .init("parts", .array(try manifest.parts.map(handoffPart))),
+            .init("parts", .array(manifest.parts.map(handoffPart))),
             .init("resultingAuthorityLineageUUID", .textString(manifest.resultingAuthorityLineageUUID)),
             .init("resultingLineageDigestKeyVersion", .unsigned(manifest.resultingLineageDigestKeyVersion)),
             .init("schemaVersion", .unsigned(UInt64(manifest.schemaVersion))),
-            .init("sources", .array(try manifest.sources.map { try handoffSource($0, includeSignature: true) })),
+            .init("sources", .array(manifest.sources.map { try handoffSource($0, includeSignature: true) })),
             .init("tokenID", .textString(manifest.tokenID)),
             .init("trustRegistryRevision", .unsigned(manifest.trustRegistryRevision)),
         ])
@@ -328,15 +330,15 @@ extension ProviderHandoffProjections {
         _ value: ProviderHandoffSourceV1,
         includeSignature: Bool
     ) throws -> ProviderHandoffCanonicalValue {
-        var entries: [ProviderHandoffCanonicalMapEntry] = [
+        var entries: [ProviderHandoffCanonicalMapEntry] = try [
             .init("authorityLineageUUID", .textString(value.authorityLineageUUID)),
             .init("lineageDigestKeyVersion", .unsigned(value.lineageDigestKeyVersion)),
-            .init("preCommitExpectation", try headerExpectation(value.preCommitExpectation)),
+            .init("preCommitExpectation", headerExpectation(value.preCommitExpectation)),
             .init("providerFingerprint", .textString(value.providerFingerprint)),
             .init("stateRootUUID", .textString(value.stateRootUUID)),
         ]
         if includeSignature {
-            entries.append(.init("sourceSignature", try signature(value.sourceSignature)))
+            try entries.append(.init("sourceSignature", signature(value.sourceSignature)))
         }
         return .map(entries)
     }
@@ -344,10 +346,10 @@ extension ProviderHandoffProjections {
     private static func handoffPart(
         _ value: ProviderHandoffPartV1
     ) throws -> ProviderHandoffCanonicalValue {
-        .map([
+        try .map([
             .init("disposition", .textString(value.disposition.rawValue)),
             .init("kind", .textString(value.kind.rawValue)),
-            .init("payload", try payloadDescriptor(value.payload)),
+            .init("payload", payloadDescriptor(value.payload)),
             .init("requiredCapabilities", .array(value.requiredCapabilities.map(ProviderHandoffCanonicalValue.textString))),
             .init("schemaVersion", .unsigned(UInt64(value.schemaVersion))),
             .init("sourceStateRootUUIDs", .array(value.sourceStateRootUUIDs.map(ProviderHandoffCanonicalValue.textString))),
@@ -367,10 +369,10 @@ extension ProviderHandoffProjections {
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map([
-            .init("postCommitHeader", try stateRootHeader(value.postCommitHeader)),
-            .init("postCommitHeaderDigestSHA256", try digestValue(value.postCommitHeaderDigestSHA256)),
-            .init("postCommitRevisionVector", try revisionVectorWithDigestForSecurity(value.postCommitRevisionVector)),
+        return try .map([
+            .init("postCommitHeader", stateRootHeader(value.postCommitHeader)),
+            .init("postCommitHeaderDigestSHA256", digestValue(value.postCommitHeaderDigestSHA256)),
+            .init("postCommitRevisionVector", revisionVectorWithDigestForSecurity(value.postCommitRevisionVector)),
             .init("role", .textString(value.role.rawValue)),
             .init("stateRootUUID", .textString(value.stateRootUUID)),
         ])
@@ -381,19 +383,20 @@ extension ProviderHandoffProjections {
     ) throws -> ProviderHandoffCanonicalValue {
         guard
             try revisionVectorDigest(vector) == vector.revisionVectorDigestSHA256,
-            case .map(let entries) = try revisionVector(vector)
+            case let .map(entries) = try revisionVector(vector)
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
-        return .map(
+        return try .map(
             entries + [
-                .init("revisionVectorDigestSHA256", try digestValue(vector.revisionVectorDigestSHA256))
-            ])
+                .init("revisionVectorDigestSHA256", digestValue(vector.revisionVectorDigestSHA256))
+            ]
+        )
     }
 
     fileprivate static func digestValue(
         _ digest: String
     ) throws -> ProviderHandoffCanonicalValue {
-        .byteString(try ProviderHandoffDigest.parseSHA256(digest))
+        try .byteString(ProviderHandoffDigest.parseSHA256(digest))
     }
 }

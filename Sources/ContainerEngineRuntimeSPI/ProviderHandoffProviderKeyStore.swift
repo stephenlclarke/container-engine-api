@@ -80,19 +80,19 @@ public enum ProviderHandoffProviderKeyStoreError:
         switch self {
         case .bindingMismatch:
             "provider handoff private keys do not match the selected provider binding"
-        case .duplicatePurpose(let purpose):
+        case let .duplicatePurpose(purpose):
             "provider handoff private key set contains duplicate purpose \(purpose.rawValue)"
         case .invalidContext:
             "provider handoff private key enrollment context is invalid"
         case .invalidEncoding:
             "provider handoff private key Keychain value is invalid"
-        case .invalidKey(let purpose):
+        case let .invalidKey(purpose):
             "provider handoff private key for \(purpose.rawValue) is invalid"
-        case .keyNotFound(let purpose):
+        case let .keyNotFound(purpose):
             "provider handoff private key for \(purpose.rawValue) was not found"
         case .keySetTooLarge:
             "provider handoff private key set exceeds its 64 KiB bound"
-        case .keychain(let status):
+        case let .keychain(status):
             "provider handoff private key Keychain operation failed with status \(status)"
         case .notFound:
             "provider handoff private key set does not exist"
@@ -307,6 +307,41 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
             destinationPrivateKey: privateKey
         )
     }
+
+    public func openFile(
+        _ payload: ProviderHandoffPreparedPayloadFileV2,
+        canonicalFileURL: URL,
+        expectedPartKind: ProviderHandoffPartKindV1,
+        tokenID: String,
+        manifestID: String,
+        sourceOrder: [String],
+        lineageKeys: [ProviderHandoffLineageKeyV1]
+    ) throws -> ProviderHandoffPayloadPackageV1 {
+        guard
+            payload.descriptor.destinationEncryption?.destinationKeyPurpose
+                == .destinationPayloadEncryption,
+            let keyID = payload.descriptor.destinationEncryption?
+                .destinationKeyID,
+            try trustKey(for: .destinationPayloadEncryption).keyID == keyID,
+            let privateKey = privateKeysByPurpose[
+                .destinationPayloadEncryption
+            ]
+        else {
+            throw ProviderHandoffProviderKeyStoreError.bindingMismatch
+        }
+        return try ProviderHandoffPayloadCodec.openSealedFile(
+            payload,
+            canonicalFileURL: canonicalFileURL,
+            expectedPartKind: expectedPartKind,
+            tokenID: tokenID,
+            manifestID: manifestID,
+            sourceOrder: sourceOrder,
+            lineageKeys: lineageKeys,
+            destinationProviderFingerprint: context.providerFingerprint,
+            destinationStateRootUUID: context.stateRootUUID,
+            destinationPrivateKey: privateKey
+        )
+    }
 }
 
 /// Current-user Keychain persistence for provider-owned handoff private keys.
@@ -419,7 +454,8 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
                 kSecAttrService: service,
                 kSecAttrAccount: account,
                 kSecAttrSynchronizable: kCFBooleanFalse as Any,
-            ] as CFDictionary)
+            ] as CFDictionary
+        )
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw ProviderHandoffProviderKeyStoreError.keychain(status)
         }

@@ -18,26 +18,14 @@ import Foundation
 
 public struct ProviderHandoffValidatedManifestV1: Sendable {
     public let manifest: ProviderHandoffManifestV1
-
-    internal init(manifest: ProviderHandoffManifestV1) {
-        self.manifest = manifest
-    }
 }
 
 public struct ProviderHandoffValidatedCommitRecordV1: Sendable {
     public let record: ProviderHandoffCommitRecordV1
-
-    internal init(record: ProviderHandoffCommitRecordV1) {
-        self.record = record
-    }
 }
 
 public struct ProviderHandoffValidatedTerminalOutcomeV1: Sendable {
     public let outcome: ProviderHandoffTerminalOutcomeV1
-
-    internal init(outcome: ProviderHandoffTerminalOutcomeV1) {
-        self.outcome = outcome
-    }
 }
 
 public enum ProviderHandoffRecordValidationError:
@@ -74,7 +62,8 @@ public enum ProviderHandoffRecordValidator {
             guard manifest.trustRegistryRevision == trustRegistry.registry.registryRevision else {
                 throw ProviderHandoffRecordValidationError.invalidManifest
             }
-            let proofDigests = possessionProofs
+            let proofDigests =
+                possessionProofs
                 .map(\.proofRecordDigestSHA256)
                 .sorted()
             guard
@@ -361,8 +350,10 @@ public enum ProviderHandoffRecordValidator {
                 .orderedSourceDigests
             if part.payload.protection
                 == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1
+                || part.payload.protection
+                    == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
             {
-                let sourceDigestsMatch = sourceDigests.allSatisfy({ digest in
+                let sourceDigestsMatch = sourceDigests.allSatisfy { digest in
                     guard
                         let source = manifest.sources.first(where: {
                             $0.stateRootUUID == digest.sourceStateRootUUID
@@ -372,7 +363,7 @@ public enum ProviderHandoffRecordValidator {
                         == source.authorityLineageUUID
                         && digest.lineageDigestKeyVersion
                             == source.lineageDigestKeyVersion
-                })
+                }
                 guard
                     sourceDigests.map(\.sourceStateRootUUID)
                         == part.sourceStateRootUUIDs,
@@ -386,7 +377,8 @@ public enum ProviderHandoffRecordValidator {
                             sourceStateRootUUID: digest.sourceStateRootUUID,
                             authorityLineageUUID: digest.authorityLineageUUID,
                             keyVersion: digest.lineageDigestKeyVersion
-                        ))
+                        )
+                    )
                 }
             }
         }
@@ -406,7 +398,8 @@ public enum ProviderHandoffRecordValidator {
                     sourceStateRootUUID: nil,
                     authorityLineageUUID: manifest.resultingAuthorityLineageUUID,
                     keyVersion: manifest.resultingLineageDigestKeyVersion
-                ))
+                )
+            )
         else {
             throw ProviderHandoffRecordValidationError.invalidManifest
         }
@@ -422,7 +415,8 @@ public enum ProviderHandoffRecordValidator {
                     EncryptionKeyUse(
                         purpose: encryption.destinationKeyPurpose,
                         keyID: encryption.destinationKeyID
-                    ))
+                    )
+                )
             }
         }
         for envelope in manifest.destinationSealedLineageKeyEnvelopes {
@@ -430,7 +424,8 @@ public enum ProviderHandoffRecordValidator {
                 EncryptionKeyUse(
                     purpose: envelope.destinationKeyPurpose,
                     keyID: envelope.destinationKeyID
-                ))
+                )
+            )
         }
         return keys.sorted {
             if $0.purpose.rawValue != $1.purpose.rawValue {
@@ -493,12 +488,12 @@ public enum ProviderHandoffRecordValidator {
             vector.revisionVectorDigestSHA256 =
                 try ProviderHandoffProjections
                 .revisionVectorDigest(vector)
-            return ProviderHandoffPostCommitRootV1(
+            return try ProviderHandoffPostCommitRootV1(
                 role: expectation.role,
                 stateRootUUID: expectation.stateRootUUID,
                 postCommitHeader: header,
                 postCommitHeaderDigestSHA256:
-                    try ProviderHandoffProjections
+                    ProviderHandoffProjections
                     .stateRootHeaderDigest(header),
                 postCommitRevisionVector: vector
             )

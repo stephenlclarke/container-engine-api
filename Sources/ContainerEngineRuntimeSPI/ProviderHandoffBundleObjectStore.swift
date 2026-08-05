@@ -113,13 +113,13 @@ public enum ProviderHandoffBundleObjectStoreError:
             "provider handoff bundle object filesystem metadata is unsafe"
         case .invalidRecord:
             "provider handoff bundle object record is invalid"
-        case .ioFailure(let operation, let code):
+        case let .ioFailure(operation, code):
             "provider handoff bundle object \(operation.rawValue) failed with errno \(code)"
         case .notFound:
             "provider handoff bundle object does not exist"
         case .revisionOverflow:
             "provider handoff bundle object revision cannot advance beyond UInt64.max"
-        case .revisionMismatch(let expected, let actual):
+        case let .revisionMismatch(expected, actual):
             "provider handoff bundle object revision mismatch: expected \(expected), found \(actual)"
         case .transportIncomplete:
             "provider handoff bundle object transport is incomplete"
@@ -377,15 +377,15 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             }
             let partialName = Self.partialFileName(record.bundleObjectID)
             let verifiedName = Self.verifiedFileName(record.bundleObjectID)
-            let sourceName: String
-            if Self.exists(
-                rootDescriptor: descriptor,
-                name: verifiedName
-            ) {
-                sourceName = verifiedName
-            } else {
-                sourceName = partialName
-            }
+            let sourceName: String =
+                if Self.exists(
+                    rootDescriptor: descriptor,
+                    name: verifiedName
+                ) {
+                    verifiedName
+                } else {
+                    partialName
+                }
             try verifyFile(
                 record,
                 rootDescriptor: descriptor,
@@ -523,6 +523,97 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
                 }
             )
         }
+    }
+
+    /// Returns the path of an immutable verified object after authenticating
+    /// its metadata and backing file. The root is provider-private and the
+    /// returned file is opened with `O_NOFOLLOW` by streaming consumers.
+    public func verifiedObjectFileURL(
+        bundleObjectID: String
+    ) throws -> URL {
+        try withStore { descriptor, key in
+            guard
+                let record = try loadIfPresent(
+                    bundleObjectID,
+                    rootDescriptor: descriptor,
+                    keyData: key
+                ), record.state == .verified
+            else {
+                throw ProviderHandoffBundleObjectStoreError.notFound
+            }
+            try validateBackingFile(record, rootDescriptor: descriptor)
+            return root.appendingPathComponent(
+                Self.verifiedFileName(record.bundleObjectID),
+                isDirectory: false
+            )
+        }
+    }
+
+    /// Publishes a regular file through the same durable append/replay state
+    /// machine used by remote chunks. Only one bounded chunk is resident at a
+    /// time; final verification still streams the immutable object from disk.
+    @discardableResult
+    public func publishFile(
+        at fileURL: URL,
+        bundleObjectID: String,
+        transportByteLength: UInt64,
+        transportDigestSHA256: String
+    ) throws -> ProviderHandoffBundleObjectRecordV1 {
+        var record = try declare(
+            bundleObjectID: bundleObjectID,
+            transportByteLength: transportByteLength,
+            transportDigestSHA256: transportDigestSHA256
+        )
+        if record.state == .verified {
+            return record
+        }
+        let descriptor = fileURL.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw ProviderHandoffBundleObjectStoreError.ioFailure(
+                .openFile,
+                errno
+            )
+        }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard
+            Darwin.fstat(descriptor, &metadata) == 0,
+            (metadata.st_mode & S_IFMT) == S_IFREG,
+            metadata.st_nlink == 1,
+            metadata.st_size >= 0,
+            UInt64(metadata.st_size) == transportByteLength
+        else {
+            throw ProviderHandoffBundleObjectStoreError.invalidMetadata
+        }
+        while record.state != .verified,
+            record.receivedByteCount < transportByteLength
+        {
+            let remaining = transportByteLength - record.receivedByteCount
+            let count = min(UInt64(Self.maximumChunkBytes), remaining)
+            guard let exactCount = Int(exactly: count), exactCount > 0 else {
+                throw ProviderHandoffBundleObjectStoreError.boundsExceeded
+            }
+            let bytes = try Self.readExactly(
+                descriptor: descriptor,
+                offset: record.receivedByteCount,
+                count: exactCount
+            )
+            record = try append(
+                bundleObjectID: bundleObjectID,
+                offset: record.receivedByteCount,
+                bytes: bytes,
+                expectedObjectRevision: record.objectRevision
+            )
+        }
+        if record.state != .verified {
+            record = try verify(
+                bundleObjectID: bundleObjectID,
+                expectedObjectRevision: record.objectRevision
+            )
+        }
+        return record
     }
 
     private func withStore<T>(
@@ -675,7 +766,7 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             record.pendingChunkByteLength != nil,
             record.pendingChunkDigestSHA256 != nil,
         ]
-        let pendingCount = pendingFields.filter { $0 }.count
+        let pendingCount = pendingFields.filter(\.self).count
         if let pendingDigest = record.pendingChunkDigestSHA256 {
             _ = try ProviderHandoffDigest.parseSHA256(pendingDigest)
         }
@@ -774,7 +865,7 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
         guard
             try reader.read(count: metadataMagic.count) == metadataMagic,
             try reader.readUInt32() == metadataSchemaVersion,
-            let length = Int(exactly: try reader.readUInt64()),
+            let length = try Int(exactly: reader.readUInt64()),
             length <= maximumMetadataBytes / 2
         else {
             throw ProviderHandoffBundleObjectStoreError.invalidEncoding
@@ -1014,7 +1105,9 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
                     fileOffset + off_t(consumed)
                 )
             }
-            if readCount < 0, errno == EINTR { continue }
+            if readCount < 0, errno == EINTR {
+                continue
+            }
             guard readCount > 0 else {
                 throw ProviderHandoffBundleObjectStoreError.ioFailure(
                     .read,
@@ -1043,7 +1136,9 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
                     data.count - written,
                     fileOffset + off_t(written)
                 )
-                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EINTR {
+                    continue
+                }
                 guard count > 0 else {
                     throw ProviderHandoffBundleObjectStoreError.ioFailure(
                         .write,
@@ -1124,8 +1219,8 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
         }
     }
 
-    private static func appendBigEndian<T: FixedWidthInteger>(
-        _ value: T,
+    private static func appendBigEndian(
+        _ value: some FixedWidthInteger,
         to data: inout Data
     ) {
         var encoded = value.bigEndian
@@ -1137,7 +1232,9 @@ private struct BundleObjectDataReader {
     let data: Data
     var offset = 0
 
-    var isAtEnd: Bool { offset == data.count }
+    var isAtEnd: Bool {
+        offset == data.count
+    }
 
     mutating func read(count: Int) throws -> Data {
         guard count >= 0, offset <= data.count - count else {
@@ -1156,7 +1253,7 @@ private struct BundleObjectDataReader {
     }
 
     private mutating func readInteger<T: FixedWidthInteger>(
-        _ type: T.Type
+        _: T.Type
     ) throws -> T {
         let bytes = try read(count: MemoryLayout<T>.size)
         return bytes.reduce(T.zero) { ($0 << 8) | T($1) }

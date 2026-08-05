@@ -18,7 +18,6 @@ import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
 
-@Suite
 struct ProviderHandoffCodecTests {
     @Test
     func `deterministic CBOR uses canonical key and integer encoding`() throws {
@@ -39,7 +38,7 @@ struct ProviderHandoffCodecTests {
         }
         #expect(throws: ProviderHandoffCanonicalCBORError.self) {
             try ProviderHandoffCanonicalCBOR.decode(
-                Data([0xa2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02])
+                Data([0xA2, 0x61, 0x61, 0x01, 0x61, 0x61, 0x02])
             )
         }
     }
@@ -58,15 +57,15 @@ struct ProviderHandoffCodecTests {
 
     @Test
     func `HChaCha20 matches the published fixed vector`() throws {
-        let key = Data((0x00...0x1f).map(UInt8.init))
+        let key = Data((0x00...0x1F).map(UInt8.init))
         let nonce = try #require(
             data(hex: "000000090000004a0000000031415927")
         )
         let expected = "82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc"
 
         #expect(
-            ProviderHandoffDigest.hex(
-                try ProviderHandoffCrypto.hChaCha20(key: key, nonce: nonce)
+            try ProviderHandoffDigest.hex(
+                ProviderHandoffCrypto.hChaCha20(key: key, nonce: nonce)
             ) == expected
         )
     }
@@ -105,9 +104,9 @@ struct ProviderHandoffCodecTests {
 
     @Test
     func `authenticated payload has one content addressed canonical object`() throws {
-        let package = ProviderHandoffPayloadPackageV1(
+        let package = try ProviderHandoffPayloadPackageV1(
             partKind: .logging,
-            entries: [try evidenceEntry(identifier: "public-evidence", source: nil)]
+            entries: [evidenceEntry(identifier: "public-evidence", source: nil)]
         )
         let payload = try ProviderHandoffPayloadCodec.prepareAuthenticated(
             package,
@@ -129,9 +128,9 @@ struct ProviderHandoffCodecTests {
         let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         let lineage = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
         let destination = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-        let package = ProviderHandoffPayloadPackageV1(
+        let package = try ProviderHandoffPayloadPackageV1(
             partKind: .logging,
-            entries: [try evidenceEntry(identifier: "protected-option", source: source)]
+            entries: [evidenceEntry(identifier: "protected-option", source: source)]
         )
         let lineageKey = ProviderHandoffLineageKeyV1(
             sourceStateRootUUID: source,
@@ -211,13 +210,127 @@ struct ProviderHandoffCodecTests {
     }
 
     @Test
-    func `payload rejects entries outside canonical source and identifier order`() throws {
+    func `framed sealed file round trips across bounded windows`() throws {
         let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let lineage = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        let destination = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        let record = try ProviderHandoffCanonicalCBOR.encode(
+            .byteString(
+                Data(
+                    repeating: 0x5A,
+                    count:
+                        ProviderHandoffPayloadCodec
+                        .maximumSealedFramePlaintextBytes + 1024
+                )
+            )
+        )
         let package = ProviderHandoffPayloadPackageV1(
             partKind: .logging,
             entries: [
-                try evidenceEntry(identifier: "z", source: source),
-                try evidenceEntry(identifier: "a", source: source),
+                ProviderHandoffPayloadPackageEntryV1(
+                    entryID: "large-history",
+                    sourceStateRootUUID: source,
+                    recordKind: "test-evidence",
+                    schemaVersion: 1,
+                    canonicalRecordBytes: record
+                )
+            ]
+        )
+        let lineageKey = ProviderHandoffLineageKeyV1(
+            sourceStateRootUUID: source,
+            authorityLineageUUID: lineage,
+            keyVersion: 4,
+            rawHMACSHA256Key: Data(repeating: 0x44, count: 32)
+        )
+        let destinationPrivateKey = ProviderHandoffCrypto.generateX25519PrivateKey()
+        let destinationPublicKey = try ProviderHandoffCrypto.x25519PublicKey(
+            for: destinationPrivateKey
+        )
+        let destinationKeyID = try ProviderHandoffCrypto.trustKeyID(
+            algorithm: .x25519V1,
+            role: .destinationProvider,
+            purpose: .destinationPayloadEncryption,
+            providerFingerprint: "sha256:destination",
+            stateRootUUID: destination,
+            rawPublicKey: destinationPublicKey
+        )
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "provider-handoff-framed-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let recordURL = root.appendingPathComponent("record")
+        try record.write(to: recordURL, options: .withoutOverwriting)
+        let transportURL = root.appendingPathComponent("transport")
+        let canonicalURL = root.appendingPathComponent("canonical")
+        let payload = try ProviderHandoffPayloadCodec.prepareSealedFile(
+            ProviderHandoffPayloadPackageSourceV2(
+                partKind: .logging,
+                entries: [
+                    ProviderHandoffPayloadPackageEntrySourceV2(
+                        entryID: "large-history",
+                        sourceStateRootUUID: source,
+                        recordKind: "test-evidence",
+                        schemaVersion: 1,
+                        canonicalRecord: .file(
+                            url: recordURL,
+                            byteLength: UInt64(record.count)
+                        )
+                    )
+                ]
+            ),
+            transportFileURL: transportURL,
+            mediaType:
+                "application/vnd.io.github.stephenlclarke.container.handoff-logging.v1+cbor",
+            tokenID: "token-1",
+            manifestID: "manifest-1",
+            sourceOrder: [source],
+            lineageKeys: [lineageKey],
+            destinationProviderFingerprint: "sha256:destination",
+            destinationStateRootUUID: destination,
+            destinationKeyID: destinationKeyID,
+            destinationPublicKey: destinationPublicKey,
+            nonce: Data((0x00...0x17).map(UInt8.init))
+        )
+
+        #expect(
+            payload.descriptor.protection
+                == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
+        )
+        #expect(
+            payload.descriptor.transportByteLength
+                == payload.descriptor.canonicalPlaintextByteLength + 32
+        )
+        let transport = try Data(contentsOf: transportURL, options: .mappedIfSafe)
+        #expect(transport.range(of: Data(repeating: 0x5A, count: 64)) == nil)
+        #expect(
+            try ProviderHandoffPayloadCodec.openSealedFile(
+                payload,
+                canonicalFileURL: canonicalURL,
+                expectedPartKind: .logging,
+                tokenID: "token-1",
+                manifestID: "manifest-1",
+                sourceOrder: [source],
+                lineageKeys: [lineageKey],
+                destinationProviderFingerprint: "sha256:destination",
+                destinationStateRootUUID: destination,
+                destinationPrivateKey: destinationPrivateKey
+            ) == package
+        )
+    }
+
+    @Test
+    func `payload rejects entries outside canonical source and identifier order`() throws {
+        let source = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let package = try ProviderHandoffPayloadPackageV1(
+            partKind: .logging,
+            entries: [
+                evidenceEntry(identifier: "z", source: source),
+                evidenceEntry(identifier: "a", source: source),
             ]
         )
 
@@ -230,12 +343,12 @@ struct ProviderHandoffCodecTests {
         identifier: String,
         source: String?
     ) throws -> ProviderHandoffPayloadPackageEntryV1 {
-        ProviderHandoffPayloadPackageEntryV1(
+        try ProviderHandoffPayloadPackageEntryV1(
             entryID: identifier,
             sourceStateRootUUID: source,
             recordKind: "test-evidence",
             schemaVersion: 1,
-            canonicalRecordBytes: try ProviderHandoffCanonicalCBOR.encode(
+            canonicalRecordBytes: ProviderHandoffCanonicalCBOR.encode(
                 .map([.init("value", .textString("secret"))])
             )
         )
