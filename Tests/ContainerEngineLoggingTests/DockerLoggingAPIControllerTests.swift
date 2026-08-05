@@ -567,6 +567,59 @@ func `container resize validates UInt32 dimensions before calling the provider`(
     #expect(try errorMessage(missing) == "No such container: missing")
 }
 
+@Test
+func `container lifecycle routes decode typed requests and call native authority`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let create = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/v1.53/containers/create?name=fixture",
+            body: Data(
+                #"{"Image":"alpine:latest","Cmd":["echo","hello"],"Env":["A=B"],"HostConfig":{"AutoRemove":true,"LogConfig":{"Type":"example-plugin","Config":{"token":"redacted"}}}}"#.utf8
+            )
+        )
+    )
+    #expect(create.status == 201)
+    let createObject = try responseJSONObject(create)
+    #expect(createObject["Id"] as? String == "fixture-id")
+    #expect(backend.createdRequest?.image == "alpine:latest")
+    #expect(backend.createdRequest?.command == ["echo", "hello"])
+    #expect(
+        backend.createdRequest?.hostConfiguration?.logConfiguration?.type
+            == "example-plugin"
+    )
+    #expect(backend.requestedName == "fixture")
+
+    let start = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/start"
+        )
+    )
+    #expect(start.status == 204)
+
+    let stop = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/stop?t=9"
+        )
+    )
+    #expect(stop.status == 204)
+
+    let delete = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .delete,
+            target: "/containers/fixture-id?force=1&v=true"
+        )
+    )
+    #expect(delete.status == 204)
+    #expect(
+        backend.lifecycleCalls
+            == ["start:fixture-id", "stop:fixture-id:9", "delete:fixture-id:true:true"]
+    )
+}
+
 private func responseData(_ response: DockerHTTPResponse) throws -> Data {
     guard case let .bytes(data) = response.body else {
         throw FixtureError("expected byte response")
@@ -789,6 +842,7 @@ private struct InspectLogConfigPayload: Decodable {
 
 private final class FakeLoggingBackend:
     DockerLoggingBackend,
+    DockerContainerLifecycleBackend,
     DockerTerminalResizeBackend,
     @unchecked Sendable
 {
@@ -800,6 +854,9 @@ private final class FakeLoggingBackend:
     private var capturedAttachRequest: DockerAttachRequest?
     private var capturedResize: DockerResizeCapture?
     private var openedLogs = 0
+    private var capturedCreatedRequest: DockerContainerCreateRequest?
+    private var capturedRequestedName: String?
+    private var capturedLifecycleCalls = [String]()
 
     init(
         reader: FakeLogReadSession,
@@ -823,6 +880,58 @@ private final class FakeLoggingBackend:
 
     var lastResize: DockerResizeCapture? {
         lock.withLock { capturedResize }
+    }
+
+    var createdRequest: DockerContainerCreateRequest? {
+        lock.withLock { capturedCreatedRequest }
+    }
+
+    var requestedName: String? {
+        lock.withLock { capturedRequestedName }
+    }
+
+    var lifecycleCalls: [String] {
+        lock.withLock { capturedLifecycleCalls }
+    }
+
+    func createContainer(
+        request: DockerContainerCreateRequest,
+        requestedName: String?
+    ) async throws -> DockerContainerCreateResult {
+        lock.withLock {
+            capturedCreatedRequest = request
+            capturedRequestedName = requestedName
+        }
+        return DockerContainerCreateResult(containerID: "fixture-id")
+    }
+
+    func startContainer(containerID: String) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append("start:\(containerID)")
+        }
+    }
+
+    func stopContainer(
+        containerID: String,
+        timeoutSeconds: Int64?
+    ) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "stop:\(containerID):\(timeoutSeconds.map(String.init) ?? "nil")"
+            )
+        }
+    }
+
+    func deleteContainer(
+        containerID: String,
+        force: Bool,
+        removeVolumes: Bool
+    ) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "delete:\(containerID):\(force):\(removeVolumes)"
+            )
+        }
     }
 
     func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
