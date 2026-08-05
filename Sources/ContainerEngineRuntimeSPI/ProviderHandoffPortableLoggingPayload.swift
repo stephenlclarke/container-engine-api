@@ -3,6 +3,7 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
+import Darwin
 import Foundation
 
 /// A timestamped public log record that can be represented by Docker's
@@ -86,6 +87,55 @@ public struct ProviderHandoffPortableLoggingContainerV1: Equatable, Sendable {
     }
 }
 
+/// One-shot record stream for bounded-memory portable logging export.
+///
+/// Metadata is identical to v1, but records are consumed incrementally and
+/// written to bounded history files owned by the caller's temporary export
+/// directory.
+public struct ProviderHandoffPortableLoggingContainerSourceV2: Sendable {
+    public var containerID: String
+    public var requestedDriver: String?
+    public var requestedSafeOptions: [String: String]
+    public var resolvedSafeOptions: [String: String]
+    public var leaseGeneration: UInt64
+    public var providerID: String
+    public var providerVersion: String
+    public var providerKind:
+        ProviderHandoffPortableLoggingContainerV1.ProviderKind
+    public var providerGeneration: UInt64
+    public var terminalHistoryEpoch: UInt64
+    public var records:
+        AsyncThrowingStream<ProviderHandoffPortableLogRecordV1, any Error>
+
+    public init(
+        containerID: String,
+        requestedDriver: String? = nil,
+        requestedSafeOptions: [String: String] = [:],
+        resolvedSafeOptions: [String: String] = [:],
+        leaseGeneration: UInt64 = 1,
+        providerID: String,
+        providerVersion: String,
+        providerKind:
+            ProviderHandoffPortableLoggingContainerV1.ProviderKind = .native,
+        providerGeneration: UInt64 = 1,
+        terminalHistoryEpoch: UInt64 = 0,
+        records:
+            AsyncThrowingStream<ProviderHandoffPortableLogRecordV1, any Error>
+    ) {
+        self.containerID = containerID
+        self.requestedDriver = requestedDriver
+        self.requestedSafeOptions = requestedSafeOptions
+        self.resolvedSafeOptions = resolvedSafeOptions
+        self.leaseGeneration = leaseGeneration
+        self.providerID = providerID
+        self.providerVersion = providerVersion
+        self.providerKind = providerKind
+        self.providerGeneration = providerGeneration
+        self.terminalHistoryEpoch = terminalHistoryEpoch
+        self.records = records
+    }
+}
+
 public enum ProviderHandoffPortableLoggingPayloadError:
     Error,
     Equatable,
@@ -146,6 +196,16 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
     // keeps every encoded line below the destination's 1 MiB record ceiling.
     private static let maximumRecordChunkBytes = 128 * 1024
     private static let maximumEncodedRecordBytes = 1 * 1024 * 1024
+
+    private struct HistorySegmentFile {
+        let url: URL
+        let byteLength: UInt64
+    }
+
+    private struct HistoryEntryMetadata {
+        let entryID: String
+        let retentionProjection: ProviderHandoffCanonicalValue
+    }
 
     /// Returns the canonical store identifier for one multi-store history
     /// member. The index is zero-based and the count must exceed one.
@@ -389,6 +449,323 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         )
     }
 
+    /// Builds a file-backed canonical package without retaining aggregate log
+    /// records or history bytes. The temporary directory must be private and
+    /// owned by the caller for the complete sealing operation.
+    public static func packageSource(
+        containers: [ProviderHandoffPortableLoggingContainerSourceV2],
+        sourceStateRootUUID: String,
+        temporaryDirectoryURL: URL
+    ) async throws -> ProviderHandoffPayloadPackageSourceV2 {
+        try await packageSource(
+            containers: containers,
+            sourceStateRootUUID: sourceStateRootUUID,
+            temporaryDirectoryURL: temporaryDirectoryURL,
+            maximumHistoryStoreBytes: maximumHistoryChunkBytes
+        )
+    }
+
+    @_spi(Testing)
+    public static func packageSource(
+        containers: [ProviderHandoffPortableLoggingContainerSourceV2],
+        sourceStateRootUUID: String,
+        temporaryDirectoryURL: URL,
+        maximumHistoryStoreBytes: Int
+    ) async throws -> ProviderHandoffPayloadPackageSourceV2 {
+        guard
+            !containers.isEmpty,
+            maximumHistoryStoreBytes > 0,
+            maximumHistoryStoreBytes <= maximumHistoryChunkBytes,
+            let sourceRoot = UUID(uuidString: sourceStateRootUUID),
+            sourceRoot.uuidString.lowercased() == sourceStateRootUUID,
+            temporaryDirectoryURL.isFileURL,
+            temporaryDirectoryURL.path.hasPrefix("/"),
+            !temporaryDirectoryURL.path.utf8.contains(0)
+        else {
+            throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                containers.first?.containerID ?? "unknown"
+            )
+        }
+        let ordered = containers.sorted {
+            utf8Less($0.containerID, $1.containerID)
+        }
+        guard Set(ordered.map(\.containerID)).count == ordered.count else {
+            throw ProviderHandoffPortableLoggingPayloadError.duplicateContainer(
+                ordered.first?.containerID ?? "unknown"
+            )
+        }
+
+        var entries: [ProviderHandoffPayloadPackageEntrySourceV2] = []
+        for container in ordered {
+            try validate(container)
+            let writer = try PortableHistoryFileWriter(
+                containerID: container.containerID,
+                directoryURL: temporaryDirectoryURL,
+                maximumHistoryStoreBytes: maximumHistoryStoreBytes
+            )
+            do {
+                for try await record in container.records {
+                    try writer.append(record)
+                }
+            } catch {
+                writer.cancel()
+                throw error
+            }
+            let historyFiles = try writer.finish()
+            let segmentCount = UInt64(historyFiles.count)
+            var histories: [HistoryEntryMetadata] = []
+            for (index, file) in historyFiles.enumerated() {
+                let storeID =
+                    segmentCount == 1
+                    ? historyStoreID
+                    : historyChunkStoreID(
+                        index: UInt64(index),
+                        count: segmentCount
+                    )
+                let entryID = historyEntryID(
+                    containerID: container.containerID,
+                    storeID: storeID
+                )
+                let data = try mappedRegularFile(
+                    at: file.url,
+                    expectedByteLength: file.byteLength
+                )
+                let history = try historyProjection(
+                    storeID: storeID,
+                    bytes: data,
+                    terminalHistoryEpoch: container.terminalHistoryEpoch
+                )
+                let canonical = try ProviderHandoffCanonicalCBOR.encode(history)
+                let canonicalURL = temporaryDirectoryURL.appendingPathComponent(
+                    "portable-history-record-\(encodedIdentifier(container.containerID))-\(index).cbor",
+                    isDirectory: false
+                )
+                try writeExclusive(canonical, to: canonicalURL)
+                entries.append(
+                    ProviderHandoffPayloadPackageEntrySourceV2(
+                        entryID: entryID,
+                        sourceStateRootUUID: sourceStateRootUUID,
+                        recordKind: "logging-history-store-v1",
+                        schemaVersion: 1,
+                        canonicalRecord: .file(
+                            url: canonicalURL,
+                            byteLength: UInt64(canonical.count)
+                        )
+                    )
+                )
+                histories.append(
+                    HistoryEntryMetadata(
+                        entryID: entryID,
+                        retentionProjection:
+                            historyRetentionProjection(history)
+                    )
+                )
+            }
+
+            let contractDigest = try portableContractDigest(
+                providerID: container.providerID,
+                providerVersion: container.providerVersion,
+                safeOptions: container.resolvedSafeOptions
+            )
+            let historyRetentionDigest = try ProviderHandoffDigest.domain(
+                "container-handoff-logging-history-retention-v1",
+                projection: .map([
+                    .init("containerID", .textString(container.containerID)),
+                    .init(
+                        "stores",
+                        .array(histories.map(\.retentionProjection))
+                    ),
+                ])
+            )
+            let terminalCategoryDigest = try terminalCategoryDigest(
+                containerID: container.containerID
+            )
+            let containerRecord = try ProviderHandoffCanonicalCBOR.encode(
+                containerProjection(
+                    containerID: container.containerID,
+                    requestedDriver: container.requestedDriver,
+                    requestedSafeOptions: container.requestedSafeOptions,
+                    resolvedSafeOptions: container.resolvedSafeOptions,
+                    leaseGeneration: container.leaseGeneration,
+                    providerID: container.providerID,
+                    providerVersion: container.providerVersion,
+                    providerKind: container.providerKind,
+                    providerGeneration: container.providerGeneration,
+                    terminalHistoryEpoch: container.terminalHistoryEpoch,
+                    historyEntryIDs: histories.map(\.entryID),
+                    contractDigest: contractDigest,
+                    historyRetentionDigest: historyRetentionDigest,
+                    terminalCategoryDigest: terminalCategoryDigest
+                )
+            )
+            entries.append(
+                ProviderHandoffPayloadPackageEntrySourceV2(
+                    entryID: containerEntryID(container.containerID),
+                    sourceStateRootUUID: sourceStateRootUUID,
+                    recordKind: "logging-container-v1",
+                    schemaVersion: 1,
+                    canonicalRecord: .data(containerRecord)
+                )
+            )
+        }
+        entries.sort { utf8Less($0.entryID, $1.entryID) }
+        return ProviderHandoffPayloadPackageSourceV2(
+            partKind: .logging,
+            entries: entries
+        )
+    }
+
+    private final class PortableHistoryFileWriter {
+        private let containerID: String
+        private let directoryURL: URL
+        private let maximumHistoryStoreBytes: Int
+        private var files: [HistorySegmentFile] = []
+        private var currentURL: URL?
+        private var currentHandle: FileHandle?
+        private var currentByteLength = 0
+        private var finished = false
+
+        init(
+            containerID: String,
+            directoryURL: URL,
+            maximumHistoryStoreBytes: Int
+        ) throws {
+            self.containerID = containerID
+            self.directoryURL = directoryURL
+            self.maximumHistoryStoreBytes = maximumHistoryStoreBytes
+            try startSegment()
+        }
+
+        func append(_ record: ProviderHandoffPortableLogRecordV1) throws {
+            guard
+                !finished,
+                record.nanoseconds < 1_000_000_000
+            else {
+                throw ProviderHandoffPortableLoggingPayloadError.invalidRecord(
+                    containerID
+                )
+            }
+            if record.data.isEmpty {
+                try appendEncoded(
+                    ProviderHandoffPortableLoggingPayloadCodec.encodeRecord(
+                        record,
+                        data: Data()
+                    )
+                )
+                return
+            }
+            var lower = 0
+            while lower < record.data.count {
+                let upper = min(
+                    record.data.count,
+                    lower + ProviderHandoffPortableLoggingPayloadCodec
+                        .maximumRecordChunkBytes
+                )
+                try appendEncoded(
+                    ProviderHandoffPortableLoggingPayloadCodec.encodeRecord(
+                        record,
+                        data: record.data.subdata(in: lower..<upper)
+                    )
+                )
+                lower = upper
+            }
+        }
+
+        func finish() throws -> [HistorySegmentFile] {
+            guard !finished else {
+                throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                    containerID
+                )
+            }
+            try finishSegment()
+            finished = true
+            return files
+        }
+
+        func cancel() {
+            try? currentHandle?.close()
+            currentHandle = nil
+            if let currentURL {
+                _ = currentURL.path.withCString { Darwin.unlink($0) }
+            }
+            for file in files {
+                _ = file.url.path.withCString { Darwin.unlink($0) }
+            }
+            files.removeAll(keepingCapacity: false)
+            finished = true
+        }
+
+        private func appendEncoded(_ encoded: Data) throws {
+            guard
+                encoded.count
+                    <= ProviderHandoffPortableLoggingPayloadCodec
+                    .maximumEncodedRecordBytes,
+                encoded.count <= maximumHistoryStoreBytes
+            else {
+                throw ProviderHandoffPortableLoggingPayloadError.historyTooLarge(
+                    containerID
+                )
+            }
+            if currentByteLength > 0,
+                currentByteLength + encoded.count > maximumHistoryStoreBytes
+            {
+                try finishSegment()
+                try startSegment()
+            }
+            guard let currentHandle else {
+                throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                    containerID
+                )
+            }
+            try currentHandle.write(contentsOf: encoded)
+            currentByteLength += encoded.count
+        }
+
+        private func startSegment() throws {
+            let url = directoryURL.appendingPathComponent(
+                "portable-history-\(encodedIdentifier(containerID))-\(files.count).bin",
+                isDirectory: false
+            )
+            let descriptor = url.path.withCString {
+                Darwin.open(
+                    $0,
+                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                    mode_t(0o600)
+                )
+            }
+            guard descriptor >= 0 else {
+                throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                    containerID
+                )
+            }
+            currentURL = url
+            currentHandle = FileHandle(
+                fileDescriptor: descriptor,
+                closeOnDealloc: true
+            )
+            currentByteLength = 0
+        }
+
+        private func finishSegment() throws {
+            guard let currentURL, let currentHandle else {
+                throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                    containerID
+                )
+            }
+            try currentHandle.synchronize()
+            try currentHandle.close()
+            files.append(
+                HistorySegmentFile(
+                    url: currentURL,
+                    byteLength: UInt64(currentByteLength)
+                )
+            )
+            self.currentURL = nil
+            self.currentHandle = nil
+            currentByteLength = 0
+        }
+    }
+
     private static func validate(
         _ container: ProviderHandoffPortableLoggingContainerV1
     ) throws {
@@ -416,6 +793,232 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 container.containerID
             )
         }
+    }
+
+    private static func validate(
+        _ container: ProviderHandoffPortableLoggingContainerSourceV2
+    ) throws {
+        guard
+            !container.containerID.isEmpty,
+            container.containerID.precomposedStringWithCanonicalMapping
+                == container.containerID,
+            container.leaseGeneration > 0,
+            container.providerGeneration > 0,
+            !container.providerID.isEmpty,
+            !container.providerVersion.isEmpty,
+            container.requestedDriver != "",
+            container.requestedSafeOptions.keys.allSatisfy({
+                container.resolvedSafeOptions[$0]
+                    == container.requestedSafeOptions[$0]
+            })
+        else {
+            throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                container.containerID
+            )
+        }
+    }
+
+    private static func portableContractDigest(
+        providerID: String,
+        providerVersion: String,
+        safeOptions: [String: String]
+    ) throws -> String {
+        try ProviderHandoffDigest.domain(
+            "container-handoff-portable-logging-contract-v1",
+            projection: .map([
+                .init("driver", .textString("json-file")),
+                .init("providerID", .textString(providerID)),
+                .init("providerVersion", .textString(providerVersion)),
+                .init("safeOptions", stringMap(safeOptions)),
+            ])
+        )
+    }
+
+    private static func terminalCategoryDigest(
+        containerID: String
+    ) throws -> String {
+        try ProviderHandoffDigest.domain(
+            "container-handoff-logging-terminal-categories-v1",
+            projection: .map([
+                .init("categories", .array([])),
+                .init("containerID", .textString(containerID)),
+            ])
+        )
+    }
+
+    private static func containerProjection(
+        containerID: String,
+        requestedDriver: String?,
+        requestedSafeOptions: [String: String],
+        resolvedSafeOptions: [String: String],
+        leaseGeneration: UInt64,
+        providerID: String,
+        providerVersion: String,
+        providerKind: ProviderHandoffPortableLoggingContainerV1.ProviderKind,
+        providerGeneration: UInt64,
+        terminalHistoryEpoch: UInt64,
+        historyEntryIDs: [String],
+        contractDigest: String,
+        historyRetentionDigest: String,
+        terminalCategoryDigest: String
+    ) throws -> ProviderHandoffCanonicalValue {
+        try .map([
+            .init("containerID", .textString(containerID)),
+            .init(
+                "historyEntryIDs",
+                .array(historyEntryIDs.map(ProviderHandoffCanonicalValue.textString))
+            ),
+            .init("protectedEntryIDs", .array([])),
+            .init(
+                "requested",
+                .map([
+                    .init("driver", .optional(requestedDriver)),
+                    .init("protectedOptionNames", .array([])),
+                    .init("safeOptions", stringMap(requestedSafeOptions)),
+                    .init("schemaVersion", .unsigned(1)),
+                ])
+            ),
+            .init("schemaVersion", .unsigned(1)),
+            .init(
+                "sourceResolved",
+                .map([
+                    .init("contractDigest", .textString(contractDigest)),
+                    .init(
+                        "delivery",
+                        .map([
+                            .init("effectiveMaxBufferSizeInBytes", .null),
+                            .init("effectiveMode", .textString("blocking")),
+                            .init("maxBufferSizeInBytes", .null),
+                            .init("requestedMode", .null),
+                            .init("schemaVersion", .unsigned(1)),
+                        ])
+                    ),
+                    .init("driver", .textString("json-file")),
+                    .init("leaseGeneration", .unsigned(leaseGeneration)),
+                    .init("protectedOptionNames", .array([])),
+                    .init(
+                        "providerGenerationAtResolution",
+                        .unsigned(providerGeneration)
+                    ),
+                    .init("providerHistoryMigrationReceipt", .null),
+                    .init(
+                        "providerIdentity",
+                        .map([
+                            .init("id", .textString(providerID)),
+                            .init("kind", .textString(providerKind.rawValue)),
+                            .init("schemaVersion", .unsigned(1)),
+                            .init("version", .textString(providerVersion)),
+                        ])
+                    ),
+                    .init(
+                        "readPolicy",
+                        .map([
+                            .init("cache", .null),
+                            .init("schemaVersion", .unsigned(1)),
+                            .init("source", .textString("direct")),
+                        ])
+                    ),
+                    .init("safeOptions", stringMap(resolvedSafeOptions)),
+                    .init("schemaVersion", .unsigned(1)),
+                ])
+            ),
+            .init(
+                "terminalAudit",
+                .map([
+                    .init(
+                        "historyRetentionDigestSHA256",
+                        digest(historyRetentionDigest)
+                    ),
+                    .init("schemaVersion", .unsigned(1)),
+                    .init(
+                        "terminalCategoryDigestSHA256",
+                        digest(terminalCategoryDigest)
+                    ),
+                    .init("terminalDetachedCleanupCount", .unsigned(0)),
+                    .init("terminalReaderCount", .unsigned(0)),
+                    .init("terminalWriterCount", .unsigned(0)),
+                ])
+            ),
+        ])
+    }
+
+    private static func mappedRegularFile(
+        at url: URL,
+        expectedByteLength: UInt64
+    ) throws -> Data {
+        guard
+            expectedByteLength <= UInt64(maximumHistoryChunkBytes),
+            let count = Int(exactly: expectedByteLength)
+        else {
+            throw ProviderHandoffPortableLoggingPayloadError.historyTooLarge(
+                url.lastPathComponent
+            )
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                url.lastPathComponent
+            )
+        }
+        var metadata = stat()
+        guard
+            Darwin.fstat(descriptor, &metadata) == 0,
+            (metadata.st_mode & S_IFMT) == S_IFREG,
+            metadata.st_nlink == 1,
+            metadata.st_size == off_t(expectedByteLength)
+        else {
+            Darwin.close(descriptor)
+            throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                url.lastPathComponent
+            )
+        }
+        guard count > 0 else {
+            Darwin.close(descriptor)
+            return Data()
+        }
+        let mapping = mmap(nil, count, PROT_READ, MAP_PRIVATE, descriptor, 0)
+        Darwin.close(descriptor)
+        guard mapping != MAP_FAILED, let mapping else {
+            throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                url.lastPathComponent
+            )
+        }
+        return Data(
+            bytesNoCopy: mapping,
+            count: count,
+            deallocator: .custom { pointer, byteCount in
+                _ = munmap(pointer, byteCount)
+            }
+        )
+    }
+
+    private static func writeExclusive(_ data: Data, to url: URL) throws {
+        let descriptor = url.path.withCString {
+            Darwin.open(
+                $0,
+                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                mode_t(0o600)
+            )
+        }
+        guard descriptor >= 0 else {
+            throw ProviderHandoffPortableLoggingPayloadError.invalidContainer(
+                url.lastPathComponent
+            )
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var completed = false
+        defer {
+            try? handle.close()
+            if !completed {
+                _ = url.path.withCString { Darwin.unlink($0) }
+            }
+        }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+        completed = true
     }
 
     private static func historyProjection(

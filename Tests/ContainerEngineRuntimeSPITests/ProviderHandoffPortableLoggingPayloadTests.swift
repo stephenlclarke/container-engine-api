@@ -235,6 +235,93 @@ struct ProviderHandoffPortableLoggingPayloadTests {
         }
     }
 
+    @Test
+    func `streamed portable records produce the exact canonical package`() async throws {
+        let records = (0..<8).map { index in
+            ProviderHandoffPortableLogRecordV1(
+                secondsSinceUnixEpoch: Int64(index),
+                nanoseconds: UInt32(index),
+                stream: index.isMultiple(of: 2) ? .stdout : .stderr,
+                data: Data("record-\(index)\n".utf8)
+            )
+        }
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "portable-logging-source-test-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: temporaryRoot,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+        let stream = AsyncThrowingStream<
+            ProviderHandoffPortableLogRecordV1,
+            any Error
+        > { continuation in
+            for record in records {
+                continuation.yield(record)
+            }
+            continuation.finish()
+        }
+        let source = try await ProviderHandoffPortableLoggingPayloadCodec
+            .packageSource(
+                containers: [
+                    ProviderHandoffPortableLoggingContainerSourceV2(
+                        containerID: "container-1",
+                        providerID: "devcontainer.apple-container",
+                        providerVersion: "1",
+                        terminalHistoryEpoch: 9,
+                        records: stream
+                    )
+                ],
+                sourceStateRootUUID: sourceRoot,
+                temporaryDirectoryURL: temporaryRoot,
+                maximumHistoryStoreBytes: 192
+            )
+        #expect(
+            source.entries.filter {
+                if case .file = $0.canonicalRecord { return true }
+                return false
+            }.count > 1
+        )
+        let materialized = try ProviderHandoffPayloadPackageV1(
+            partKind: source.partKind,
+            entries: source.entries.map { entry in
+                let recordBytes: Data
+                switch entry.canonicalRecord {
+                case let .data(data):
+                    recordBytes = data
+                case let .file(url, byteLength):
+                    recordBytes = try Data(contentsOf: url)
+                    #expect(UInt64(recordBytes.count) == byteLength)
+                }
+                return ProviderHandoffPayloadPackageEntryV1(
+                    entryID: entry.entryID,
+                    sourceStateRootUUID: entry.sourceStateRootUUID,
+                    recordKind: entry.recordKind,
+                    schemaVersion: entry.schemaVersion,
+                    canonicalRecordBytes: recordBytes
+                )
+            }
+        )
+        let expected = try ProviderHandoffPortableLoggingPayloadCodec.package(
+            containers: [
+                ProviderHandoffPortableLoggingContainerV1(
+                    containerID: "container-1",
+                    providerID: "devcontainer.apple-container",
+                    providerVersion: "1",
+                    terminalHistoryEpoch: 9,
+                    records: records
+                )
+            ],
+            sourceStateRootUUID: sourceRoot,
+            maximumHistoryStoreBytes: 192
+        )
+        #expect(materialized == expected)
+    }
+
     private func map(
         _ value: ProviderHandoffCanonicalValue
     ) throws -> [String: ProviderHandoffCanonicalValue] {

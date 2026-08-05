@@ -34,6 +34,11 @@ public struct ContainerEngineProviderSourceHandoffResponder:
     public typealias ExportPackageSource =
         @Sendable (ProviderHandoffPartExportRequestV1) async throws
         -> ProviderHandoffPayloadPackageSourceV2
+    public typealias ExportPackageSourceToDirectory =
+        @Sendable (
+            ProviderHandoffPartExportRequestV1,
+            _ temporaryDirectoryURL: URL
+        ) async throws -> ProviderHandoffPayloadPackageSourceV2
 
     private struct ValidatedExport: Sendable {
         let proofDigests: [String]
@@ -47,7 +52,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
     private let lineageKeyStore: ProviderHandoffLineageKeyStore
     private let trustRegistryStore: ProviderHandoffTrustRegistryStore
     private let providerIdentity: ProviderHandoffProviderIdentityV1
-    private let exportPackage: ExportPackageSource
+    private let exportPackage: ExportPackageSourceToDirectory
     private let nowUnixSeconds: @Sendable () throws -> UInt64
     private let downstream: (any ContainerEngineProviderHandoffControlResponder)?
 
@@ -99,7 +104,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         self.lineageKeyStore = lineageKeyStore
         self.trustRegistryStore = trustRegistryStore
         self.providerIdentity = providerIdentity
-        self.exportPackage = { request in
+        self.exportPackage = { request, _ in
             try await ProviderHandoffPayloadPackageSourceV2(
                 exportPackage(request)
             )
@@ -156,7 +161,63 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         self.lineageKeyStore = lineageKeyStore
         self.trustRegistryStore = trustRegistryStore
         self.providerIdentity = providerIdentity
-        exportPackage = exportPackageSource
+        exportPackage = { request, _ in
+            try await exportPackageSource(request)
+        }
+        self.nowUnixSeconds = nowUnixSeconds
+        self.downstream = downstream
+    }
+
+    public init(
+        partKind: ProviderHandoffPartKindV1,
+        mediaType: String,
+        requiredCapabilities: [String],
+        objectStore: ProviderHandoffBundleObjectStore,
+        contributionStore: ProviderHandoffSourceContributionStore,
+        lineageKeyStore: ProviderHandoffLineageKeyStore,
+        trustRegistryStore: ProviderHandoffTrustRegistryStore,
+        providerIdentity: ProviderHandoffProviderIdentityV1,
+        exportPackageSourceToDirectory:
+            @escaping ExportPackageSourceToDirectory,
+        nowUnixSeconds: @escaping @Sendable () throws -> UInt64 = {
+            let value = Date().timeIntervalSince1970
+            guard
+                value.isFinite,
+                value >= 0,
+                value < Double(UInt64.max)
+            else {
+                throw ContainerEngineProviderSourceHandoffError.invalidRequest
+            }
+            return UInt64(value.rounded(.down))
+        },
+        downstream:
+            (any ContainerEngineProviderHandoffControlResponder)? = nil
+    ) throws {
+        let orderedCapabilities = requiredCapabilities.sorted {
+            $0.utf8.lexicographicallyPrecedes($1.utf8)
+        }
+        guard
+            !mediaType.isEmpty,
+            mediaType.precomposedStringWithCanonicalMapping == mediaType,
+            !orderedCapabilities.isEmpty,
+            Set(orderedCapabilities).count == orderedCapabilities.count,
+            orderedCapabilities.allSatisfy({
+                !$0.isEmpty
+                    && $0.precomposedStringWithCanonicalMapping == $0
+            })
+        else {
+            throw ContainerEngineProviderSourceHandoffError
+                .invalidConfiguration
+        }
+        self.partKind = partKind
+        self.mediaType = mediaType
+        self.requiredCapabilities = orderedCapabilities
+        self.objectStore = objectStore
+        self.contributionStore = contributionStore
+        self.lineageKeyStore = lineageKeyStore
+        self.trustRegistryStore = trustRegistryStore
+        self.providerIdentity = providerIdentity
+        exportPackage = exportPackageSourceToDirectory
         self.nowUnixSeconds = nowUnixSeconds
         self.downstream = downstream
     }
@@ -266,10 +327,6 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                 keyVersion: request.lineageDigestKeyVersion
             )
         )
-        let package = try await exportPackage(request)
-        guard package.partKind == partKind else {
-            throw ContainerEngineProviderSourceHandoffError.invalidRequest
-        }
         let transportRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "provider-handoff-export-\(UUID().uuidString)",
@@ -277,9 +334,14 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             )
         try FileManager.default.createDirectory(
             at: transportRoot,
-            withIntermediateDirectories: false
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
         )
         defer { try? FileManager.default.removeItem(at: transportRoot) }
+        let package = try await exportPackage(request, transportRoot)
+        guard package.partKind == partKind else {
+            throw ContainerEngineProviderSourceHandoffError.invalidRequest
+        }
         let payload = try ProviderHandoffPayloadCodec.prepareSealedFile(
             package,
             transportFileURL: transportRoot.appendingPathComponent("payload"),
