@@ -25,6 +25,26 @@ public struct DockerContainerListRequest: Equatable, Sendable {
     }
 }
 
+/// A normalized `GET /images/json` request.
+public struct DockerImageListRequest: Equatable, Sendable {
+    public var all: Bool
+    public var sharedSize: Bool
+    public var containerdSnapshotter: Bool
+    public var filters: [String: [String]]
+
+    public init(
+        all: Bool = false,
+        sharedSize: Bool = false,
+        containerdSnapshotter: Bool = false,
+        filters: [String: [String]] = [:]
+    ) {
+        self.all = all
+        self.sharedSize = sharedSize
+        self.containerdSnapshotter = containerdSnapshotter
+        self.filters = filters
+    }
+}
+
 /// Supplies complete Docker discovery documents from the selected native
 /// container authority.
 ///
@@ -34,4 +54,11 @@ public struct DockerContainerListRequest: Equatable, Sendable {
 public protocol DockerEngineDiscoveryBackend: Sendable {
     func systemVersionJSON() async throws -> Data
     func containerListJSON(request: DockerContainerListRequest) async throws -> Data
+}
+
+/// Supplies complete Docker image discovery documents from the selected
+/// native image authority.
+public protocol DockerImageDiscoveryBackend: Sendable {
+    func imageListJSON(request: DockerImageListRequest) async throws -> Data
+    func imageInspectJSON(name: String) async throws -> Data
 }

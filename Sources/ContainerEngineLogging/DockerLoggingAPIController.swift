@@ -26,6 +26,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
 
     private let backend: any DockerLoggingBackend
     private let discoveryBackend: (any DockerEngineDiscoveryBackend)?
+    private let imageDiscoveryBackend: (any DockerImageDiscoveryBackend)?
     private let lifecycleBackend: (any DockerContainerLifecycleBackend)?
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
     private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
@@ -38,14 +39,17 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         maximumAPIVersion = try DockerAPIVersion("1.53")
         let lifecycleBackend = backend as? any DockerContainerLifecycleBackend
         let discoveryBackend = backend as? any DockerEngineDiscoveryBackend
+        let imageDiscoveryBackend = backend as? any DockerImageDiscoveryBackend
         routeLedger = try Self.makeRouteLedger(
             minimum: minimumAPIVersion,
             maximum: maximumAPIVersion,
             includesLifecycle: lifecycleBackend != nil,
-            includesDiscovery: discoveryBackend != nil
+            includesDiscovery: discoveryBackend != nil,
+            includesImageDiscovery: imageDiscoveryBackend != nil
         )
         self.backend = backend
         self.discoveryBackend = discoveryBackend
+        self.imageDiscoveryBackend = imageDiscoveryBackend
         self.lifecycleBackend = lifecycleBackend
         self.sharedResponseBackend = sharedResponseBackend
         terminalResizeBackend = backend as? any DockerTerminalResizeBackend
@@ -129,6 +133,12 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             return await versionResponse()
         case RouteIdentifier.list:
             return await listResponse(target: match.target)
+        case RouteIdentifier.imageList:
+            return await imageListResponse(target: match.target)
+        case RouteIdentifier.imageInspect:
+            return await imageInspectResponse(
+                name: match.parameters["name"] ?? ""
+            )
         case RouteIdentifier.create:
             return await createResponse(request: request, target: match.target)
         case RouteIdentifier.start:
@@ -217,6 +227,50 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 requiredKeys: Self.containerListRequiredKeys
             )
             return try Self.jsonArrayLineResponse(objects)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func imageListResponse(
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let imageDiscoveryBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        let request: DockerImageListRequest
+        do {
+            request = try Self.imageListRequest(target: target)
+        } catch let error as QueryError {
+            return Self.errorResponse(status: error.status, message: error.message)
+        } catch {
+            return Self.errorResponse(status: 500, message: "server error")
+        }
+        do {
+            let data = try await imageDiscoveryBackend.imageListJSON(request: request)
+            let objects = try Self.completeJSONArray(
+                data,
+                route: "ImageList",
+                requiredKeys: Self.imageListRequiredKeys
+            )
+            return try Self.jsonArrayLineResponse(objects)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func imageInspectResponse(name: String) async -> DockerHTTPResponse {
+        guard let imageDiscoveryBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let data = try await imageDiscoveryBackend.imageInspectJSON(name: name)
+            let object = try Self.completeJSONObject(
+                data,
+                route: "ImageInspect",
+                requiredKeys: Self.imageInspectRequiredKeys
+            )
+            return try Self.jsonObjectLineResponse(object)
         } catch {
             return Self.backendErrorResponse(error)
         }
@@ -539,6 +593,17 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         "Status"
     ]
 
+    private static let imageListRequiredKeys: Set<String> = [
+        "Containers", "Created", "Descriptor", "Id", "Labels", "ParentId",
+        "RepoDigests", "RepoTags", "SharedSize", "Size"
+    ]
+
+    private static let imageInspectRequiredKeys: Set<String> = [
+        "Architecture", "Comment", "Config", "Created", "Descriptor", "Id",
+        "Identity", "Metadata", "Os", "RepoDigests", "RepoTags", "RootFS",
+        "Size", "Variant"
+    ]
+
     private static let systemInfoRequiredKeys: Set<String> = [
         "Architecture", "CDISpecDirs", "CPUShares", "CPUSet", "CgroupDriver",
         "ContainerdCommit", "Containers", "ContainersPaused", "ContainersRunning",
@@ -608,6 +673,48 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                     .sorted(by: utf8Less)
             } else {
                 throw QueryError(status: 400, message: "invalid filters JSON")
+            }
+        }
+        return result
+    }
+
+    private static func imageListRequest(
+        target: DockerRequestTarget
+    ) throws -> DockerImageListRequest {
+        try DockerImageListRequest(
+            all: boolValue(target.first("all")),
+            sharedSize: boolValue(target.first("shared-size")),
+            containerdSnapshotter: boolValue(
+                target.first("containerd-snapshotter")
+            ),
+            filters: imageListFilters(target.first("filters"))
+        )
+    }
+
+    private static func imageListFilters(
+        _ raw: String?
+    ) throws -> [String: [String]] {
+        guard let raw, !raw.isEmpty else {
+            return [:]
+        }
+        let value: Any
+        do {
+            value = try JSONSerialization.jsonObject(with: Data(raw.utf8))
+        } catch {
+            throw QueryError(status: 400, message: "invalid filter")
+        }
+        guard let object = value as? [String: Any] else {
+            throw QueryError(status: 400, message: "invalid filter")
+        }
+        var result = [String: [String]]()
+        for (name, values) in object {
+            if let strings = values as? [String] {
+                result[name] = strings
+            } else if let flags = values as? [String: Bool] {
+                result[name] = flags.compactMap { $0.value ? $0.key : nil }
+                    .sorted(by: utf8Less)
+            } else {
+                throw QueryError(status: 400, message: "invalid filter")
             }
         }
         return result
@@ -909,7 +1016,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             return errorResponse(status: 500, message: "server error")
         }
         switch error {
-        case .containerNotFound:
+        case .containerNotFound, .imageNotFound:
             return errorResponse(status: 404, message: error.message)
         case .conflict:
             return errorResponse(status: 409, message: error.message)
@@ -928,7 +1035,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         if let error = error as? DockerLoggingBackendError {
             message = error.message
             switch error {
-            case .containerNotFound:
+            case .containerNotFound, .imageNotFound:
                 status = 404
             case .conflict:
                 status = 409
@@ -977,7 +1084,8 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         minimum: DockerAPIVersion,
         maximum: DockerAPIVersion,
         includesLifecycle: Bool,
-        includesDiscovery: Bool
+        includesDiscovery: Bool,
+        includesImageDiscovery: Bool
     ) throws -> DockerRouteLedger {
         var routes = try [
             DockerRouteMetadata(
@@ -1085,6 +1193,26 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 )
             ])
         }
+        if includesImageDiscovery {
+            try routes.append(contentsOf: [
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.imageList,
+                    method: .get,
+                    pattern: DockerRoutePattern("/images/json"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.imageInspect,
+                    method: .get,
+                    pattern: DockerRoutePattern("/images/{name}/json"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                )
+            ])
+        }
         return try DockerRouteLedger(
             minimumAPIVersion: minimum,
             maximumAPIVersion: maximum,
@@ -1110,6 +1238,8 @@ private enum RouteIdentifier {
     static let resize = "container.resize"
     static let list = "container.list"
     static let version = "system.version"
+    static let imageList = "image.list"
+    static let imageInspect = "image.inspect"
 }
 
 private struct CreateResponse: Encodable {

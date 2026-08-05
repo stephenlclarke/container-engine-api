@@ -219,6 +219,76 @@ func `container list rejects malformed queries before calling its backend`() asy
 }
 
 @Test
+func `image list and inspect expose complete native discovery documents`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let filters = try #require(
+        #"{"reference":["alpine:3.20"],"label":{"fixture=true":true}}"#
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    )
+
+    let list = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target:
+            "/v1.53/images/json?all=1&shared-size=true&containerd-snapshotter=1&filters=\(filters)"
+        )
+    )
+    #expect(list.status == 200)
+    let listObjects = try responseJSONArray(list)
+    #expect(listObjects.count == 1)
+    #expect(listObjects[0]["Id"] as? String == "sha256:image-index")
+    #expect(
+        backend.lastImageListRequest
+            == DockerImageListRequest(
+                all: true,
+                sharedSize: true,
+                containerdSnapshotter: true,
+                filters: [
+                    "label": ["fixture=true"],
+                    "reference": ["alpine:3.20"]
+                ]
+            )
+    )
+
+    let inspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/alpine:3.20/json"
+        )
+    )
+    #expect(inspect.status == 200)
+    let inspectObject = try responseJSONObject(inspect)
+    #expect(inspectObject["Id"] as? String == "sha256:image-index")
+    #expect(backend.lastImageInspectName == "alpine:3.20")
+
+    let missing = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/missing:latest/json"
+        )
+    )
+    #expect(missing.status == 404)
+    #expect(try errorMessage(missing) == "No such image: missing:latest")
+}
+
+@Test
+func `image list rejects malformed filters before calling its backend`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let invalid = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/json?filters=%7B%22reference%22%3A1%7D"
+        )
+    )
+    #expect(invalid.status == 400)
+    #expect(try errorMessage(invalid) == "invalid filter")
+    #expect(backend.lastImageListRequest == nil)
+}
+
+@Test
 func `logging routes enforce API version range and Docker error envelopes`() async throws {
     let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
     let controller = try DockerLoggingAPIController(backend: backend)
@@ -917,6 +987,7 @@ private final class FakeLoggingBackend:
     DockerLoggingBackend,
     DockerContainerLifecycleBackend,
     DockerEngineDiscoveryBackend,
+    DockerImageDiscoveryBackend,
     DockerTerminalResizeBackend,
     @unchecked Sendable
 {
@@ -932,6 +1003,8 @@ private final class FakeLoggingBackend:
     private var capturedRequestedName: String?
     private var capturedLifecycleCalls = [String]()
     private var capturedListRequest: DockerContainerListRequest?
+    private var capturedImageListRequest: DockerImageListRequest?
+    private var capturedImageInspectName: String?
 
     init(
         reader: FakeLogReadSession,
@@ -971,6 +1044,14 @@ private final class FakeLoggingBackend:
 
     var lastListRequest: DockerContainerListRequest? {
         lock.withLock { capturedListRequest }
+    }
+
+    var lastImageListRequest: DockerImageListRequest? {
+        lock.withLock { capturedImageListRequest }
+    }
+
+    var lastImageInspectName: String? {
+        lock.withLock { capturedImageInspectName }
     }
 
     func systemVersionJSON() async throws -> Data {
@@ -1013,6 +1094,63 @@ private final class FakeLoggingBackend:
                 "State": "exited",
                 "Status": "Exited (0) 1 second ago"
             ]]
+        )
+    }
+
+    func imageListJSON(
+        request: DockerImageListRequest
+    ) async throws -> Data {
+        lock.withLock {
+            capturedImageListRequest = request
+        }
+        return try JSONSerialization.data(
+            withJSONObject: [[
+                "Containers": 1,
+                "Created": 1_767_225_600,
+                "Descriptor": [
+                    "digest": "sha256:image-index",
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "size": 512
+                ],
+                "Id": "sha256:image-index",
+                "Labels": ["fixture": "true"],
+                "ParentId": "",
+                "RepoDigests": ["alpine@sha256:image-index"],
+                "RepoTags": ["alpine:3.20"],
+                "SharedSize": -1,
+                "Size": 4_103_199
+            ]]
+        )
+    }
+
+    func imageInspectJSON(name: String) async throws -> Data {
+        lock.withLock {
+            capturedImageInspectName = name
+        }
+        guard name != "missing:latest" else {
+            throw DockerLoggingBackendError.imageNotFound(name)
+        }
+        return try JSONSerialization.data(
+            withJSONObject: [
+                "Architecture": "arm64",
+                "Comment": "",
+                "Config": ["Cmd": ["/bin/sh"]],
+                "Created": "2026-01-01T00:00:00Z",
+                "Descriptor": [
+                    "digest": "sha256:image-index",
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "size": 512
+                ],
+                "Id": "sha256:image-index",
+                "Identity": ["Pull": [["Repository": "docker.io/library/alpine"]]],
+                "Metadata": ["LastTagTime": "0001-01-01T00:00:00Z"],
+                "Os": "linux",
+                "RepoDigests": ["alpine@sha256:image-index"],
+                "RepoTags": ["alpine:3.20"],
+                "RootFS": ["Layers": ["sha256:layer"], "Type": "layers"],
+                "Size": 4_103_199,
+                "Variant": "v8"
+            ]
         )
     }
 
