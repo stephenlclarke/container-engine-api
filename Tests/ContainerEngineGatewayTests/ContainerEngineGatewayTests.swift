@@ -40,6 +40,10 @@ func `gateway advertises only declared provider routes`() async throws {
             .disposition == .unimplemented
     )
     #expect(
+        gateway.ledger.routes.first { $0.identifier == "ContainerWait" }?
+            .disposition == .unimplemented
+    )
+    #expect(
         gateway.ledger.routes.first { $0.identifier == "ImagePush" }?.disposition
             == .unimplemented
     )
@@ -81,4 +85,29 @@ func `gateway advertises only declared provider routes`() async throws {
     } else {
         Issue.record("expected gateway-local head bytes")
     }
+
+    let waitFingerprint = try ContainerEngineProviderFingerprint(
+        declaration: ContainerEngineProviderDeclaration(
+            profile: .enhanced,
+            kind: .containerAuthority,
+            implementationVersion: "1.0.0",
+            runtimeRevisions: ["runtime": "test"],
+            stateSchemaVersion: 1,
+            capabilities: [
+                ContainerEngineProviderCapability(
+                    identifier: "engine.route.ContainerWait",
+                    status: .native
+                )
+            ]
+        ),
+        stateRootUUID: UUID()
+    )
+    let waitGateway = try ContainerEngineGatewayResponder(
+        providerSocketPath: "/tmp/missing-provider.sock",
+        fingerprint: waitFingerprint
+    )
+    #expect(
+        waitGateway.ledger.routes.first { $0.identifier == "ContainerWait" }?
+            .disposition == .implemented
+    )
 }

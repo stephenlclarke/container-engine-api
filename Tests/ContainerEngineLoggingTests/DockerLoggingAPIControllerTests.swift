@@ -853,6 +853,49 @@ func `container lifecycle routes decode typed requests and call native authority
     )
     #expect(stop.status == 204)
 
+    let defaultWait = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait"
+        )
+    )
+    #expect(defaultWait.status == 200)
+    #expect(try responseJSONObject(defaultWait)["StatusCode"] as? Int == 23)
+
+    let wait = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=not-running"
+        )
+    )
+    #expect(wait.status == 200)
+    #expect(try responseJSONObject(wait)["StatusCode"] as? Int == 23)
+
+    let nextExit = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=next-exit"
+        )
+    )
+    #expect(nextExit.status == 200)
+
+    let removed = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=removed"
+        )
+    )
+    #expect(removed.status == 200)
+
+    let invalidWait = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=invalid"
+        )
+    )
+    #expect(invalidWait.status == 400)
+    #expect(try errorMessage(invalidWait) == "invalid condition: \"invalid\"")
+
     let delete = await controller.respond(
         to: DockerHTTPRequest(
             method: .delete,
@@ -862,8 +905,48 @@ func `container lifecycle routes decode typed requests and call native authority
     #expect(delete.status == 204)
     #expect(
         backend.lifecycleCalls
-            == ["start:fixture-id", "stop:fixture-id:9", "delete:fixture-id:true:true"]
+            == [
+                "start:fixture-id",
+                "stop:fixture-id:9",
+                "wait:fixture-id:not-running",
+                "wait:fixture-id:not-running",
+                "wait:fixture-id:next-exit",
+                "wait:fixture-id:removed",
+                "delete:fixture-id:true:true"
+            ]
     )
+}
+
+@Test
+func `container wait maps backend errors and remains absent without wait authority`() async throws {
+    let missingController = try DockerLoggingAPIController(
+        backend: FakeLoggingBackend(
+            reader: FakeLogReadSession(terminal: false),
+            waitError: .containerNotFound("missing")
+        )
+    )
+    let missing = await missingController.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/missing/wait"
+        )
+    )
+    #expect(missing.status == 404)
+    #expect(try errorMessage(missing) == "No such container: missing")
+
+    let noWaitController = try DockerLoggingAPIController(
+        backend: FakeLifecycleBackendWithoutWait(
+            base: FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+        )
+    )
+    let unavailable = await noWaitController.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait"
+        )
+    )
+    #expect(unavailable.status == 404)
+    #expect(try errorMessage(unavailable) == "page not found")
 }
 
 private func responseData(_ response: DockerHTTPResponse) throws -> Data {
@@ -1106,6 +1189,7 @@ private struct PullStatusPayload: Codable, Equatable {
 private final class FakeLoggingBackend:
     DockerLoggingBackend,
     DockerContainerLifecycleBackend,
+    DockerContainerWaitBackend,
     DockerEngineDiscoveryBackend,
     DockerImageDiscoveryBackend,
     DockerImageMutationBackend,
@@ -1115,6 +1199,7 @@ private final class FakeLoggingBackend:
     private let lock = NSLock()
     private let reader: FakeLogReadSession
     private let openError: DockerLoggingBackendError?
+    private let waitError: DockerLoggingBackendError?
     private let attachSession = FakeHijackSession()
     private var capturedLogRequest: DockerLogReadRequest?
     private var capturedAttachRequest: DockerAttachRequest?
@@ -1134,10 +1219,12 @@ private final class FakeLoggingBackend:
 
     init(
         reader: FakeLogReadSession,
-        openError: DockerLoggingBackendError? = nil
+        openError: DockerLoggingBackendError? = nil,
+        waitError: DockerLoggingBackendError? = nil
     ) {
         self.reader = reader
         self.openError = openError
+        self.waitError = waitError
     }
 
     var lastLogRequest: DockerLogReadRequest? {
@@ -1380,6 +1467,21 @@ private final class FakeLoggingBackend:
         }
     }
 
+    func waitForContainer(
+        containerID: String,
+        condition: DockerContainerWaitCondition
+    ) async throws -> DockerContainerWaitResult {
+        if let waitError {
+            throw waitError
+        }
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "wait:\(containerID):\(condition.rawValue)"
+            )
+        }
+        return DockerContainerWaitResult(statusCode: 23)
+    }
+
     func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
         DockerLoggingSystemInfo(
             defaultDriver: "json-file",
@@ -1455,6 +1557,71 @@ private final class FakeLoggingBackend:
         lock.withLock {
             capturedResize = DockerResizeCapture(height: height, width: width)
         }
+    }
+}
+
+/// Preserves lifecycle authority while deliberately withholding wait authority.
+private struct FakeLifecycleBackendWithoutWait:
+    DockerLoggingBackend,
+    DockerContainerLifecycleBackend
+{
+    let base: FakeLoggingBackend
+
+    func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
+        try await base.loggingSystemInfo()
+    }
+
+    func inspectContainerLogging(
+        containerID: String
+    ) async throws -> DockerContainerLoggingInspection {
+        try await base.inspectContainerLogging(containerID: containerID)
+    }
+
+    func openContainerLogs(
+        containerID: String,
+        request: DockerLogReadRequest
+    ) async throws -> any DockerLogReadSession {
+        try await base.openContainerLogs(containerID: containerID, request: request)
+    }
+
+    func attachContainer(
+        containerID: String,
+        request: DockerAttachRequest
+    ) async throws -> DockerAttachConnection {
+        try await base.attachContainer(containerID: containerID, request: request)
+    }
+
+    func createContainer(
+        request: DockerContainerCreateRequest,
+        requestedName: String?
+    ) async throws -> DockerContainerCreateResult {
+        try await base.createContainer(request: request, requestedName: requestedName)
+    }
+
+    func startContainer(containerID: String) async throws {
+        try await base.startContainer(containerID: containerID)
+    }
+
+    func stopContainer(
+        containerID: String,
+        timeoutSeconds: Int64?
+    ) async throws {
+        try await base.stopContainer(
+            containerID: containerID,
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
+    func deleteContainer(
+        containerID: String,
+        force: Bool,
+        removeVolumes: Bool
+    ) async throws {
+        try await base.deleteContainer(
+            containerID: containerID,
+            force: force,
+            removeVolumes: removeVolumes
+        )
     }
 }
 
