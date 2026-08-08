@@ -210,8 +210,31 @@ public struct DockerContainerWaitResult: Encodable, Equatable, Sendable {
 /// adapter cannot advertise `ContainerWait` until it owns each requested
 /// wait condition and the terminal status it returns.
 public protocol DockerContainerWaitBackend: Sendable {
+    /// Waits for the requested lifecycle condition after invoking
+    /// `onRegistered` exactly once.
+    ///
+    /// The callback is invoked only after the backend has validated the
+    /// container and registered a cancellation-aware waiter. Docker clients
+    /// use the response headers as the acknowledgement that lets them start a
+    /// newly created container, so acknowledging before registration can race
+    /// a fast exit or deadlock `docker run`.
     func waitForContainer(
         containerID: String,
-        condition: DockerContainerWaitCondition
+        condition: DockerContainerWaitCondition,
+        onRegistered: @escaping @Sendable () -> Void
     ) async throws -> DockerContainerWaitResult
+}
+
+extension DockerContainerWaitBackend {
+    /// Waits without needing the HTTP acknowledgement hook.
+    public func waitForContainer(
+        containerID: String,
+        condition: DockerContainerWaitCondition
+    ) async throws -> DockerContainerWaitResult {
+        try await waitForContainer(
+            containerID: containerID,
+            condition: condition,
+            onRegistered: {}
+        )
+    }
 }

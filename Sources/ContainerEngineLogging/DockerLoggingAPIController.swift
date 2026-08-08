@@ -469,12 +469,47 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         }
         do {
             let condition = try Self.containerWaitCondition(target)
-            return Self.jsonLineResponse(
-                try await waitBackend.waitForContainer(
-                    containerID: containerID,
-                    condition: condition
-                )
-            )
+            let startGate = DockerContainerWaitStartGate()
+            let waitTask = Task {
+                do {
+                    let result = try await waitBackend.waitForContainer(
+                        containerID: containerID,
+                        condition: condition,
+                        onRegistered: {
+                            startGate.registered()
+                        }
+                    )
+                    startGate.completed(with: Self.jsonLineResponse(result))
+                    return result
+                } catch {
+                    startGate.completed(with: Self.backendErrorResponse(error))
+                    throw error
+                }
+            }
+            return await withTaskCancellationHandler {
+                switch await startGate.waitForOutcome() {
+                case .registered:
+                    return DockerHTTPResponse(
+                        status: 200,
+                        headers: ["Content-Type": "application/json"],
+                        body: .managedStream(
+                            DockerContainerWaitHTTPStream(
+                                waitForCompletion: {
+                                    try await waitTask.value
+                                },
+                                cancelWait: {
+                                    waitTask.cancel()
+                                }
+                            )
+                        )
+                    )
+                case let .terminal(response):
+                    _ = await waitTask.result
+                    return response
+                }
+            } onCancel: {
+                waitTask.cancel()
+            }
         } catch let error as QueryError {
             return Self.errorResponse(status: error.status, message: error.message)
         } catch {
