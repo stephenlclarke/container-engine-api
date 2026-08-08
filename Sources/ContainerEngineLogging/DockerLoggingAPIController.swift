@@ -28,13 +28,15 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     private let discoveryBackend: (any DockerEngineDiscoveryBackend)?
     private let imageDiscoveryBackend: (any DockerImageDiscoveryBackend)?
     private let imageMutationBackend: (any DockerImageMutationBackend)?
+    private let volumeBackend: (any DockerVolumeBackend)?
     private let lifecycleBackend: (any DockerContainerLifecycleBackend)?
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
     private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
 
     public init(
         backend: any DockerLoggingBackend,
-        sharedResponseBackend: (any DockerLoggingSharedResponseBackend)? = nil
+        sharedResponseBackend: (any DockerLoggingSharedResponseBackend)? = nil,
+        volumeBackend: (any DockerVolumeBackend)? = nil
     ) throws {
         minimumAPIVersion = try DockerAPIVersion("1.44")
         maximumAPIVersion = try DockerAPIVersion("1.53")
@@ -42,18 +44,21 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         let discoveryBackend = backend as? any DockerEngineDiscoveryBackend
         let imageDiscoveryBackend = backend as? any DockerImageDiscoveryBackend
         let imageMutationBackend = backend as? any DockerImageMutationBackend
+        let volumeBackend = volumeBackend ?? (backend as? any DockerVolumeBackend)
         routeLedger = try Self.makeRouteLedger(
             minimum: minimumAPIVersion,
             maximum: maximumAPIVersion,
             includesLifecycle: lifecycleBackend != nil,
             includesDiscovery: discoveryBackend != nil,
             includesImageDiscovery: imageDiscoveryBackend != nil,
-            includesImageMutation: imageMutationBackend != nil
+            includesImageMutation: imageMutationBackend != nil,
+            includesVolumeCreate: volumeBackend != nil
         )
         self.backend = backend
         self.discoveryBackend = discoveryBackend
         self.imageDiscoveryBackend = imageDiscoveryBackend
         self.imageMutationBackend = imageMutationBackend
+        self.volumeBackend = volumeBackend
         self.lifecycleBackend = lifecycleBackend
         self.sharedResponseBackend = sharedResponseBackend
         terminalResizeBackend = backend as? any DockerTerminalResizeBackend
@@ -155,6 +160,8 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 name: match.parameters["name"] ?? "",
                 target: match.target
             )
+        case RouteIdentifier.volumeCreate:
+            return await volumeCreateResponse(request: request)
         case RouteIdentifier.create:
             return await createResponse(request: request, target: match.target)
         case RouteIdentifier.start:
@@ -351,6 +358,29 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 )
             )
             return Self.jsonLineResponse(results)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func volumeCreateResponse(
+        request: DockerHTTPRequest
+    ) async -> DockerHTTPResponse {
+        guard let volumeBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let decoded = try DockerJSON.decoder.decode(
+                DockerVolumeCreateRequest.self,
+                from: request.body
+            )
+            let result = try await volumeBackend.createVolume(request: decoded)
+            return Self.jsonLineResponse(result, status: 201)
+        } catch is DecodingError {
+            return Self.errorResponse(
+                status: 400,
+                message: "invalid volume create request"
+            )
         } catch {
             return Self.backendErrorResponse(error)
         }
@@ -1133,7 +1163,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             return errorResponse(status: 500, message: "server error")
         }
         switch error {
-        case .containerNotFound, .imageNotFound:
+        case .containerNotFound, .imageNotFound, .volumeDriverNotFound:
             return errorResponse(status: 404, message: error.message)
         case .conflict:
             return errorResponse(status: 409, message: error.message)
@@ -1152,7 +1182,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         if let error = error as? DockerLoggingBackendError {
             message = error.message
             switch error {
-            case .containerNotFound, .imageNotFound:
+            case .containerNotFound, .imageNotFound, .volumeDriverNotFound:
                 status = 404
             case .conflict:
                 status = 409
@@ -1259,7 +1289,8 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         includesLifecycle: Bool,
         includesDiscovery: Bool,
         includesImageDiscovery: Bool,
-        includesImageMutation: Bool
+        includesImageMutation: Bool,
+        includesVolumeCreate: Bool
     ) throws -> DockerRouteLedger {
         var routes = try [
             DockerRouteMetadata(
@@ -1415,6 +1446,18 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 )
             ])
         }
+        if includesVolumeCreate {
+            try routes.append(
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.volumeCreate,
+                    method: .post,
+                    pattern: DockerRoutePattern("/volumes/create"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                )
+            )
+        }
         return try DockerRouteLedger(
             minimumAPIVersion: minimum,
             maximumAPIVersion: maximum,
@@ -1445,6 +1488,7 @@ private enum RouteIdentifier {
     static let imagePull = "image.pull"
     static let imageTag = "image.tag"
     static let imageDelete = "image.delete"
+    static let volumeCreate = "volume.create"
 }
 
 private struct ImagePullProgress: Encodable {

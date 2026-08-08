@@ -399,6 +399,76 @@ func `image mutation validates queries and preserves not found errors`() async t
 }
 
 @Test
+func `volume create delegates to the native authority and preserves provider resolution failures`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let create = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/v1.53/volumes/create",
+            body: Data(
+                #"{"Name":"fixture-volume","Driver":"","DriverOpts":{"size":"1m"},"Labels":{"fixture":"true"}}"#
+                    .utf8
+            )
+        )
+    )
+    #expect(create.status == 201)
+    #expect(
+        backend.lastVolumeCreateRequest
+            == DockerVolumeCreateRequest(
+                name: "fixture-volume",
+                driver: "",
+                driverOptions: ["size": "1m"],
+                labels: ["fixture": "true"]
+            )
+    )
+    #expect(
+        try DockerJSON.decoder.decode(
+            DockerVolumeCreateResult.self,
+            from: responseData(create)
+        ) == DockerVolumeCreateResult(
+            name: "fixture-volume",
+            driver: "local",
+            mountpoint: "/var/lib/container/volumes/fixture-volume",
+            createdAt: "2026-08-08T00:00:00Z",
+            labels: ["fixture": "true"],
+            options: ["size": "1m"]
+        )
+    )
+
+    let unavailable = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/volumes/create",
+            body: Data(#"{"Name":"must-not-exist","Driver":"missing-driver"}"#.utf8)
+        )
+    )
+    #expect(unavailable.status == 404)
+    #expect(try errorMessage(unavailable) == "plugin \"missing-driver\" not found")
+    #expect(
+        backend.lastVolumeCreateRequest
+            == DockerVolumeCreateRequest(name: "must-not-exist", driver: "missing-driver")
+    )
+}
+
+@Test
+func `volume create rejects malformed payloads before calling its backend`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let invalid = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/volumes/create",
+            body: Data(#"{"Driver":"local"}"#.utf8)
+        )
+    )
+    #expect(invalid.status == 400)
+    #expect(try errorMessage(invalid) == "invalid volume create request")
+    #expect(backend.lastVolumeCreateRequest == nil)
+}
+
+@Test
 func `logging routes enforce API version range and Docker error envelopes`() async throws {
     let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
     let controller = try DockerLoggingAPIController(backend: backend)
@@ -1109,6 +1179,7 @@ private final class FakeLoggingBackend:
     DockerEngineDiscoveryBackend,
     DockerImageDiscoveryBackend,
     DockerImageMutationBackend,
+    DockerVolumeBackend,
     DockerTerminalResizeBackend,
     @unchecked Sendable
 {
@@ -1131,6 +1202,7 @@ private final class FakeLoggingBackend:
     private var capturedImageTagRequest: DockerImageTagRequest?
     private var capturedImageDeleteName: String?
     private var capturedImageDeleteRequest: DockerImageDeleteRequest?
+    private var capturedVolumeCreateRequest: DockerVolumeCreateRequest?
 
     init(
         reader: FakeLogReadSession,
@@ -1198,6 +1270,10 @@ private final class FakeLoggingBackend:
 
     var lastImageDeleteRequest: DockerImageDeleteRequest? {
         lock.withLock { capturedImageDeleteRequest }
+    }
+
+    var lastVolumeCreateRequest: DockerVolumeCreateRequest? {
+        lock.withLock { capturedVolumeCreateRequest }
     }
 
     func systemVersionJSON() async throws -> Data {
@@ -1338,6 +1414,25 @@ private final class FakeLoggingBackend:
             throw DockerLoggingBackendError.imageNotFound(name)
         }
         return [DockerImageDeleteResult(untagged: name)]
+    }
+
+    func createVolume(
+        request: DockerVolumeCreateRequest
+    ) async throws -> DockerVolumeCreateResult {
+        lock.withLock {
+            capturedVolumeCreateRequest = request
+        }
+        if request.driver == "missing-driver" {
+            throw DockerLoggingBackendError.volumeDriverNotFound("missing-driver")
+        }
+        return DockerVolumeCreateResult(
+            name: request.name,
+            driver: request.driver?.isEmpty == false ? request.driver! : "local",
+            mountpoint: "/var/lib/container/volumes/\(request.name)",
+            createdAt: "2026-08-08T00:00:00Z",
+            labels: request.labels ?? [:],
+            options: request.driverOptions ?? [:]
+        )
     }
 
     func createContainer(
