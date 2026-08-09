@@ -41,19 +41,101 @@ public enum ContainerEngineServiceRunner {
     public static func start(
         options: ContainerEngineServiceOptions
     ) async throws -> ContainerEngineServiceRuntime {
+        try await start(
+            options: options,
+            trustConfiguration: .production
+        )
+    }
+
+    static func start(
+        options: ContainerEngineServiceOptions,
+        trustConfiguration: ContainerEngineServiceTrustConfiguration
+    ) async throws -> ContainerEngineServiceRuntime {
         let descriptor = try await ContainerEngineProviderSessionClient.probe(
             socketPath: options.providerSocket
         )
-        let stateDirectory = URL(fileURLWithPath: options.stateDirectory, isDirectory: true)
-        let selected = try ContainerEngineProviderSelectionStore(
-            path: stateDirectory.appendingPathComponent("engine-provider.json")
-        ).select(
-            descriptor.fingerprint.declaration,
-            stateRootUUID: descriptor.fingerprint.stateRootUUID
+        let scopedTrustConfiguration = trustConfiguration.scoped(
+            to: descriptor.fingerprint.stateRootUUID
         )
-        guard selected == descriptor.fingerprint else {
+        let stateDirectory = URL(fileURLWithPath: options.stateDirectory, isDirectory: true)
+        let handoffTrust = try await prepareProviderHandoffTrust(
+            descriptor: descriptor,
+            providerSocket: options.providerSocket,
+            configuration: scopedTrustConfiguration
+        )
+        let trustRegistryRevision = handoffTrust.registryRevision
+        let handoffStore = ProviderHandoffGatewayStore(
+            root: stateDirectory.appendingPathComponent("provider-handoff", isDirectory: true)
+        )
+        let loadedGatewayState = try handoffStore.loadOrCreate(
+            initial: initialGatewayState(
+                descriptor: descriptor,
+                stateDirectory: stateDirectory,
+                trustRegistryRevision: trustRegistryRevision
+            )
+        )
+        let gatewayState: ProviderHandoffGatewayStateV1 = if loadedGatewayState.providerSelection.trustRegistryRevision
+            == trustRegistryRevision
+        {
+            loadedGatewayState
+        } else {
+            try handoffStore.update(
+                expectedStoreRevision: loadedGatewayState.storeRevision
+            ) {
+                try ProviderHandoffGatewayStateMachine
+                    .adoptTrustRegistryRevision(
+                        trustRegistryRevision,
+                        in: &$0,
+                        expectedStoreRevision:
+                        loadedGatewayState.storeRevision
+                    )
+            }
+        }
+        guard
+            gatewayState.providerSelection.selectedProviderFingerprint
+            == descriptor.fingerprint.digest,
+            gatewayState.providerSelection.selectedStateRootUUID
+            == descriptor.fingerprint.stateRootUUID.uuidString.lowercased(),
+            gatewayState.socketDiscovery.selectedProviderFingerprint
+            == descriptor.fingerprint.digest,
+            gatewayState.socketDiscovery.selectedStateRootUUID
+            == descriptor.fingerprint.stateRootUUID.uuidString.lowercased()
+        else {
             throw ContainerEngineProviderIdentityError.providerMismatch(
-                selected: selected.digest
+                selected: gatewayState.providerSelection.selectedProviderFingerprint
+                    ?? "unselected"
+            )
+        }
+        let selected = descriptor.fingerprint
+        let configuredNow = scopedTrustConfiguration.nowUnixSeconds
+        let handoffCoordinator = handoffTrust.gatewayIdentity.map {
+            ProviderHandoffGatewayCoordinator(
+                store: handoffStore,
+                bootstrap: $0.bootstrap,
+                manifestAuthority:
+                ProviderHandoffGatewayManifestAuthorityV1(
+                    gatewayIdentity: $0,
+                    trustRegistryStore:
+                    scopedTrustConfiguration.trustRegistryStore,
+                    possessionProofStore:
+                    ProviderHandoffPossessionProofStore(
+                        root: stateDirectory
+                            .appendingPathComponent(
+                                "provider-handoff",
+                                isDirectory: true
+                            )
+                            .appendingPathComponent(
+                                "possession-proofs",
+                                isDirectory: true
+                            )
+                    ),
+                    nowUnixSeconds: {
+                        if let configuredNow {
+                            return configuredNow
+                        }
+                        return try currentUnixSeconds()
+                    }
+                )
             )
         }
 
@@ -80,8 +162,171 @@ public enum ContainerEngineServiceRunner {
         return ContainerEngineServiceRuntime(
             server: server,
             fingerprint: selected,
-            socketPath: options.socket
+            socketPath: options.socket,
+            handoffStore: handoffStore,
+            handoffCoordinator: handoffCoordinator
         )
+    }
+
+    private static func initialGatewayState(
+        descriptor: ContainerEngineProviderSessionDescriptor,
+        stateDirectory: URL,
+        trustRegistryRevision: UInt64
+    ) throws -> ProviderHandoffGatewayStateV1 {
+        let selected = try ContainerEngineProviderSelectionStore(
+            path: stateDirectory.appendingPathComponent("engine-provider.json")
+        ).select(
+            descriptor.fingerprint.declaration,
+            stateRootUUID: descriptor.fingerprint.stateRootUUID
+        )
+        guard selected == descriptor.fingerprint else {
+            throw ContainerEngineProviderIdentityError.providerMismatch(
+                selected: selected.digest
+            )
+        }
+        let registrationDigest =
+            selected.digest.hasPrefix("sha256:")
+                ? String(selected.digest.dropFirst("sha256:".count))
+                : selected.digest
+        return try ProviderHandoffGatewayStateMachine.initialState(
+            providerSelection: ProviderHandoffProviderSelectionRecordV1(
+                selectionRevision: 1,
+                selectedProviderFingerprint: selected.digest,
+                selectedStateRootUUID: selected.stateRootUUID.uuidString.lowercased(),
+                providerRegistrationDigestSHA256: registrationDigest,
+                trustRegistryRevision: trustRegistryRevision
+            ),
+            socketDiscovery: ProviderHandoffSocketDiscoveryRecordV1(
+                discoveryRevision: 1,
+                socketInstanceUUID: UUID().uuidString.lowercased(),
+                ownerUID: UInt32(getuid()),
+                minimumEngineAPIVersion: "1.44",
+                maximumEngineAPIVersion: "1.53",
+                selectedProviderFingerprint: selected.digest,
+                selectedStateRootUUID: selected.stateRootUUID.uuidString.lowercased()
+            )
+        )
+    }
+
+    private static func prepareProviderHandoffTrust(
+        descriptor: ContainerEngineProviderSessionDescriptor,
+        providerSocket: String,
+        configuration: ContainerEngineServiceTrustConfiguration
+    ) async throws -> PreparedProviderHandoffTrust {
+        guard
+            descriptor.fingerprint.declaration.capabilities.contains(where: {
+                $0.identifier == "engine.handoff.provider-key-enrollment.v1"
+                    && $0.status == .native
+            })
+        else {
+            return PreparedProviderHandoffTrust(
+                registryRevision: 0,
+                gatewayIdentity: nil
+            )
+        }
+        let now = try configuration.nowUnixSeconds ?? currentUnixSeconds()
+        let gatewayCodeIdentity = try ProviderHandoffCodeIdentity.current()
+        let gatewayIdentity = try configuration.gatewayKeyStore.loadOrCreate(
+            context: ProviderHandoffGatewayKeyEnrollmentContextV1(
+                owningBundleIdentifier:
+                gatewayCodeIdentity.signingIdentifier,
+                codeRequirementDigestSHA256:
+                gatewayCodeIdentity.designatedRequirementDigestSHA256,
+                teamIdentifier: gatewayCodeIdentity.teamIdentifier,
+                gatewayRegistrationDigestSHA256:
+                ProviderHandoffGatewayKeyEnrollmentContextV1
+                    .registrationDigest(codeIdentity: gatewayCodeIdentity),
+                enrolledAtUnixSeconds: now,
+                notBeforeUnixSeconds: now,
+                notAfterUnixSeconds: UInt64.max
+            )
+        )
+        let expectedRoot = descriptor.fingerprint.stateRootUUID.uuidString
+            .lowercased()
+        let requestBody =
+            try ProviderHandoffProviderKeyControlCodec
+                .encodeSnapshotRequest(
+                    ProviderHandoffProviderKeySnapshotRequestV1(
+                        expectedProviderFingerprint:
+                        descriptor.fingerprint.digest,
+                        expectedStateRootUUID: expectedRoot
+                    )
+                )
+        let request = try ContainerEngineProviderHandoffControlRequestV1(
+            requestID: "provider-key-snapshot-\(UUID().uuidString.lowercased())",
+            operation: .destinationKeySnapshot,
+            bodyMediaType: ProviderHandoffProviderKeyControlCodec
+                .snapshotRequestMediaType,
+            body: requestBody
+        )
+        let result = try await ContainerEngineProviderSessionClient(
+            socketPath: providerSocket,
+            expectedFingerprint: descriptor.fingerprint
+        ).performHandoffControl(request, body: requestBody)
+        guard
+            result.response.disposition == .completed,
+            result.response.bodyMediaType
+            == ProviderHandoffProviderKeyControlCodec.snapshotMediaType
+        else {
+            throw ContainerEngineProviderSessionError.providerFailure(
+                result.response.message
+                    ?? "provider rejected handoff key enrollment"
+            )
+        }
+        let snapshot = try ProviderHandoffProviderKeyControlCodec.decodeSnapshot(
+            result.body
+        )
+        let registrationDigest = String(
+            descriptor.fingerprint.digest.dropFirst("sha256:".count)
+        )
+        let providerKeys =
+            try ProviderHandoffProviderKeySnapshotValidator
+                .validate(
+                    snapshot,
+                    expectedProviderFingerprint: descriptor.fingerprint.digest,
+                    expectedStateRootUUID: expectedRoot,
+                    peerCodeIdentity: descriptor.codeIdentity,
+                    providerRegistrationDigestSHA256: registrationDigest,
+                    atUnixSeconds: now
+                )
+        let store = configuration.trustRegistryStore
+        do {
+            let existing = try store.load(bootstrap: gatewayIdentity.bootstrap)
+            let expectedKeys = gatewayIdentity.trustKeys + providerKeys
+            guard
+                expectedKeys.allSatisfy({ expected in
+                    existing.registry.keys.contains(expected)
+                })
+            else {
+                throw ProviderHandoffTrustError.invalidRegistry
+            }
+            return PreparedProviderHandoffTrust(
+                registryRevision: existing.registry.registryRevision,
+                gatewayIdentity: gatewayIdentity
+            )
+        } catch ProviderHandoffTrustRegistryStoreError.notFound {
+            let registry = try gatewayIdentity.makeTrustRegistry(
+                providerKeys: providerKeys,
+                registryRevision: 1,
+                issuedAtUnixSeconds: now
+            )
+            let installed = try store.install(
+                registry.registry,
+                bootstrap: gatewayIdentity.bootstrap
+            )
+            return PreparedProviderHandoffTrust(
+                registryRevision: installed.registry.registryRevision,
+                gatewayIdentity: gatewayIdentity
+            )
+        }
+    }
+
+    private static func currentUnixSeconds() throws -> UInt64 {
+        let value = Date().timeIntervalSince1970
+        guard value.isFinite, value >= 0, value < Double(UInt64.max) else {
+            throw ProviderHandoffGatewayStateError.invalidState
+        }
+        return UInt64(value.rounded(.down))
     }
 
     private static func terminationSignals() -> AsyncStream<Int32> {
@@ -116,8 +361,66 @@ public enum ContainerEngineServiceRunner {
     """
 }
 
+private struct PreparedProviderHandoffTrust: Sendable {
+    var registryRevision: UInt64
+    var gatewayIdentity: ProviderHandoffGatewayIdentityV1?
+}
+
+struct ContainerEngineServiceTrustConfiguration: Sendable {
+    var gatewayKeyStore: ProviderHandoffGatewayKeyStore
+    var trustRegistryStore: ProviderHandoffTrustRegistryStore
+    var nowUnixSeconds: UInt64?
+    var scopesKeychainAccountsToProviderRoot: Bool
+
+    init(
+        gatewayKeyStore: ProviderHandoffGatewayKeyStore,
+        trustRegistryStore: ProviderHandoffTrustRegistryStore,
+        nowUnixSeconds: UInt64?,
+        scopesKeychainAccountsToProviderRoot: Bool = false
+    ) {
+        self.gatewayKeyStore = gatewayKeyStore
+        self.trustRegistryStore = trustRegistryStore
+        self.nowUnixSeconds = nowUnixSeconds
+        self.scopesKeychainAccountsToProviderRoot =
+            scopesKeychainAccountsToProviderRoot
+    }
+
+    func scoped(to stateRootUUID: UUID) -> Self {
+        guard scopesKeychainAccountsToProviderRoot else {
+            return self
+        }
+        return Self(
+            gatewayKeyStore: ProviderHandoffGatewayKeyStore(
+                service: gatewayKeyStore.service,
+                account: ProviderHandoffGatewayKeyStore.account(
+                    forStateRootUUID: stateRootUUID
+                ),
+                accessGroup: gatewayKeyStore.accessGroup
+            ),
+            trustRegistryStore: ProviderHandoffTrustRegistryStore(
+                service: trustRegistryStore.service,
+                account: ProviderHandoffTrustRegistryStore.account(
+                    forStateRootUUID: stateRootUUID
+                ),
+                accessGroup: trustRegistryStore.accessGroup
+            ),
+            nowUnixSeconds: nowUnixSeconds,
+            scopesKeychainAccountsToProviderRoot: true
+        )
+    }
+
+    static let production = ContainerEngineServiceTrustConfiguration(
+        gatewayKeyStore: ProviderHandoffGatewayKeyStore(),
+        trustRegistryStore: ProviderHandoffTrustRegistryStore(),
+        nowUnixSeconds: nil,
+        scopesKeychainAccountsToProviderRoot: true
+    )
+}
+
 public final class ContainerEngineServiceRuntime: @unchecked Sendable {
     public let fingerprint: ContainerEngineProviderFingerprint
+    public let handoffCoordinator: ProviderHandoffGatewayCoordinator?
+    public let handoffStore: ProviderHandoffGatewayStore
     public let socketPath: String
 
     private let server: ContainerUnixHTTPServer
@@ -125,11 +428,15 @@ public final class ContainerEngineServiceRuntime: @unchecked Sendable {
     fileprivate init(
         server: ContainerUnixHTTPServer,
         fingerprint: ContainerEngineProviderFingerprint,
-        socketPath: String
+        socketPath: String,
+        handoffStore: ProviderHandoffGatewayStore,
+        handoffCoordinator: ProviderHandoffGatewayCoordinator?
     ) {
         self.server = server
         self.fingerprint = fingerprint
         self.socketPath = socketPath
+        self.handoffStore = handoffStore
+        self.handoffCoordinator = handoffCoordinator
     }
 
     public func wait() async throws {

@@ -153,6 +153,322 @@ func `complete shared responses reject fragments before replacing whole routes`(
 }
 
 @Test
+func `version and container list expose complete discovery documents`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let version = await controller.respond(
+        to: DockerHTTPRequest(method: .get, target: "/version")
+    )
+    #expect(version.status == 200)
+    let versionObject = try responseJSONObject(version)
+    #expect(versionObject["ApiVersion"] as? String == "1.53")
+    #expect(versionObject["MinAPIVersion"] as? String == "1.44")
+
+    let filters = try #require(
+        #"{"label":["compose.project=fixture"],"status":{"exited":true,"running":false}}"#
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    )
+    let list = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/v1.53/containers/json?all=1&limit=7&size=true&filters=\(filters)"
+        )
+    )
+    #expect(list.status == 200)
+    let listObject = try responseJSONArray(list)
+    #expect(listObject.count == 1)
+    #expect(listObject[0]["Id"] as? String == "fixture-id")
+    #expect(
+        backend.lastListRequest
+            == DockerContainerListRequest(
+                all: true,
+                limit: 7,
+                size: true,
+                filters: [
+                    "label": ["compose.project=fixture"],
+                    "status": ["exited"]
+                ]
+            )
+    )
+}
+
+@Test
+func `container list rejects malformed queries before calling its backend`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let invalidLimit = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/containers/json?limit=-1"
+        )
+    )
+    #expect(invalidLimit.status == 400)
+    #expect(try errorMessage(invalidLimit) == "invalid limit: -1")
+
+    let invalidFilters = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/containers/json?filters=%7B%22label%22%3A1%7D"
+        )
+    )
+    #expect(invalidFilters.status == 400)
+    #expect(try errorMessage(invalidFilters) == "invalid filters JSON")
+    #expect(backend.lastListRequest == nil)
+}
+
+@Test
+func `image list and inspect expose complete native discovery documents`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let filters = try #require(
+        #"{"reference":["alpine:3.20"],"label":{"fixture=true":true}}"#
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    )
+
+    let list = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target:
+            "/v1.53/images/json?all=1&shared-size=true&containerd-snapshotter=1&filters=\(filters)"
+        )
+    )
+    #expect(list.status == 200)
+    let listObjects = try responseJSONArray(list)
+    #expect(listObjects.count == 1)
+    #expect(listObjects[0]["Id"] as? String == "sha256:image-index")
+    #expect(
+        backend.lastImageListRequest
+            == DockerImageListRequest(
+                all: true,
+                sharedSize: true,
+                containerdSnapshotter: true,
+                filters: [
+                    "label": ["fixture=true"],
+                    "reference": ["alpine:3.20"]
+                ]
+            )
+    )
+
+    let inspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/alpine:3.20/json"
+        )
+    )
+    #expect(inspect.status == 200)
+    let inspectObject = try responseJSONObject(inspect)
+    #expect(inspectObject["Id"] as? String == "sha256:image-index")
+    #expect(backend.lastImageInspectName == "alpine:3.20")
+
+    let normalizedInspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/docker.io/library/alpine:3.20/json"
+        )
+    )
+    #expect(normalizedInspect.status == 200)
+    #expect(backend.lastImageInspectName == "docker.io/library/alpine:3.20")
+
+    let missing = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/missing:latest/json"
+        )
+    )
+    #expect(missing.status == 404)
+    #expect(try errorMessage(missing) == "No such image: missing:latest")
+}
+
+@Test
+func `image list rejects malformed filters before calling its backend`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let invalid = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/json?filters=%7B%22reference%22%3A1%7D"
+        )
+    )
+    #expect(invalid.status == 400)
+    #expect(try errorMessage(invalid) == "invalid filter")
+    #expect(backend.lastImageListRequest == nil)
+}
+
+@Test
+func `image pull tag and delete use the native mutation authority`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let pullRequest = try DockerHTTPRequest(
+        method: .post,
+        target:
+        "/v1.53/images/create?fromImage=docker.io%2Flibrary%2Falpine&tag=3.20&platform=linux%2Farm64%2Fv8",
+        uniqueHeaders: ["X-Registry-Auth": "e30="]
+    )
+
+    let pull = await controller.respond(to: pullRequest)
+    #expect(pull.status == 200)
+    #expect(pull.headers["Content-Type"] == "application/json")
+    let updates = try responseData(pull)
+        .split(separator: UInt8(ascii: "\n"))
+        .map { try DockerJSON.decoder.decode(PullStatusPayload.self, from: Data($0)) }
+    #expect(
+        updates == [
+            PullStatusPayload(status: "Pulling from library/alpine", id: "3.20"),
+            PullStatusPayload(status: "Digest: sha256:image-index"),
+            PullStatusPayload(status: "Status: Image is up to date for alpine:3.20")
+        ]
+    )
+    #expect(
+        backend.lastImagePullRequest
+            == DockerImagePullRequest(
+                fromImage: "docker.io/library/alpine",
+                tag: "3.20",
+                platform: "linux/arm64/v8",
+                registryAuth: "e30="
+            )
+    )
+
+    let tag = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target:
+            "/images/docker.io/library/alpine:3.20/tag?repo=fixture.local%2Falpine&tag=copy"
+        )
+    )
+    #expect(tag.status == 201)
+    #expect(try responseData(tag).isEmpty)
+    #expect(backend.lastImageTagName == "docker.io/library/alpine:3.20")
+    #expect(
+        backend.lastImageTagRequest
+            == DockerImageTagRequest(repository: "fixture.local/alpine", tag: "copy")
+    )
+
+    let delete = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .delete,
+            target: "/images/fixture.local/alpine:copy?force=1&noprune=1"
+        )
+    )
+    #expect(delete.status == 200)
+    #expect(
+        try DockerJSON.decoder.decode(
+            [DockerImageDeleteResult].self,
+            from: responseData(delete)
+        ) == [DockerImageDeleteResult(untagged: "fixture.local/alpine:copy")]
+    )
+    #expect(backend.lastImageDeleteName == "fixture.local/alpine:copy")
+    #expect(
+        backend.lastImageDeleteRequest
+            == DockerImageDeleteRequest(force: true, prune: false)
+    )
+}
+
+@Test
+func `image mutation validates queries and preserves not found errors`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let missingFromImage = await controller.respond(
+        to: DockerHTTPRequest(method: .post, target: "/images/create")
+    )
+    #expect(missingFromImage.status == 400)
+    #expect(try errorMessage(missingFromImage) == "fromImage is required")
+    #expect(backend.lastImagePullRequest == nil)
+
+    let missingRepository = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/images/alpine:3.20/tag"
+        )
+    )
+    #expect(missingRepository.status == 400)
+    #expect(try errorMessage(missingRepository) == "repo is required")
+    #expect(backend.lastImageTagRequest == nil)
+
+    let missingImage = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .delete,
+            target: "/images/missing:latest"
+        )
+    )
+    #expect(missingImage.status == 404)
+    #expect(try errorMessage(missingImage) == "No such image: missing:latest")
+}
+
+@Test
+func `volume create delegates to the native authority and preserves provider resolution failures`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let create = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/v1.53/volumes/create",
+            body: Data(
+                #"{"Name":"fixture-volume","Driver":"","DriverOpts":{"size":"1m"},"Labels":{"fixture":"true"}}"#
+                    .utf8
+            )
+        )
+    )
+    #expect(create.status == 201)
+    #expect(
+        backend.lastVolumeCreateRequest
+            == DockerVolumeCreateRequest(
+                name: "fixture-volume",
+                driver: "",
+                driverOptions: ["size": "1m"],
+                labels: ["fixture": "true"]
+            )
+    )
+    #expect(
+        try DockerJSON.decoder.decode(
+            DockerVolumeCreateResult.self,
+            from: responseData(create)
+        ) == DockerVolumeCreateResult(
+            name: "fixture-volume",
+            driver: "local",
+            mountpoint: "/var/lib/container/volumes/fixture-volume",
+            createdAt: "2026-08-08T00:00:00Z",
+            labels: ["fixture": "true"],
+            options: ["size": "1m"]
+        )
+    )
+
+    let unavailable = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/volumes/create",
+            body: Data(#"{"Name":"must-not-exist","Driver":"missing-driver"}"#.utf8)
+        )
+    )
+    #expect(unavailable.status == 404)
+    #expect(try errorMessage(unavailable) == "plugin \"missing-driver\" not found")
+    #expect(
+        backend.lastVolumeCreateRequest
+            == DockerVolumeCreateRequest(name: "must-not-exist", driver: "missing-driver")
+    )
+}
+
+@Test
+func `volume create rejects malformed payloads before calling its backend`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let invalid = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/volumes/create",
+            body: Data(#"{"Driver":"local"}"#.utf8)
+        )
+    )
+    #expect(invalid.status == 400)
+    #expect(try errorMessage(invalid) == "invalid volume create request")
+    #expect(backend.lastVolumeCreateRequest == nil)
+}
+
+@Test
 func `logging routes enforce API version range and Docker error envelopes`() async throws {
     let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
     let controller = try DockerLoggingAPIController(backend: backend)
@@ -184,7 +500,7 @@ func `logging routes enforce API version range and Docker error envelopes`() asy
     )
 
     let missingRoute = await controller.respond(
-        to: DockerHTTPRequest(method: .get, target: "/v1.53/images/json")
+        to: DockerHTTPRequest(method: .get, target: "/v1.53/not-a-docker-route")
     )
     #expect(missingRoute.status == 404)
     #expect(try errorMessage(missingRoute) == "page not found")
@@ -567,6 +883,245 @@ func `container resize validates UInt32 dimensions before calling the provider`(
     #expect(try errorMessage(missing) == "No such container: missing")
 }
 
+@Test
+func `container lifecycle routes decode typed requests and call native authority`() async throws {
+    let backend = FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+    let controller = try DockerLoggingAPIController(backend: backend)
+    let create = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/v1.53/containers/create?name=fixture",
+            body: Data(
+                #"{"Image":"alpine:latest","Cmd":["echo","hello"],"Env":["A=B"],"HostConfig":{"AutoRemove":true,"LogConfig":{"Type":"example-plugin","Config":{"token":"redacted"}}}}"#.utf8
+            )
+        )
+    )
+    #expect(create.status == 201)
+    let createObject = try responseJSONObject(create)
+    #expect(createObject["Id"] as? String == "fixture-id")
+    #expect(backend.createdRequest?.image == "alpine:latest")
+    #expect(backend.createdRequest?.command == ["echo", "hello"])
+    #expect(
+        backend.createdRequest?.hostConfiguration?.logConfiguration?.type
+            == "example-plugin"
+    )
+    #expect(backend.requestedName == "fixture")
+
+    let start = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/start"
+        )
+    )
+    #expect(start.status == 204)
+
+    let stop = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/stop?t=9"
+        )
+    )
+    #expect(stop.status == 204)
+
+    let defaultWait = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait"
+        )
+    )
+    #expect(defaultWait.status == 200)
+    #expect(
+        try await managedResponseJSONObject(defaultWait)["StatusCode"] as? Int == 23
+    )
+
+    let wait = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=not-running"
+        )
+    )
+    #expect(wait.status == 200)
+    #expect(
+        try await managedResponseJSONObject(wait)["StatusCode"] as? Int == 23
+    )
+
+    let nextExit = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=next-exit"
+        )
+    )
+    #expect(nextExit.status == 200)
+    #expect(
+        try await managedResponseJSONObject(nextExit)["StatusCode"] as? Int == 23
+    )
+
+    let removed = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=removed"
+        )
+    )
+    #expect(removed.status == 200)
+    #expect(
+        try await managedResponseJSONObject(removed)["StatusCode"] as? Int == 23
+    )
+
+    let invalidWait = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait?condition=invalid"
+        )
+    )
+    #expect(invalidWait.status == 400)
+    #expect(try errorMessage(invalidWait) == "invalid condition: \"invalid\"")
+
+    let delete = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .delete,
+            target: "/containers/fixture-id?force=1&v=true"
+        )
+    )
+    #expect(delete.status == 204)
+    #expect(
+        backend.lifecycleCalls
+            == [
+                "start:fixture-id",
+                "stop:fixture-id:9",
+                "wait:fixture-id:not-running",
+                "wait:fixture-id:not-running",
+                "wait:fixture-id:next-exit",
+                "wait:fixture-id:removed",
+                "delete:fixture-id:true:true"
+            ]
+    )
+}
+
+@Test
+func `container wait acknowledges a registered waiter before terminal completion`() async throws {
+    let deferredWait = DeferredWait()
+    let backend = FakeLoggingBackend(
+        reader: FakeLogReadSession(terminal: false),
+        deferredWait: deferredWait
+    )
+    let controller = try DockerLoggingAPIController(backend: backend)
+
+    let response = try await responseWithin {
+        await controller.respond(
+            to: DockerHTTPRequest(
+                method: .post,
+                target: "/containers/fixture-id/wait?condition=removed"
+            )
+        )
+    }
+
+    #expect(response.status == 200)
+    let stream = try managedStream(response)
+    #expect(await deferredWait.waitCount == 1)
+
+    let chunkTask = Task {
+        try await stream.nextChunk()
+    }
+    await deferredWait.complete(statusCode: 37)
+    let chunk = try #require(try await chunkTask.value)
+    let payload = try JSONSerialization.jsonObject(with: chunk)
+    #expect((payload as? [String: Any])?["StatusCode"] as? Int == 37)
+    #expect(try await stream.nextChunk() == nil)
+}
+
+@Test
+func `container wait stream cancellation reaches the registered backend waiter`() async throws {
+    let deferredWait = DeferredWait()
+    let controller = try DockerLoggingAPIController(
+        backend: FakeLoggingBackend(
+            reader: FakeLogReadSession(terminal: false),
+            deferredWait: deferredWait
+        )
+    )
+    let response = try await responseWithin {
+        await controller.respond(
+            to: DockerHTTPRequest(
+                method: .post,
+                target: "/containers/fixture-id/wait?condition=removed"
+            )
+        )
+    }
+    let stream = try managedStream(response)
+    let chunkTask = Task {
+        try await stream.nextChunk()
+    }
+
+    #expect(await eventually { await deferredWait.waitCount == 1 })
+    chunkTask.cancel()
+    await #expect(throws: CancellationError.self) {
+        try await chunkTask.value
+    }
+    #expect(await eventually { await deferredWait.cancelCount == 1 })
+    #expect(try await stream.nextChunk() == nil)
+}
+
+@Test
+func `container wait stream closes after a terminal backend failure`() async throws {
+    let deferredWait = DeferredWait()
+    let controller = try DockerLoggingAPIController(
+        backend: FakeLoggingBackend(
+            reader: FakeLogReadSession(terminal: false),
+            deferredWait: deferredWait
+        )
+    )
+    let response = try await responseWithin {
+        await controller.respond(
+            to: DockerHTTPRequest(
+                method: .post,
+                target: "/containers/fixture-id/wait?condition=removed"
+            )
+        )
+    }
+    let stream = try managedStream(response)
+    let chunkTask = Task {
+        try await stream.nextChunk()
+    }
+
+    #expect(await eventually { await deferredWait.waitCount == 1 })
+    await deferredWait.fail(DockerLoggingBackendError.server("wait failed"))
+    await #expect(throws: DockerLoggingBackendError.server("wait failed")) {
+        try await chunkTask.value
+    }
+    #expect(try await stream.nextChunk() == nil)
+}
+
+@Test
+func `container wait maps backend errors and remains absent without wait authority`() async throws {
+    let missingController = try DockerLoggingAPIController(
+        backend: FakeLoggingBackend(
+            reader: FakeLogReadSession(terminal: false),
+            waitError: .containerNotFound("missing")
+        )
+    )
+    let missing = await missingController.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/missing/wait"
+        )
+    )
+    #expect(missing.status == 404)
+    #expect(try errorMessage(missing) == "No such container: missing")
+
+    let noWaitController = try DockerLoggingAPIController(
+        backend: FakeLifecycleBackendWithoutWait(
+            base: FakeLoggingBackend(reader: FakeLogReadSession(terminal: false))
+        )
+    )
+    let unavailable = await noWaitController.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/wait"
+        )
+    )
+    #expect(unavailable.status == 404)
+    #expect(try errorMessage(unavailable) == "page not found")
+}
+
 private func responseData(_ response: DockerHTTPResponse) throws -> Data {
     guard case let .bytes(data) = response.body else {
         throw FixtureError("expected byte response")
@@ -586,6 +1141,13 @@ private func responseJSONObject(
 ) throws -> [String: Any] {
     let value = try JSONSerialization.jsonObject(with: responseData(response))
     return try #require(value as? [String: Any])
+}
+
+private func responseJSONArray(
+    _ response: DockerHTTPResponse
+) throws -> [[String: Any]] {
+    let value = try JSONSerialization.jsonObject(with: responseData(response))
+    return try #require(value as? [[String: Any]])
 }
 
 private func completeInfoBase() -> [String: Any] {
@@ -695,6 +1257,33 @@ private func managedStream(
     return stream
 }
 
+private func managedResponseJSONObject(
+    _ response: DockerHTTPResponse
+) async throws -> [String: Any] {
+    let stream = try managedStream(response)
+    let data = try #require(try await stream.nextChunk())
+    #expect(try await stream.nextChunk() == nil)
+    let value = try JSONSerialization.jsonObject(with: data)
+    return try #require(value as? [String: Any])
+}
+
+private func responseWithin<T: Sendable>(
+    _ timeout: Duration = .seconds(1),
+    operation: @escaping @Sendable () async -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            await operation()
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw FixtureError("operation did not complete")
+        }
+        defer { group.cancelAll() }
+        return try #require(try await group.next())
+    }
+}
+
 private func decodeFrame(_ data: Data) throws -> DockerStreamFrame {
     guard data.count >= 8, let channel = DockerStreamChannel(rawValue: data[0]) else {
         throw FixtureError("invalid Docker stream frame")
@@ -787,26 +1376,60 @@ private struct InspectLogConfigPayload: Decodable {
     }
 }
 
+private struct PullStatusPayload: Codable, Equatable {
+    let status: String
+    let id: String?
+
+    init(status: String, id: String? = nil) {
+        self.status = status
+        self.id = id
+    }
+}
+
 private final class FakeLoggingBackend:
     DockerLoggingBackend,
+    DockerContainerLifecycleBackend,
+    DockerContainerWaitBackend,
+    DockerEngineDiscoveryBackend,
+    DockerImageDiscoveryBackend,
+    DockerImageMutationBackend,
+    DockerVolumeBackend,
     DockerTerminalResizeBackend,
     @unchecked Sendable
 {
     private let lock = NSLock()
     private let reader: FakeLogReadSession
     private let openError: DockerLoggingBackendError?
+    private let waitError: DockerLoggingBackendError?
+    private let deferredWait: DeferredWait?
     private let attachSession = FakeHijackSession()
     private var capturedLogRequest: DockerLogReadRequest?
     private var capturedAttachRequest: DockerAttachRequest?
     private var capturedResize: DockerResizeCapture?
     private var openedLogs = 0
+    private var capturedCreatedRequest: DockerContainerCreateRequest?
+    private var capturedRequestedName: String?
+    private var capturedLifecycleCalls = [String]()
+    private var capturedListRequest: DockerContainerListRequest?
+    private var capturedImageListRequest: DockerImageListRequest?
+    private var capturedImageInspectName: String?
+    private var capturedImagePullRequest: DockerImagePullRequest?
+    private var capturedImageTagName: String?
+    private var capturedImageTagRequest: DockerImageTagRequest?
+    private var capturedImageDeleteName: String?
+    private var capturedImageDeleteRequest: DockerImageDeleteRequest?
+    private var capturedVolumeCreateRequest: DockerVolumeCreateRequest?
 
     init(
         reader: FakeLogReadSession,
-        openError: DockerLoggingBackendError? = nil
+        openError: DockerLoggingBackendError? = nil,
+        waitError: DockerLoggingBackendError? = nil,
+        deferredWait: DeferredWait? = nil
     ) {
         self.reader = reader
         self.openError = openError
+        self.waitError = waitError
+        self.deferredWait = deferredWait
     }
 
     var lastLogRequest: DockerLogReadRequest? {
@@ -823,6 +1446,273 @@ private final class FakeLoggingBackend:
 
     var lastResize: DockerResizeCapture? {
         lock.withLock { capturedResize }
+    }
+
+    var createdRequest: DockerContainerCreateRequest? {
+        lock.withLock { capturedCreatedRequest }
+    }
+
+    var requestedName: String? {
+        lock.withLock { capturedRequestedName }
+    }
+
+    var lifecycleCalls: [String] {
+        lock.withLock { capturedLifecycleCalls }
+    }
+
+    var lastListRequest: DockerContainerListRequest? {
+        lock.withLock { capturedListRequest }
+    }
+
+    var lastImageListRequest: DockerImageListRequest? {
+        lock.withLock { capturedImageListRequest }
+    }
+
+    var lastImageInspectName: String? {
+        lock.withLock { capturedImageInspectName }
+    }
+
+    var lastImagePullRequest: DockerImagePullRequest? {
+        lock.withLock { capturedImagePullRequest }
+    }
+
+    var lastImageTagName: String? {
+        lock.withLock { capturedImageTagName }
+    }
+
+    var lastImageTagRequest: DockerImageTagRequest? {
+        lock.withLock { capturedImageTagRequest }
+    }
+
+    var lastImageDeleteName: String? {
+        lock.withLock { capturedImageDeleteName }
+    }
+
+    var lastImageDeleteRequest: DockerImageDeleteRequest? {
+        lock.withLock { capturedImageDeleteRequest }
+    }
+
+    var lastVolumeCreateRequest: DockerVolumeCreateRequest? {
+        lock.withLock { capturedVolumeCreateRequest }
+    }
+
+    func systemVersionJSON() async throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "ApiVersion": "1.53",
+                "Arch": "arm64",
+                "BuildTime": "2026-01-01T00:00:00Z",
+                "Components": [],
+                "GitCommit": "fixture",
+                "GoVersion": "",
+                "KernelVersion": "",
+                "MinAPIVersion": "1.44",
+                "Os": "linux",
+                "Platform": ["Name": "container"],
+                "Version": "fixture"
+            ]
+        )
+    }
+
+    func containerListJSON(
+        request: DockerContainerListRequest
+    ) async throws -> Data {
+        lock.withLock {
+            capturedListRequest = request
+        }
+        return try JSONSerialization.data(
+            withJSONObject: [[
+                "Command": "/bin/true",
+                "Created": 1_767_225_600,
+                "HostConfig": ["NetworkMode": "default"],
+                "Id": "fixture-id",
+                "Image": "fixture:latest",
+                "ImageID": "sha256:fixture",
+                "Labels": ["compose.project": "fixture"],
+                "Mounts": [],
+                "Names": ["/fixture-id"],
+                "NetworkSettings": ["Networks": [:]],
+                "Ports": [],
+                "State": "exited",
+                "Status": "Exited (0) 1 second ago"
+            ]]
+        )
+    }
+
+    func imageListJSON(
+        request: DockerImageListRequest
+    ) async throws -> Data {
+        lock.withLock {
+            capturedImageListRequest = request
+        }
+        return try JSONSerialization.data(
+            withJSONObject: [[
+                "Containers": 1,
+                "Created": 1_767_225_600,
+                "Descriptor": [
+                    "digest": "sha256:image-index",
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "size": 512
+                ],
+                "Id": "sha256:image-index",
+                "Labels": ["fixture": "true"],
+                "ParentId": "",
+                "RepoDigests": ["alpine@sha256:image-index"],
+                "RepoTags": ["alpine:3.20"],
+                "SharedSize": -1,
+                "Size": 4_103_199
+            ]]
+        )
+    }
+
+    func imageInspectJSON(name: String) async throws -> Data {
+        lock.withLock {
+            capturedImageInspectName = name
+        }
+        guard name != "missing:latest" else {
+            throw DockerLoggingBackendError.imageNotFound(name)
+        }
+        return try JSONSerialization.data(
+            withJSONObject: [
+                "Architecture": "arm64",
+                "Comment": "",
+                "Config": ["Cmd": ["/bin/sh"]],
+                "Created": "2026-01-01T00:00:00Z",
+                "Descriptor": [
+                    "digest": "sha256:image-index",
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "size": 512
+                ],
+                "Id": "sha256:image-index",
+                "Identity": ["Pull": [["Repository": "docker.io/library/alpine"]]],
+                "Metadata": ["LastTagTime": "0001-01-01T00:00:00Z"],
+                "Os": "linux",
+                "RepoDigests": ["alpine@sha256:image-index"],
+                "RepoTags": ["alpine:3.20"],
+                "RootFS": ["Layers": ["sha256:layer"], "Type": "layers"],
+                "Size": 4_103_199,
+                "Variant": "v8"
+            ]
+        )
+    }
+
+    func pullImage(
+        request: DockerImagePullRequest
+    ) async throws -> DockerImagePullResult {
+        lock.withLock {
+            capturedImagePullRequest = request
+        }
+        return DockerImagePullResult(
+            displayReference: "alpine:3.20",
+            digest: "sha256:image-index",
+            upToDate: true
+        )
+    }
+
+    func tagImage(
+        name: String,
+        request: DockerImageTagRequest
+    ) async throws {
+        lock.withLock {
+            capturedImageTagName = name
+            capturedImageTagRequest = request
+        }
+        if name == "missing:latest" {
+            throw DockerLoggingBackendError.imageNotFound(name)
+        }
+    }
+
+    func deleteImage(
+        name: String,
+        request: DockerImageDeleteRequest
+    ) async throws -> [DockerImageDeleteResult] {
+        lock.withLock {
+            capturedImageDeleteName = name
+            capturedImageDeleteRequest = request
+        }
+        if name == "missing:latest" {
+            throw DockerLoggingBackendError.imageNotFound(name)
+        }
+        return [DockerImageDeleteResult(untagged: name)]
+    }
+
+    func createVolume(
+        request: DockerVolumeCreateRequest
+    ) async throws -> DockerVolumeCreateResult {
+        lock.withLock {
+            capturedVolumeCreateRequest = request
+        }
+        if request.driver == "missing-driver" {
+            throw DockerLoggingBackendError.volumeDriverNotFound("missing-driver")
+        }
+        return DockerVolumeCreateResult(
+            name: request.name,
+            driver: request.driver?.isEmpty == false ? request.driver! : "local",
+            mountpoint: "/var/lib/container/volumes/\(request.name)",
+            createdAt: "2026-08-08T00:00:00Z",
+            labels: request.labels ?? [:],
+            options: request.driverOptions ?? [:]
+        )
+    }
+
+    func createContainer(
+        request: DockerContainerCreateRequest,
+        requestedName: String?
+    ) async throws -> DockerContainerCreateResult {
+        lock.withLock {
+            capturedCreatedRequest = request
+            capturedRequestedName = requestedName
+        }
+        return DockerContainerCreateResult(containerID: "fixture-id")
+    }
+
+    func startContainer(containerID: String) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append("start:\(containerID)")
+        }
+    }
+
+    func stopContainer(
+        containerID: String,
+        timeoutSeconds: Int64?
+    ) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "stop:\(containerID):\(timeoutSeconds.map(String.init) ?? "nil")"
+            )
+        }
+    }
+
+    func deleteContainer(
+        containerID: String,
+        force: Bool,
+        removeVolumes: Bool
+    ) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "delete:\(containerID):\(force):\(removeVolumes)"
+            )
+        }
+    }
+
+    func waitForContainer(
+        containerID: String,
+        condition: DockerContainerWaitCondition,
+        onRegistered: @escaping @Sendable () -> Void
+    ) async throws -> DockerContainerWaitResult {
+        if let waitError {
+            throw waitError
+        }
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "wait:\(containerID):\(condition.rawValue)"
+            )
+        }
+        onRegistered()
+        if let deferredWait {
+            return try await deferredWait.wait()
+        }
+        return DockerContainerWaitResult(statusCode: 23)
     }
 
     func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
@@ -900,6 +1790,109 @@ private final class FakeLoggingBackend:
         lock.withLock {
             capturedResize = DockerResizeCapture(height: height, width: width)
         }
+    }
+}
+
+private actor DeferredWait {
+    private var continuation:
+        CheckedContinuation<DockerContainerWaitResult, any Error>?
+    private(set) var waitCount = 0
+    private(set) var cancelCount = 0
+
+    func wait() async throws -> DockerContainerWaitResult {
+        waitCount += 1
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        } onCancel: {
+            Task {
+                await self.cancel()
+            }
+        }
+    }
+
+    func complete(statusCode: Int32) {
+        continuation?.resume(
+            returning: DockerContainerWaitResult(statusCode: statusCode)
+        )
+        continuation = nil
+    }
+
+    func fail(_ error: any Error) {
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+
+    private func cancel() {
+        cancelCount += 1
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+}
+
+/// Preserves lifecycle authority while deliberately withholding wait authority.
+private struct FakeLifecycleBackendWithoutWait:
+    DockerLoggingBackend,
+    DockerContainerLifecycleBackend
+{
+    let base: FakeLoggingBackend
+
+    func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
+        try await base.loggingSystemInfo()
+    }
+
+    func inspectContainerLogging(
+        containerID: String
+    ) async throws -> DockerContainerLoggingInspection {
+        try await base.inspectContainerLogging(containerID: containerID)
+    }
+
+    func openContainerLogs(
+        containerID: String,
+        request: DockerLogReadRequest
+    ) async throws -> any DockerLogReadSession {
+        try await base.openContainerLogs(containerID: containerID, request: request)
+    }
+
+    func attachContainer(
+        containerID: String,
+        request: DockerAttachRequest
+    ) async throws -> DockerAttachConnection {
+        try await base.attachContainer(containerID: containerID, request: request)
+    }
+
+    func createContainer(
+        request: DockerContainerCreateRequest,
+        requestedName: String?
+    ) async throws -> DockerContainerCreateResult {
+        try await base.createContainer(request: request, requestedName: requestedName)
+    }
+
+    func startContainer(containerID: String) async throws {
+        try await base.startContainer(containerID: containerID)
+    }
+
+    func stopContainer(
+        containerID: String,
+        timeoutSeconds: Int64?
+    ) async throws {
+        try await base.stopContainer(
+            containerID: containerID,
+            timeoutSeconds: timeoutSeconds
+        )
+    }
+
+    func deleteContainer(
+        containerID: String,
+        force: Bool,
+        removeVolumes: Bool
+    ) async throws {
+        try await base.deleteContainer(
+            containerID: containerID,
+            force: force,
+            removeVolumes: removeVolumes
+        )
     }
 }
 

@@ -24,9 +24,12 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
     ) async throws -> ContainerEngineProviderSessionDescriptor {
         let socket = try await connect(socketPath: socketPath)
         defer { socket.close() }
-        let fingerprint = try await receiveHello(on: socket, expectedDigest: nil)
+        let handshake = try await receiveHello(on: socket, expectedDigest: nil)
         try await socket.writeFrame(ProviderSessionFrame(kind: .cancel))
-        return ContainerEngineProviderSessionDescriptor(fingerprint: fingerprint)
+        return ContainerEngineProviderSessionDescriptor(
+            fingerprint: handshake.fingerprint,
+            codeIdentity: handshake.codeIdentity
+        )
     }
 
     public func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
@@ -102,6 +105,48 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
         }
     }
 
+    public func performHandoffControl(
+        _ request: ContainerEngineProviderHandoffControlRequestV1,
+        body: Data
+    ) async throws -> ContainerEngineProviderHandoffControlResultV1 {
+        try request.validate(body: body)
+        let socket = try await Self.connect(socketPath: socketPath)
+        defer { socket.close() }
+        _ = try await Self.receiveHello(
+            on: socket,
+            expectedDigest: expectedFingerprint.digest
+        )
+        var frame = ProviderSessionFrame(kind: .controlRequest)
+        frame.controlRequest = request
+        try await socket.writeFrame(frame)
+        try await Self.writeRequestBody(body, on: socket)
+        let responseFrame = try await socket.readFrame()
+        if responseFrame.kind == .failure {
+            throw ContainerEngineProviderSessionError.providerFailure(
+                responseFrame.message ?? "unknown provider failure"
+            )
+        }
+        guard
+            responseFrame.kind == .controlResponse,
+            let response = responseFrame.controlResponse,
+            response.requestID == request.requestID
+        else {
+            throw ContainerEngineProviderSessionError.protocolViolation(
+                "expected matching provider handoff-control response"
+            )
+        }
+        let responseBody = try await Self.readBytes(
+            on: socket,
+            maximumBytes:
+            ContainerEngineProviderHandoffControlRequestV1.maximumBodyBytes
+        )
+        try response.validate(body: responseBody)
+        return ContainerEngineProviderHandoffControlResultV1(
+            response: response,
+            body: responseBody
+        )
+    }
+
     private static func connect(socketPath: String) async throws -> ProviderSessionSocket {
         try await Task.detached {
             try ProviderSessionUnixSocket.connect(path: socketPath)
@@ -111,12 +156,19 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
     private static func receiveHello(
         on socket: ProviderSessionSocket,
         expectedDigest: String?
-    ) async throws -> ContainerEngineProviderFingerprint {
+    ) async throws -> Handshake {
         let hello = try await socket.readFrame()
-        guard hello.kind == .providerHello, let fingerprint = hello.fingerprint else {
+        guard
+            hello.kind == .providerHello,
+            let fingerprint = hello.fingerprint,
+            let claimedCodeIdentity = hello.codeIdentity
+        else {
             throw ContainerEngineProviderSessionError.protocolViolation(
                 "provider did not send an identity hello"
             )
+        }
+        guard try claimedCodeIdentity == (socket.peerCodeIdentity()) else {
+            throw ContainerEngineProviderSessionError.codeIdentityMismatch
         }
         if let expectedDigest, expectedDigest != fingerprint.digest {
             throw ContainerEngineProviderSessionError.fingerprintMismatch(
@@ -126,6 +178,7 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
         }
         var gatewayHello = ProviderSessionFrame(kind: .gatewayHello)
         gatewayHello.expectedFingerprintDigest = fingerprint.digest
+        gatewayHello.codeIdentity = try ProviderHandoffCodeIdentity.current()
         try await socket.writeFrame(gatewayHello)
         let ready = try await socket.readFrame()
         guard ready.kind == .ready else {
@@ -133,17 +186,28 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
                 "provider did not accept the selected fingerprint"
             )
         }
-        return fingerprint
+        return Handshake(
+            fingerprint: fingerprint,
+            codeIdentity: claimedCodeIdentity
+        )
     }
 
-    private static func readBytes(on socket: ProviderSessionSocket) async throws -> Data {
+    private struct Handshake {
+        var fingerprint: ContainerEngineProviderFingerprint
+        var codeIdentity: ProviderHandoffCodeIdentityV1
+    }
+
+    private static func readBytes(
+        on socket: ProviderSessionSocket,
+        maximumBytes: Int = ProviderSessionSocket.maximumBufferedBodyBytes
+    ) async throws -> Data {
         var body = Data()
         while true {
             let frame = try await socket.readFrame()
             switch frame.kind {
             case .responseBody:
                 body.append(frame.data ?? Data())
-                guard body.count <= ProviderSessionSocket.maximumBufferedBodyBytes else {
+                guard body.count <= maximumBytes else {
                     throw ContainerEngineProviderSessionError.bodyTooLarge(body.count)
                 }
             case .responseEnd:

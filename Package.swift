@@ -52,7 +52,10 @@ let package = Package(
                 "ContainerEngineWire"
             ]
         ),
-        .target(name: "ContainerEngineRuntimeSPI"),
+        .target(
+            name: "ContainerEngineRuntimeSPI",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .target(
             name: "ContainerEngineProviderSession",
             dependencies: [

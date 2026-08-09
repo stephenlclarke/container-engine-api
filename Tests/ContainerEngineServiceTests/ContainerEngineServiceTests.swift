@@ -4,13 +4,43 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerEngineProviderSession
-import ContainerEngineRuntimeSPI
+@testable import ContainerEngineRuntimeSPI
 @testable import ContainerEngineService
 import ContainerEngineWire
 import Foundation
 import Testing
 
 struct ContainerEngineServiceTests {
+    @Test func `production trust stores are scoped to selected provider root`() throws {
+        let firstRoot = try #require(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        let secondRoot = try #require(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        let first = ContainerEngineServiceTrustConfiguration.production.scoped(
+            to: firstRoot
+        )
+        let second = ContainerEngineServiceTrustConfiguration.production.scoped(
+            to: secondRoot
+        )
+
+        #expect(first.gatewayKeyStore.account != second.gatewayKeyStore.account)
+        #expect(first.trustRegistryStore.account != second.trustRegistryStore.account)
+        #expect(
+            first.gatewayKeyStore.account
+                == "gateway-private-keys-v1.11111111-2222-3333-4444-555555555555"
+        )
+        #expect(
+            first.trustRegistryStore.account
+                == "trust-registry-v1.11111111-2222-3333-4444-555555555555"
+        )
+
+        let injected = ContainerEngineServiceTrustConfiguration(
+            gatewayKeyStore: ProviderHandoffGatewayKeyStore(account: "gateway"),
+            trustRegistryStore: ProviderHandoffTrustRegistryStore(account: "registry"),
+            nowUnixSeconds: 1
+        ).scoped(to: firstRoot)
+        #expect(injected.gatewayKeyStore.account == "gateway")
+        #expect(injected.trustRegistryStore.account == "registry")
+    }
+
     @Test func `parses required options in any order`() throws {
         let options = try ContainerEngineServiceOptions(
             arguments: [
@@ -109,6 +139,16 @@ struct ContainerEngineServiceTests {
                 #expect(runtime.fingerprint.declaration == declaration)
                 #expect(runtime.fingerprint.stateRootUUID == stateRootUUID)
                 #expect(runtime.socketPath == publicSocket)
+                let gatewayState = try runtime.handoffStore.load()
+                #expect(
+                    gatewayState.providerSelection.selectedProviderFingerprint
+                        == runtime.fingerprint.digest
+                )
+                #expect(
+                    gatewayState.providerSelection.selectedStateRootUUID
+                        == stateRootUUID.uuidString.lowercased()
+                )
+                #expect(gatewayState.activeTokenID == nil)
                 try await runtime.shutdown()
                 await provider.shutdown()
             } catch {
@@ -138,6 +178,184 @@ struct ContainerEngineServiceTests {
             return
         }
         #expect(socketPath == socket)
+    }
+
+    @Test func `provider health attempts receive a realistic bounded budget`() {
+        #expect(
+            ContainerEngineHealthProbe.attemptTimeoutMilliseconds(
+                remaining: .seconds(5)
+            ) == 1000
+        )
+        #expect(
+            ContainerEngineHealthProbe.attemptTimeoutMilliseconds(
+                remaining: .milliseconds(350)
+            ) == 350
+        )
+        #expect(
+            ContainerEngineHealthProbe.attemptTimeoutMilliseconds(
+                remaining: .zero
+            ) == 1
+        )
+    }
+
+    @Test func `attested provider enrollment installs trust before serving`() async throws {
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent(
+                "ces-trust-\(UUID().uuidString.prefix(8))",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let providerKeyService =
+            "io.github.stephenlclarke.container-engine.service-provider-tests.\(UUID().uuidString)"
+        let gatewayKeyService =
+            "io.github.stephenlclarke.container-engine.service-gateway-tests.\(UUID().uuidString)"
+        let trustService =
+            "io.github.stephenlclarke.container-engine.service-trust-tests.\(UUID().uuidString)"
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? ProviderHandoffProviderKeyStore.removeForTesting(
+                service: providerKeyService,
+                account: "provider"
+            )
+            try? ProviderHandoffGatewayKeyStore.removeForTesting(
+                service: gatewayKeyService,
+                account: "gateway"
+            )
+            try? ProviderHandoffTrustRegistryStore.removeForTesting(
+                service: trustService,
+                account: "registry",
+                archivedRevisions: 1 ... 1
+            )
+        }
+
+        let declaration = try ContainerEngineProviderDeclaration(
+            profile: .enhanced,
+            kind: .containerAuthority,
+            implementationVersion: "test",
+            runtimeRevisions: ["container": "test"],
+            stateSchemaVersion: 1,
+            capabilities: [
+                ContainerEngineProviderCapability(
+                    identifier: "engine.route.SystemInfo",
+                    status: .native
+                ),
+                ContainerEngineProviderCapability(
+                    identifier:
+                    "engine.handoff.provider-key-enrollment.v1",
+                    status: .native
+                )
+            ]
+        )
+        let stateRootUUID = UUID()
+        let fingerprint = try ContainerEngineProviderFingerprint(
+            declaration: declaration,
+            stateRootUUID: stateRootUUID
+        )
+        let codeIdentity = try ProviderHandoffCodeIdentity.current()
+        let providerIdentity = try ProviderHandoffProviderKeyStore(
+            service: providerKeyService,
+            account: "provider"
+        ).loadOrCreate(
+            context: ProviderHandoffProviderKeyEnrollmentContextV1(
+                providerFingerprint: fingerprint.digest,
+                stateRootUUID: stateRootUUID.uuidString.lowercased(),
+                owningBundleIdentifier: codeIdentity.signingIdentifier,
+                codeRequirementDigestSHA256:
+                codeIdentity.designatedRequirementDigestSHA256,
+                teamIdentifier: codeIdentity.teamIdentifier,
+                providerRegistrationDigestSHA256: String(
+                    fingerprint.digest.dropFirst("sha256:".count)
+                ),
+                enrolledAtUnixSeconds: 100,
+                notBeforeUnixSeconds: 100,
+                notAfterUnixSeconds: 10000
+            )
+        )
+        let providerSocket = root.appendingPathComponent("provider.sock").path
+        let provider = try ContainerEngineProviderSessionServer(
+            responder: HealthProviderResponder(),
+            handoffControlResponder:
+            ContainerEngineProviderIdentityControlResponder(
+                identity: providerIdentity
+            ),
+            socketPath: providerSocket,
+            declaration: declaration,
+            stateRootUUID: stateRootUUID
+        )
+        try provider.start()
+        let gatewayKeyStore = ProviderHandoffGatewayKeyStore(
+            service: gatewayKeyService,
+            account: "gateway"
+        )
+        let trustStore = ProviderHandoffTrustRegistryStore(
+            service: trustService,
+            account: "registry"
+        )
+        do {
+            let runtime = try await ContainerEngineServiceRunner.start(
+                options: ContainerEngineServiceOptions(
+                    socket: root.appendingPathComponent("docker.sock").path,
+                    providerSocket: providerSocket,
+                    stateDirectory: root.appendingPathComponent("gateway").path
+                ),
+                trustConfiguration: ContainerEngineServiceTrustConfiguration(
+                    gatewayKeyStore: gatewayKeyStore,
+                    trustRegistryStore: trustStore,
+                    nowUnixSeconds: 100
+                )
+            )
+            do {
+                let state = try runtime.handoffStore.load()
+                #expect(
+                    state.providerSelection.trustRegistryRevision == 1
+                )
+                let gatewayRegistrationDigest =
+                    try ProviderHandoffGatewayKeyEnrollmentContextV1
+                        .registrationDigest(codeIdentity: codeIdentity)
+                let gatewayContext =
+                    ProviderHandoffGatewayKeyEnrollmentContextV1(
+                        owningBundleIdentifier:
+                        codeIdentity.signingIdentifier,
+                        codeRequirementDigestSHA256:
+                        codeIdentity
+                            .designatedRequirementDigestSHA256,
+                        teamIdentifier: codeIdentity.teamIdentifier,
+                        gatewayRegistrationDigestSHA256:
+                        gatewayRegistrationDigest,
+                        enrolledAtUnixSeconds: 100,
+                        notBeforeUnixSeconds: 100,
+                        notAfterUnixSeconds: UInt64.max
+                    )
+                let gatewayIdentity = try gatewayKeyStore.load(
+                    expectedContext: gatewayContext
+                )
+                let registry = try trustStore.load(
+                    bootstrap: gatewayIdentity.bootstrap
+                )
+                #expect(registry.registry.registryRevision == 1)
+                #expect(registry.registry.keys.count == 10)
+                #expect(
+                    try registry.registry.keys.contains(
+                        providerIdentity.trustKey(
+                            for: .destinationPayloadEncryption
+                        )
+                    )
+                )
+                try await runtime.shutdown()
+                await provider.shutdown()
+            } catch {
+                try? await runtime.shutdown()
+                await provider.shutdown()
+                throw error
+            }
+        } catch {
+            await provider.shutdown()
+            throw error
+        }
     }
 }
 

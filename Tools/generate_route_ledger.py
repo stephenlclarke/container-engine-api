@@ -134,6 +134,11 @@ def swift_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def router_path(value: str) -> str:
+    """Allow Docker image names to retain unescaped registry path segments."""
+    return value.replace("/images/{name}", "/images/{name...}")
+
+
 def response_mode(operation: str) -> str:
     if operation in HIJACK_OPERATIONS:
         return ".hijack"
@@ -197,7 +202,7 @@ def render(specifications: list[pathlib.Path]) -> str:
                 "                DockerRouteMetadata(",
                 f'                    identifier: "{swift_string(route.operation)}",',
                 f"                    method: .{route.method},",
-                f'                    pattern: DockerRoutePattern("{swift_string(route.path)}"),',
+                f'                    pattern: DockerRoutePattern("{swift_string(router_path(route.path))}"),',
                 f'                    introduced: DockerAPIVersion("{SOURCES[introduced_index].version}"),',
                 f"                    responseMode: {response_mode(route.operation)},",
                 f"                    disposition: {disposition}",

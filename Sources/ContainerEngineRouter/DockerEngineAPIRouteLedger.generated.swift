@@ -303,7 +303,7 @@ public enum DockerEngineAPIRouteLedger {
                 DockerRouteMetadata(
                     identifier: "ImageInspect",
                     method: .get,
-                    pattern: DockerRoutePattern("/images/{name}/json"),
+                    pattern: DockerRoutePattern("/images/{name...}/json"),
                     introduced: DockerAPIVersion("1.44"),
                     responseMode: .bytes,
                     disposition: implementedRouteIdentifiers.contains("ImageInspect") ? .implemented : .unimplemented
@@ -311,7 +311,7 @@ public enum DockerEngineAPIRouteLedger {
                 DockerRouteMetadata(
                     identifier: "ImageHistory",
                     method: .get,
-                    pattern: DockerRoutePattern("/images/{name}/history"),
+                    pattern: DockerRoutePattern("/images/{name...}/history"),
                     introduced: DockerAPIVersion("1.44"),
                     responseMode: .bytes,
                     disposition: implementedRouteIdentifiers.contains("ImageHistory") ? .implemented : .unimplemented
@@ -319,7 +319,7 @@ public enum DockerEngineAPIRouteLedger {
                 DockerRouteMetadata(
                     identifier: "ImagePush",
                     method: .post,
-                    pattern: DockerRoutePattern("/images/{name}/push"),
+                    pattern: DockerRoutePattern("/images/{name...}/push"),
                     introduced: DockerAPIVersion("1.44"),
                     responseMode: .stream,
                     disposition: implementedRouteIdentifiers.contains("ImagePush") ? .implemented : .unimplemented
@@ -327,7 +327,7 @@ public enum DockerEngineAPIRouteLedger {
                 DockerRouteMetadata(
                     identifier: "ImageTag",
                     method: .post,
-                    pattern: DockerRoutePattern("/images/{name}/tag"),
+                    pattern: DockerRoutePattern("/images/{name...}/tag"),
                     introduced: DockerAPIVersion("1.44"),
                     responseMode: .bytes,
                     disposition: implementedRouteIdentifiers.contains("ImageTag") ? .implemented : .unimplemented
@@ -335,7 +335,7 @@ public enum DockerEngineAPIRouteLedger {
                 DockerRouteMetadata(
                     identifier: "ImageDelete",
                     method: .delete,
-                    pattern: DockerRoutePattern("/images/{name}"),
+                    pattern: DockerRoutePattern("/images/{name...}"),
                     introduced: DockerAPIVersion("1.44"),
                     responseMode: .bytes,
                     disposition: implementedRouteIdentifiers.contains("ImageDelete") ? .implemented : .unimplemented
@@ -423,7 +423,7 @@ public enum DockerEngineAPIRouteLedger {
                 DockerRouteMetadata(
                     identifier: "ImageGet",
                     method: .get,
-                    pattern: DockerRoutePattern("/images/{name}/get"),
+                    pattern: DockerRoutePattern("/images/{name...}/get"),
                     introduced: DockerAPIVersion("1.44"),
                     responseMode: .stream,
                     disposition: implementedRouteIdentifiers.contains("ImageGet") ? .implemented : .unimplemented

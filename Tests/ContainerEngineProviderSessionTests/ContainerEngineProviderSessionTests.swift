@@ -4,7 +4,7 @@
 //===----------------------------------------------------------------------===//
 
 @testable import ContainerEngineProviderSession
-import ContainerEngineRuntimeSPI
+@testable import ContainerEngineRuntimeSPI
 import ContainerEngineWire
 import Foundation
 import Testing
@@ -12,8 +12,116 @@ import Testing
 @Suite(.serialized)
 struct ContainerEngineProviderSessionTests {
     @Test
+    func `peer identity cache reuses only the exact executable image`() throws {
+        let cache = ProviderSessionPeerIdentityCache(capacity: 4)
+        let identity = Self.testCodeIdentity(identifier: "provider")
+        var loadCount = 0
+        let key = Self.peerProcessKey(processIdentifier: 41, startTimeSeconds: 100)
+
+        let first = try cache.identity(for: key) {
+            loadCount += 1
+            return identity
+        }
+        let second = try cache.identity(for: key) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "unexpected")
+        }
+        let recycledPID = try cache.identity(
+            for: Self.peerProcessKey(processIdentifier: 41, startTimeSeconds: 101)
+        ) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "replacement")
+        }
+        let executedImage = try cache.identity(
+            for: Self.peerProcessKey(
+                processIdentifier: 41,
+                startTimeSeconds: 101,
+                processVersion: 2
+            )
+        ) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "executed")
+        }
+        let relocatedImage = try cache.identity(
+            for: Self.peerProcessKey(
+                processIdentifier: 41,
+                startTimeSeconds: 101,
+                processVersion: 2,
+                executablePath: "/tmp/replacement"
+            )
+        ) {
+            loadCount += 1
+            return Self.testCodeIdentity(identifier: "relocated")
+        }
+
+        #expect(first == identity)
+        #expect(second == identity)
+        #expect(recycledPID.signingIdentifier == "replacement")
+        #expect(executedImage.signingIdentifier == "executed")
+        #expect(relocatedImage.signingIdentifier == "relocated")
+        #expect(loadCount == 4)
+    }
+
+    @Test
+    func `peer identity cache retains only successful bounded entries`() throws {
+        let cache = ProviderSessionPeerIdentityCache(capacity: 2)
+        let firstKey = Self.peerProcessKey(processIdentifier: 1)
+        var firstLoadCount = 0
+
+        #expect(throws: ProviderSessionTestError.expectedIdentityLoadFailure) {
+            _ = try cache.identity(for: firstKey) {
+                firstLoadCount += 1
+                throw ProviderSessionTestError.expectedIdentityLoadFailure
+            }
+        }
+        _ = try cache.identity(for: firstKey) {
+            firstLoadCount += 1
+            return Self.testCodeIdentity(identifier: "first")
+        }
+        _ = try cache.identity(for: Self.peerProcessKey(processIdentifier: 2)) {
+            Self.testCodeIdentity(identifier: "second")
+        }
+        _ = try cache.identity(for: Self.peerProcessKey(processIdentifier: 3)) {
+            Self.testCodeIdentity(identifier: "third")
+        }
+        _ = try cache.identity(for: firstKey) {
+            firstLoadCount += 1
+            return Self.testCodeIdentity(identifier: "first-reloaded")
+        }
+
+        #expect(firstLoadCount == 3)
+    }
+
+    @Test
     func `shutdown wakes an idle provider listener`() async throws {
         try await withServer { _, _, _ in }
+    }
+
+    private static func peerProcessKey(
+        processIdentifier: pid_t,
+        startTimeSeconds: UInt64 = 100,
+        processVersion: UInt32 = 1,
+        executablePath: String = "/tmp/provider"
+    ) -> ProviderSessionPeerProcessKey {
+        ProviderSessionPeerProcessKey(
+            processIdentifier: processIdentifier,
+            peerAuditToken: withUnsafeBytes(of: processVersion.bigEndian) {
+                Data($0)
+            },
+            startTimeSeconds: startTimeSeconds,
+            startTimeMicroseconds: 200,
+            executablePath: executablePath
+        )
+    }
+
+    private static func testCodeIdentity(
+        identifier: String
+    ) -> ProviderHandoffCodeIdentityV1 {
+        ProviderHandoffCodeIdentityV1(
+            signingIdentifier: identifier,
+            teamIdentifier: nil,
+            designatedRequirementDigestSHA256: "digest-\(identifier)"
+        )
     }
 
     @Test
@@ -337,8 +445,389 @@ struct ContainerEngineProviderSessionTests {
         }
     }
 
+    @Test
+    func `provider transports bounded handoff control independently of Docker HTTP`() async throws {
+        let responder = TestHandoffControlResponder()
+        try await withServer(handoffControlResponder: responder) {
+            socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let body = Data("{\"tokenID\":\"token-1\"}".utf8)
+            let request = try ContainerEngineProviderHandoffControlRequestV1(
+                requestID: "request-1",
+                operation: .partPromote,
+                bodyMediaType: "application/vnd.test.handoff-request+json",
+                body: body
+            )
+            let result = try await client.performHandoffControl(
+                request,
+                body: body
+            )
+
+            #expect(result.response.requestID == request.requestID)
+            #expect(result.response.disposition == .completed)
+            #expect(result.body == Data("durable-receipt".utf8))
+            #expect(await responder.receivedRequest() == request)
+            #expect(await responder.receivedBody() == body)
+
+            let dockerResponse = await client.respond(
+                to: DockerHTTPRequest(method: .get, target: "/bytes")
+            )
+            #expect(dockerResponse.status == 200)
+        }
+    }
+
+    @Test
+    func `handoff control rejects changed body before transport`() throws {
+        let body = Data("original".utf8)
+        let request = try ContainerEngineProviderHandoffControlRequestV1(
+            requestID: "request-1",
+            operation: .rootPrepare,
+            bodyMediaType: "application/vnd.test.handoff-request+json",
+            body: body
+        )
+        #expect(throws: ContainerEngineProviderSessionError.invalidControlMessage) {
+            try request.validate(body: Data("changed".utf8))
+        }
+    }
+
+    @Test
+    func `provider without handoff responder fails closed`() async throws {
+        try await withServer { socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let body = Data("{}".utf8)
+            let request = try ContainerEngineProviderHandoffControlRequestV1(
+                requestID: "request-unsupported",
+                operation: .rootSnapshot,
+                bodyMediaType: "application/vnd.test.handoff-request+json",
+                body: body
+            )
+            await #expect(throws: ContainerEngineProviderSessionError.self) {
+                _ = try await client.performHandoffControl(request, body: body)
+            }
+        }
+    }
+
+    @Test
+    func `provider control transfers and resumes a multi-frame bundle object`() async throws {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "provider-session-object-\(UUID().uuidString)"
+        )
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(
+            at: parent,
+            withIntermediateDirectories: false
+        )
+        let service = ContainerEngineProviderHandoffControlService(
+            objectStore: ProviderHandoffBundleObjectStore(
+                root: parent.appendingPathComponent("objects")
+            )
+        )
+        try await withServer(handoffControlResponder: service) {
+            socket, declaration, stateRoot in
+            let client = try await Self.client(
+                socket: socket,
+                declaration: declaration,
+                stateRoot: stateRoot
+            )
+            let bytes = Data(
+                (0 ..< (3 * 1024 * 1024 + 31)).map {
+                    UInt8(truncatingIfNeeded: $0)
+                }
+            )
+            let digest = ProviderHandoffDigest.sha256(bytes)
+            let objectID = "sha256:\(digest)"
+            let declareBody =
+                try ProviderHandoffBundleObjectControlCodec
+                    .encodeDeclare(
+                        ProviderHandoffBundleObjectDeclareRequestV1(
+                            bundleObjectID: objectID,
+                            transportByteLength: UInt64(bytes.count),
+                            transportDigestSHA256: digest
+                        )
+                    )
+            let declareResponse = try await Self.control(
+                client: client,
+                requestID: "object-declare",
+                operation: .objectDeclare,
+                body: declareBody
+            )
+            var record = try ProviderHandoffBundleObjectControlCodec
+                .decodeRecord(declareResponse.body)
+
+            var offset = 0
+            while offset < bytes.count {
+                let upper = min(
+                    offset
+                        + ProviderHandoffBundleObjectControlCodec
+                        .maximumTransportChunkBytes,
+                    bytes.count
+                )
+                let appendBody =
+                    try ProviderHandoffBundleObjectControlCodec
+                        .encodeAppend(
+                            ProviderHandoffBundleObjectAppendRequestV1(
+                                bundleObjectID: objectID,
+                                offset: UInt64(offset),
+                                expectedObjectRevision: record.objectRevision,
+                                bytes: bytes.subdata(in: offset ..< upper)
+                            )
+                        )
+                let appendResponse = try await Self.control(
+                    client: client,
+                    requestID: "object-append-\(offset)",
+                    operation: .objectAppend,
+                    body: appendBody
+                )
+                record = try ProviderHandoffBundleObjectControlCodec
+                    .decodeRecord(appendResponse.body)
+                offset = upper
+            }
+
+            let verifyBody =
+                try ProviderHandoffBundleObjectControlCodec
+                    .encodeReference(
+                        ProviderHandoffBundleObjectReferenceRequestV1(
+                            bundleObjectID: objectID,
+                            expectedObjectRevision: record.objectRevision
+                        )
+                    )
+            let verifyResponse = try await Self.control(
+                client: client,
+                requestID: "object-verify",
+                operation: .objectVerify,
+                body: verifyBody
+            )
+            record = try ProviderHandoffBundleObjectControlCodec
+                .decodeRecord(verifyResponse.body)
+            #expect(record.state == .verified)
+
+            var reconstructed = Data()
+            offset = 0
+            while offset < bytes.count {
+                let readBody =
+                    try ProviderHandoffBundleObjectControlCodec
+                        .encodeRead(
+                            ProviderHandoffBundleObjectReadRequestV1(
+                                bundleObjectID: objectID,
+                                offset: UInt64(offset),
+                                maximumBytes: UInt32(
+                                    ProviderHandoffBundleObjectControlCodec
+                                        .maximumTransportChunkBytes
+                                )
+                            )
+                        )
+                let readResponse = try await Self.control(
+                    client: client,
+                    requestID: "object-read-\(offset)",
+                    operation: .objectRead,
+                    body: readBody
+                )
+                let chunk = try ProviderHandoffBundleObjectControlCodec
+                    .decodeChunk(readResponse.body)
+                #expect(chunk.offset == UInt64(offset))
+                reconstructed.append(chunk.bytes)
+                offset += chunk.bytes.count
+            }
+            #expect(reconstructed == bytes)
+        }
+    }
+
+    @Test
+    func `provider enrolls public handoff keys and proves private possession`() async throws {
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent(
+                "ceps-identity-\(UUID().uuidString.prefix(8))",
+                isDirectory: true
+            )
+        let service =
+            "io.github.stephenlclarke.container-engine.tests.\(UUID().uuidString)"
+        let account = "provider-keys"
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? ProviderHandoffProviderKeyStore.removeForTesting(
+                service: service,
+                account: account
+            )
+        }
+        let socket = root.appendingPathComponent("provider.sock").path
+        let declaration = try Self.declaration()
+        let stateRoot = UUID()
+        let fingerprint = try ContainerEngineProviderFingerprint(
+            declaration: declaration,
+            stateRootUUID: stateRoot
+        )
+        let context = ProviderHandoffProviderKeyEnrollmentContextV1(
+            providerFingerprint: fingerprint.digest,
+            stateRootUUID: stateRoot.uuidString.lowercased(),
+            owningBundleIdentifier:
+            "io.github.stephenlclarke.container-engine.tests",
+            codeRequirementDigestSHA256: String(repeating: "c", count: 64),
+            teamIdentifier: "TESTTEAM",
+            providerRegistrationDigestSHA256: String(
+                repeating: "d",
+                count: 64
+            ),
+            enrolledAtUnixSeconds: 100,
+            notBeforeUnixSeconds: 100,
+            notAfterUnixSeconds: 10000
+        )
+        let identity = try ProviderHandoffProviderKeyStore(
+            service: service,
+            account: account
+        ).loadOrCreate(context: context)
+        let server = try ContainerEngineProviderSessionServer(
+            responder: TestResponder(),
+            handoffControlResponder:
+            ContainerEngineProviderIdentityControlResponder(
+                identity: identity,
+                possessionProofStore:
+                ProviderHandoffPossessionProofStore(
+                    root: root.appendingPathComponent(
+                        "possession-proofs",
+                        isDirectory: true
+                    )
+                )
+            ),
+            socketPath: socket,
+            declaration: declaration,
+            stateRootUUID: stateRoot
+        )
+        try server.start()
+        defer { Task { await server.shutdown() } }
+        let client = try await Self.client(
+            socket: socket,
+            declaration: declaration,
+            stateRoot: stateRoot
+        )
+
+        let snapshotBody =
+            try ProviderHandoffProviderKeyControlCodec
+                .encodeSnapshotRequest(
+                    ProviderHandoffProviderKeySnapshotRequestV1(
+                        expectedProviderFingerprint: fingerprint.digest,
+                        expectedStateRootUUID: stateRoot.uuidString.lowercased()
+                    )
+                )
+        let snapshotResult = try await Self.control(
+            client: client,
+            requestID: "key-snapshot",
+            operation: .destinationKeySnapshot,
+            mediaType: ProviderHandoffProviderKeyControlCodec
+                .snapshotRequestMediaType,
+            body: snapshotBody
+        )
+        #expect(
+            snapshotResult.response.bodyMediaType
+                == ProviderHandoffProviderKeyControlCodec.snapshotMediaType
+        )
+        let snapshot = try ProviderHandoffProviderKeyControlCodec.decodeSnapshot(
+            snapshotResult.body
+        )
+        #expect(snapshot.context == context)
+        #expect(snapshot.trustKeys == identity.trustKeys)
+
+        let encryptionKey = try identity.trustKey(
+            for: .destinationPayloadEncryption
+        )
+        let pending = try ProviderHandoffPossessionProofCodec.prepareChallenge(
+            proofID: "proof-1",
+            tokenID: "token-1",
+            manifestID: "manifest-1",
+            destinationProviderFingerprint: fingerprint.digest,
+            destinationStateRootUUID: stateRoot.uuidString.lowercased(),
+            destinationKeyPurpose: .destinationPayloadEncryption,
+            destinationKeyID: encryptionKey.keyID,
+            destinationPublicKey: encryptionKey.rawPublicKey,
+            nonce: Data(repeating: 7, count: 24),
+            challengePlaintext: Data(repeating: 11, count: 32),
+            ephemeralPrivateKey: Data(repeating: 13, count: 32)
+        )
+        let possessionBody =
+            try ProviderHandoffProviderKeyControlCodec
+                .encodePossessionChallenge(
+                    ProviderHandoffProviderKeyPossessionRequestV1(
+                        trustRegistryRevision: 9,
+                        challenge: pending.transportChallenge
+                    )
+                )
+        #expect(
+            !possessionBody.contains(
+                Data(pending.challengePlaintext.base64EncodedString().utf8)
+            )
+        )
+        let possessionResult = try await Self.control(
+            client: client,
+            requestID: "key-possession",
+            operation: .destinationKeyPossession,
+            mediaType: ProviderHandoffProviderKeyControlCodec
+                .possessionChallengeMediaType,
+            body: possessionBody
+        )
+        let proof =
+            try ProviderHandoffProviderKeyControlCodec
+                .decodePossessionProof(possessionResult.body)
+        #expect(proof.destinationKeyID == encryptionKey.keyID)
+        #expect(
+            try proof.responseDigestSHA256
+                == (ProviderHandoffProjections
+                    .destinationPossessionResponseDigest(
+                        proof,
+                        challengePlaintext: pending.challengePlaintext
+                    ))
+        )
+        let proofDigest =
+            try ProviderHandoffProjections
+                .destinationPossessionProofRecordDigest(proof)
+        #expect(
+            proof.destinationSignature.signedProjectionDigestSHA256
+                == proofDigest
+        )
+        try ProviderHandoffCrypto.verify(
+            proof.destinationSignature,
+            publicKey: identity.trustKey(
+                for: .destinationPossessionSigning
+            ).rawPublicKey
+        )
+        let proofRoot = root.appendingPathComponent(
+            "possession-proofs",
+            isDirectory: true
+        )
+        let proofStore = ProviderHandoffPossessionProofStore(root: proofRoot)
+        #expect(try proofStore.load(proofDigest) == proof)
+        #expect(try proofStore.store(proof) == proofDigest)
+        var conflictingProof = proof
+        conflictingProof.responseDigestSHA256 = String(repeating: "e", count: 64)
+        #expect(
+            throws: ProviderHandoffPossessionProofStoreError.conflictingProof
+        ) {
+            try proofStore.store(conflictingProof)
+        }
+        let proofURL = proofRoot.appendingPathComponent("\(proofDigest).json")
+        let firstByte = try #require(Data(contentsOf: proofURL).first)
+        let proofHandle = try FileHandle(forWritingTo: proofURL)
+        try proofHandle.write(contentsOf: Data([firstByte ^ 1]))
+        try proofHandle.synchronize()
+        try proofHandle.close()
+        #expect(
+            throws: ProviderHandoffPossessionProofStoreError.invalidEncoding
+        ) {
+            try proofStore.load(proofDigest)
+        }
+        await server.shutdown()
+    }
+
     private func withServer(
         responder: any DockerHTTPResponder = TestResponder(),
+        handoffControlResponder:
+        (any ContainerEngineProviderHandoffControlResponder)? = nil,
         _ operation: (
             _ socket: String,
             _ declaration: ContainerEngineProviderDeclaration,
@@ -355,6 +844,7 @@ struct ContainerEngineProviderSessionTests {
         let stateRoot = UUID()
         let server = try ContainerEngineProviderSessionServer(
             responder: responder,
+            handoffControlResponder: handoffControlResponder,
             socketPath: socket,
             declaration: declaration,
             stateRootUUID: stateRoot
@@ -381,6 +871,7 @@ struct ContainerEngineProviderSessionTests {
         )
         #expect(descriptor.fingerprint.declaration == declaration)
         #expect(descriptor.fingerprint.stateRootUUID == stateRoot)
+        #expect(try descriptor.codeIdentity == (ProviderHandoffCodeIdentity.current()))
         return ContainerEngineProviderSessionClient(
             socketPath: socket,
             expectedFingerprint: descriptor.fingerprint
@@ -398,6 +889,28 @@ struct ContainerEngineProviderSessionTests {
         }
         #expect(!terminal)
         return session
+    }
+
+    private static func control(
+        client: ContainerEngineProviderSessionClient,
+        requestID: String,
+        operation: ContainerEngineProviderHandoffOperationV1,
+        mediaType: String =
+            ProviderHandoffBundleObjectControlCodec.requestMediaType,
+        body: Data
+    ) async throws -> ContainerEngineProviderHandoffControlResultV1 {
+        let request = try ContainerEngineProviderHandoffControlRequestV1(
+            requestID: requestID,
+            operation: operation,
+            bodyMediaType: mediaType,
+            body: body
+        )
+        let result = try await client.performHandoffControl(
+            request,
+            body: body
+        )
+        #expect(result.response.disposition == .completed)
+        return result
     }
 
     private static func declaration(
@@ -419,6 +932,40 @@ struct ContainerEngineProviderSessionTests {
     }
 }
 
+private actor TestHandoffControlResponder:
+    ContainerEngineProviderHandoffControlResponder
+{
+    private var request: ContainerEngineProviderHandoffControlRequestV1?
+    private var body = Data()
+
+    func respond(
+        to request: ContainerEngineProviderHandoffControlRequestV1,
+        body: Data,
+        context _: ContainerEngineProviderHandoffControlContextV1
+    ) async -> ContainerEngineProviderHandoffControlResultV1 {
+        self.request = request
+        self.body = body
+        let response = try! ContainerEngineProviderHandoffControlResponseV1(
+            requestID: request.requestID,
+            disposition: .completed,
+            bodyMediaType: "application/vnd.test.handoff-response+octet-stream",
+            body: Data("durable-receipt".utf8)
+        )
+        return ContainerEngineProviderHandoffControlResultV1(
+            response: response,
+            body: Data("durable-receipt".utf8)
+        )
+    }
+
+    func receivedRequest() -> ContainerEngineProviderHandoffControlRequestV1? {
+        request
+    }
+
+    func receivedBody() -> Data {
+        body
+    }
+}
+
 private actor RequestBodyRecorder {
     private(set) var body = Data()
 
@@ -437,6 +984,7 @@ private struct RequestBodyResponder: DockerHTTPResponder {
 }
 
 private enum ProviderSessionTestError: Error {
+    case expectedIdentityLoadFailure
     case expectedHijack
 }
 
@@ -603,13 +1151,14 @@ private actor OrderedEchoHijackState {
             return nil
         }
         emitted = true
-        let output: Data = if inputClosed {
-            input
-        } else {
-            await withCheckedContinuation { continuation in
-                self.continuation = continuation
+        let output: Data =
+            if inputClosed {
+                input
+            } else {
+                await withCheckedContinuation { continuation in
+                    self.continuation = continuation
+                }
             }
-        }
         return DockerStreamFrame(channel: .standardOutput, data: output)
     }
 }

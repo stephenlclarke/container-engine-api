@@ -84,9 +84,8 @@ public enum ContainerEngineHealthProbe {
         repeat {
             do {
                 let remaining = clock.now.duration(to: deadline)
-                let timeoutMilliseconds = max(
-                    1,
-                    min(200, milliseconds(roundingUp: remaining))
+                let timeoutMilliseconds = attemptTimeoutMilliseconds(
+                    remaining: remaining
                 )
                 try probe(socketPath, timeoutMilliseconds)
                 return
@@ -101,6 +100,12 @@ public enum ContainerEngineHealthProbe {
             socketPath: socketPath,
             lastError: lastError.map(String.init(describing:)) ?? "unknown error"
         )
+    }
+
+    static func attemptTimeoutMilliseconds(
+        remaining: Duration
+    ) -> Int32 {
+        max(1, min(1000, milliseconds(roundingUp: remaining)))
     }
 
     private static func request(

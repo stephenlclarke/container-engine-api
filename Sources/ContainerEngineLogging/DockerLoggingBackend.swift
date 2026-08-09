@@ -262,6 +262,8 @@ public protocol DockerTerminalResizeBackend: Sendable {
 /// Safe backend failures with Docker-compatible HTTP mappings.
 public enum DockerLoggingBackendError: Error, Equatable, Sendable {
     case containerNotFound(String)
+    case imageNotFound(String)
+    case volumeDriverNotFound(String)
     case conflict(String)
     case invalidParameter(String)
     case server(String)
@@ -271,6 +273,10 @@ public enum DockerLoggingBackendError: Error, Equatable, Sendable {
         switch self {
         case let .containerNotFound(identifier):
             "No such container: \(identifier)"
+        case let .imageNotFound(identifier):
+            "No such image: \(identifier)"
+        case let .volumeDriverNotFound(driver):
+            "plugin \"\(driver)\" not found"
         case let .conflict(message), let .invalidParameter(message), let .server(message):
             message
         case .unsupportedLogReader:
