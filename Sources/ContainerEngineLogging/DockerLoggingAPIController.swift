@@ -30,6 +30,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     private let imageMutationBackend: (any DockerImageMutationBackend)?
     private let volumeBackend: (any DockerVolumeBackend)?
     private let lifecycleBackend: (any DockerContainerLifecycleBackend)?
+    private let waitBackend: (any DockerContainerWaitBackend)?
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
     private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
 
@@ -41,6 +42,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         minimumAPIVersion = try DockerAPIVersion("1.44")
         maximumAPIVersion = try DockerAPIVersion("1.53")
         let lifecycleBackend = backend as? any DockerContainerLifecycleBackend
+        let waitBackend = backend as? any DockerContainerWaitBackend
         let discoveryBackend = backend as? any DockerEngineDiscoveryBackend
         let imageDiscoveryBackend = backend as? any DockerImageDiscoveryBackend
         let imageMutationBackend = backend as? any DockerImageMutationBackend
@@ -49,6 +51,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             minimum: minimumAPIVersion,
             maximum: maximumAPIVersion,
             includesLifecycle: lifecycleBackend != nil,
+            includesWait: waitBackend != nil,
             includesDiscovery: discoveryBackend != nil,
             includesImageDiscovery: imageDiscoveryBackend != nil,
             includesImageMutation: imageMutationBackend != nil,
@@ -60,6 +63,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         self.imageMutationBackend = imageMutationBackend
         self.volumeBackend = volumeBackend
         self.lifecycleBackend = lifecycleBackend
+        self.waitBackend = waitBackend
         self.sharedResponseBackend = sharedResponseBackend
         terminalResizeBackend = backend as? any DockerTerminalResizeBackend
     }
@@ -170,6 +174,11 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             )
         case RouteIdentifier.stop:
             return await stopResponse(
+                containerID: match.parameters["id"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.wait:
+            return await waitResponse(
                 containerID: match.parameters["id"] ?? "",
                 target: match.target
             )
@@ -481,6 +490,63 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         }
     }
 
+    private func waitResponse(
+        containerID: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let waitBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let condition = try Self.containerWaitCondition(target)
+            let startGate = DockerContainerWaitStartGate()
+            let waitTask = Task {
+                do {
+                    let result = try await waitBackend.waitForContainer(
+                        containerID: containerID,
+                        condition: condition,
+                        onRegistered: {
+                            startGate.registered()
+                        }
+                    )
+                    startGate.completed(with: Self.jsonLineResponse(result))
+                    return result
+                } catch {
+                    startGate.completed(with: Self.backendErrorResponse(error))
+                    throw error
+                }
+            }
+            return await withTaskCancellationHandler {
+                switch await startGate.waitForOutcome() {
+                case .registered:
+                    return DockerHTTPResponse(
+                        status: 200,
+                        headers: ["Content-Type": "application/json"],
+                        body: .managedStream(
+                            DockerContainerWaitHTTPStream(
+                                waitForCompletion: {
+                                    try await waitTask.value
+                                },
+                                cancelWait: {
+                                    waitTask.cancel()
+                                }
+                            )
+                        )
+                    )
+                case let .terminal(response):
+                    _ = await waitTask.result
+                    return response
+                }
+            } onCancel: {
+                waitTask.cancel()
+            }
+        } catch let error as QueryError {
+            return Self.errorResponse(status: error.status, message: error.message)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
     private func infoResponse() async -> DockerHTTPResponse {
         do {
             let info = try await backend.loggingSystemInfo()
@@ -757,6 +823,21 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             size: boolValue(target.first("size")),
             filters: containerListFilters(target.first("filters"))
         )
+    }
+
+    private static func containerWaitCondition(
+        _ target: DockerRequestTarget
+    ) throws -> DockerContainerWaitCondition {
+        guard let rawCondition = target.first("condition") else {
+            return .notRunning
+        }
+        guard let condition = DockerContainerWaitCondition(rawValue: rawCondition) else {
+            throw QueryError(
+                status: 400,
+                message: "invalid condition: \"\(rawCondition)\""
+            )
+        }
+        return condition
     }
 
     private static func containerListFilters(
@@ -1287,6 +1368,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         minimum: DockerAPIVersion,
         maximum: DockerAPIVersion,
         includesLifecycle: Bool,
+        includesWait: Bool,
         includesDiscovery: Bool,
         includesImageDiscovery: Bool,
         includesImageMutation: Bool,
@@ -1377,6 +1459,18 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                     disposition: .implemented
                 )
             ])
+            if includesWait {
+                try routes.append(
+                    DockerRouteMetadata(
+                        identifier: RouteIdentifier.wait,
+                        method: .post,
+                        pattern: DockerRoutePattern("/containers/{id}/wait"),
+                        introduced: minimum,
+                        responseMode: .bytes,
+                        disposition: .implemented
+                    )
+                )
+            }
         }
         if includesDiscovery {
             try routes.append(contentsOf: [
@@ -1477,6 +1571,7 @@ private enum RouteIdentifier {
     static let create = "container.create"
     static let start = "container.start"
     static let stop = "container.stop"
+    static let wait = "container.wait"
     static let delete = "container.delete"
     static let inspect = "container.inspect"
     static let logs = "container.logs"

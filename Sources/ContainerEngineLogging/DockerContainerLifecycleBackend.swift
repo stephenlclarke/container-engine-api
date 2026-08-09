@@ -179,3 +179,62 @@ public protocol DockerContainerLifecycleBackend: Sendable {
         removeVolumes: Bool
     ) async throws
 }
+
+/// Docker Engine's supported container-wait conditions.
+public enum DockerContainerWaitCondition: String, CaseIterable, Equatable, Sendable {
+    /// Return when the container is not currently running.
+    case notRunning = "not-running"
+    /// Return after the next observed container exit.
+    case nextExit = "next-exit"
+    /// Return after the container has been removed.
+    case removed
+}
+
+/// The Docker Engine response for a completed container wait.
+public struct DockerContainerWaitResult: Encodable, Equatable, Sendable {
+    /// The init process exit status observed by the selected wait condition.
+    public var statusCode: Int32
+
+    public init(statusCode: Int32) {
+        self.statusCode = statusCode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case statusCode = "StatusCode"
+    }
+}
+
+/// Native authority operation for Docker's container wait route.
+///
+/// This remains separate from the create/start/stop/delete protocol so an
+/// adapter cannot advertise `ContainerWait` until it owns each requested
+/// wait condition and the terminal status it returns.
+public protocol DockerContainerWaitBackend: Sendable {
+    /// Waits for the requested lifecycle condition after invoking
+    /// `onRegistered` exactly once.
+    ///
+    /// The callback is invoked only after the backend has validated the
+    /// container and registered a cancellation-aware waiter. Docker clients
+    /// use the response headers as the acknowledgement that lets them start a
+    /// newly created container, so acknowledging before registration can race
+    /// a fast exit or deadlock `docker run`.
+    func waitForContainer(
+        containerID: String,
+        condition: DockerContainerWaitCondition,
+        onRegistered: @escaping @Sendable () -> Void
+    ) async throws -> DockerContainerWaitResult
+}
+
+extension DockerContainerWaitBackend {
+    /// Waits without needing the HTTP acknowledgement hook.
+    public func waitForContainer(
+        containerID: String,
+        condition: DockerContainerWaitCondition
+    ) async throws -> DockerContainerWaitResult {
+        try await waitForContainer(
+            containerID: containerID,
+            condition: condition,
+            onRegistered: {}
+        )
+    }
+}
