@@ -45,8 +45,8 @@ actor DockerContainerWaitHTTPStream: DockerHTTPStreamSession {
         let cancelWait = cancelWait
         return try await withTaskCancellationHandler {
             do {
-                var data = try DockerJSON.encoder.encode(
-                    try await waitForCompletion()
+                var data = try await DockerJSON.encoder.encode(
+                    waitForCompletion()
                 )
                 data.append(UInt8(ascii: "\n"))
                 state = .closed

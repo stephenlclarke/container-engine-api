@@ -3,12 +3,11 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
+@testable import ContainerEngineProviderSession
+@testable import ContainerEngineRuntimeSPI
 import ContainerEngineWire
 import Foundation
 import Testing
-
-@testable import ContainerEngineProviderSession
-@testable import ContainerEngineRuntimeSPI
 
 @Suite(.serialized)
 struct ContainerEngineProviderSessionTests {
@@ -158,7 +157,7 @@ struct ContainerEngineProviderSessionTests {
                 to: DockerHTTPRequest(method: .get, target: "/bytes")
             )
             #expect(response.status == 200)
-            if case .bytes(let data) = response.body {
+            if case let .bytes(data) = response.body {
                 #expect(String(decoding: data, as: UTF8.self) == "provider-bytes")
             } else {
                 Issue.record("expected bytes response")
@@ -243,7 +242,7 @@ struct ContainerEngineProviderSessionTests {
             let response = await client.respond(
                 to: DockerHTTPRequest(method: .get, target: "/stream")
             )
-            if case .managedStream(let session) = response.body {
+            if case let .managedStream(session) = response.body {
                 #expect(try await session.nextChunk() == Data("first".utf8))
                 #expect(try await session.nextChunk() == Data("second".utf8))
                 #expect(try await session.nextChunk() == nil)
@@ -264,7 +263,7 @@ struct ContainerEngineProviderSessionTests {
             let response = await client.respond(
                 to: DockerHTTPRequest(method: .get, target: "/large-stream")
             )
-            if case .managedStream(let session) = response.body {
+            if case let .managedStream(session) = response.body {
                 #expect(try await session.nextChunk()?.count == 2 * 1024 * 1024 + 17)
                 #expect(try await session.nextChunk() == nil)
             } else {
@@ -337,7 +336,7 @@ struct ContainerEngineProviderSessionTests {
             let response = await client.respond(
                 to: DockerHTTPRequest(method: .post, target: "/ordered-hijack")
             )
-            guard case .hijack(let session, _) = response.body else {
+            guard case let .hijack(session, _) = response.body else {
                 Issue.record("expected ordered hijack response")
                 return
             }
@@ -348,7 +347,7 @@ struct ContainerEngineProviderSessionTests {
             let chunks = [
                 Data(repeating: 0x01, count: 1024 * 1024),
                 Data(repeating: 0x02, count: 1024 * 1024),
-                Data(repeating: 0x03, count: 1024 * 1024),
+                Data(repeating: 0x03, count: 1024 * 1024)
             ]
             for chunk in chunks {
                 try await session.write(chunk)
@@ -411,7 +410,7 @@ struct ContainerEngineProviderSessionTests {
             let response = await client.respond(
                 to: DockerHTTPRequest(method: .get, target: "/websocket")
             )
-            guard case .webSocket(let session) = response.body else {
+            guard case let .webSocket(session) = response.body else {
                 Issue.record("expected websocket response")
                 return
             }
@@ -539,30 +538,31 @@ struct ContainerEngineProviderSessionTests {
                 stateRoot: stateRoot
             )
             let bytes = Data(
-                (0..<(3 * 1024 * 1024 + 31)).map {
+                (0 ..< (3 * 1024 * 1024 + 31)).map {
                     UInt8(truncatingIfNeeded: $0)
-                })
+                }
+            )
             let digest = ProviderHandoffDigest.sha256(bytes)
             let objectID = "sha256:\(digest)"
             let declareBody =
                 try ProviderHandoffBundleObjectControlCodec
-                .encodeDeclare(
-                    ProviderHandoffBundleObjectDeclareRequestV1(
-                        bundleObjectID: objectID,
-                        transportByteLength: UInt64(bytes.count),
-                        transportDigestSHA256: digest
+                    .encodeDeclare(
+                        ProviderHandoffBundleObjectDeclareRequestV1(
+                            bundleObjectID: objectID,
+                            transportByteLength: UInt64(bytes.count),
+                            transportDigestSHA256: digest
+                        )
                     )
-                )
-            var record =
-                try ProviderHandoffBundleObjectControlCodec
-                .decodeRecord(
-                    try await Self.control(
-                        client: client,
-                        requestID: "object-declare",
-                        operation: .objectDeclare,
-                        body: declareBody
-                    ).body
-                )
+            var try record =
+                try await ProviderHandoffBundleObjectControlCodec
+                    .decodeRecord(
+                        Self.control(
+                            client: client,
+                            requestID: "object-declare",
+                            operation: .objectDeclare,
+                            body: declareBody
+                        ).body
+                    )
 
             var offset = 0
             while offset < bytes.count {
@@ -574,37 +574,37 @@ struct ContainerEngineProviderSessionTests {
                 )
                 let appendBody =
                     try ProviderHandoffBundleObjectControlCodec
-                    .encodeAppend(
-                        ProviderHandoffBundleObjectAppendRequestV1(
-                            bundleObjectID: objectID,
-                            offset: UInt64(offset),
-                            expectedObjectRevision: record.objectRevision,
-                            bytes: bytes.subdata(in: offset..<upper)
+                        .encodeAppend(
+                            ProviderHandoffBundleObjectAppendRequestV1(
+                                bundleObjectID: objectID,
+                                offset: UInt64(offset),
+                                expectedObjectRevision: record.objectRevision,
+                                bytes: bytes.subdata(in: offset ..< upper)
+                            )
                         )
-                    )
-                record =
-                    try ProviderHandoffBundleObjectControlCodec
-                    .decodeRecord(
-                        try await Self.control(
-                            client: client,
-                            requestID: "object-append-\(offset)",
-                            operation: .objectAppend,
-                            body: appendBody
-                        ).body
-                    )
+                try record =
+                    try await ProviderHandoffBundleObjectControlCodec
+                        .decodeRecord(
+                            Self.control(
+                                client: client,
+                                requestID: "object-append-\(offset)",
+                                operation: .objectAppend,
+                                body: appendBody
+                            ).body
+                        )
                 offset = upper
             }
 
             let verifyBody =
                 try ProviderHandoffBundleObjectControlCodec
-                .encodeReference(
-                    ProviderHandoffBundleObjectReferenceRequestV1(
-                        bundleObjectID: objectID,
-                        expectedObjectRevision: record.objectRevision
+                    .encodeReference(
+                        ProviderHandoffBundleObjectReferenceRequestV1(
+                            bundleObjectID: objectID,
+                            expectedObjectRevision: record.objectRevision
+                        )
                     )
-                )
-            record = try ProviderHandoffBundleObjectControlCodec.decodeRecord(
-                try await Self.control(
+            record = try await ProviderHandoffBundleObjectControlCodec.decodeRecord(
+                Self.control(
                     client: client,
                     requestID: "object-verify",
                     operation: .objectVerify,
@@ -618,26 +618,26 @@ struct ContainerEngineProviderSessionTests {
             while offset < bytes.count {
                 let readBody =
                     try ProviderHandoffBundleObjectControlCodec
-                    .encodeRead(
-                        ProviderHandoffBundleObjectReadRequestV1(
-                            bundleObjectID: objectID,
-                            offset: UInt64(offset),
-                            maximumBytes: UInt32(
-                                ProviderHandoffBundleObjectControlCodec
-                                    .maximumTransportChunkBytes
+                        .encodeRead(
+                            ProviderHandoffBundleObjectReadRequestV1(
+                                bundleObjectID: objectID,
+                                offset: UInt64(offset),
+                                maximumBytes: UInt32(
+                                    ProviderHandoffBundleObjectControlCodec
+                                        .maximumTransportChunkBytes
+                                )
                             )
                         )
-                    )
-                let chunk =
-                    try ProviderHandoffBundleObjectControlCodec
-                    .decodeChunk(
-                        try await Self.control(
-                            client: client,
-                            requestID: "object-read-\(offset)",
-                            operation: .objectRead,
-                            body: readBody
-                        ).body
-                    )
+                let try chunk =
+                    try await ProviderHandoffBundleObjectControlCodec
+                        .decodeChunk(
+                            Self.control(
+                                client: client,
+                                requestID: "object-read-\(offset)",
+                                operation: .objectRead,
+                                body: readBody
+                            ).body
+                        )
                 #expect(chunk.offset == UInt64(offset))
                 reconstructed.append(chunk.bytes)
                 offset += chunk.bytes.count
@@ -674,7 +674,7 @@ struct ContainerEngineProviderSessionTests {
             providerFingerprint: fingerprint.digest,
             stateRootUUID: stateRoot.uuidString.lowercased(),
             owningBundleIdentifier:
-                "io.github.stephenlclarke.container-engine.tests",
+            "io.github.stephenlclarke.container-engine.tests",
             codeRequirementDigestSHA256: String(repeating: "c", count: 64),
             teamIdentifier: "TESTTEAM",
             providerRegistrationDigestSHA256: String(
@@ -683,7 +683,7 @@ struct ContainerEngineProviderSessionTests {
             ),
             enrolledAtUnixSeconds: 100,
             notBeforeUnixSeconds: 100,
-            notAfterUnixSeconds: 10_000
+            notAfterUnixSeconds: 10000
         )
         let identity = try ProviderHandoffProviderKeyStore(
             service: service,
@@ -692,16 +692,16 @@ struct ContainerEngineProviderSessionTests {
         let server = try ContainerEngineProviderSessionServer(
             responder: TestResponder(),
             handoffControlResponder:
-                ContainerEngineProviderIdentityControlResponder(
-                    identity: identity,
-                    possessionProofStore:
-                        ProviderHandoffPossessionProofStore(
-                            root: root.appendingPathComponent(
-                                "possession-proofs",
-                                isDirectory: true
-                            )
-                        )
-                ),
+            ContainerEngineProviderIdentityControlResponder(
+                identity: identity,
+                possessionProofStore:
+                ProviderHandoffPossessionProofStore(
+                    root: root.appendingPathComponent(
+                        "possession-proofs",
+                        isDirectory: true
+                    )
+                )
+            ),
             socketPath: socket,
             declaration: declaration,
             stateRootUUID: stateRoot
@@ -716,12 +716,12 @@ struct ContainerEngineProviderSessionTests {
 
         let snapshotBody =
             try ProviderHandoffProviderKeyControlCodec
-            .encodeSnapshotRequest(
-                ProviderHandoffProviderKeySnapshotRequestV1(
-                    expectedProviderFingerprint: fingerprint.digest,
-                    expectedStateRootUUID: stateRoot.uuidString.lowercased()
+                .encodeSnapshotRequest(
+                    ProviderHandoffProviderKeySnapshotRequestV1(
+                        expectedProviderFingerprint: fingerprint.digest,
+                        expectedStateRootUUID: stateRoot.uuidString.lowercased()
+                    )
                 )
-            )
         let snapshotResult = try await Self.control(
             client: client,
             requestID: "key-snapshot",
@@ -758,12 +758,12 @@ struct ContainerEngineProviderSessionTests {
         )
         let possessionBody =
             try ProviderHandoffProviderKeyControlCodec
-            .encodePossessionChallenge(
-                ProviderHandoffProviderKeyPossessionRequestV1(
-                    trustRegistryRevision: 9,
-                    challenge: pending.transportChallenge
+                .encodePossessionChallenge(
+                    ProviderHandoffProviderKeyPossessionRequestV1(
+                        trustRegistryRevision: 9,
+                        challenge: pending.transportChallenge
+                    )
                 )
-            )
         #expect(
             !possessionBody.contains(
                 Data(pending.challengePlaintext.base64EncodedString().utf8)
@@ -779,11 +779,11 @@ struct ContainerEngineProviderSessionTests {
         )
         let proof =
             try ProviderHandoffProviderKeyControlCodec
-            .decodePossessionProof(possessionResult.body)
+                .decodePossessionProof(possessionResult.body)
         #expect(proof.destinationKeyID == encryptionKey.keyID)
         #expect(
-            proof.responseDigestSHA256
-                == (try ProviderHandoffProjections
+            try proof.responseDigestSHA256
+                == (ProviderHandoffProjections
                     .destinationPossessionResponseDigest(
                         proof,
                         challengePlaintext: pending.challengePlaintext
@@ -791,14 +791,14 @@ struct ContainerEngineProviderSessionTests {
         )
         let proofDigest =
             try ProviderHandoffProjections
-            .destinationPossessionProofRecordDigest(proof)
+                .destinationPossessionProofRecordDigest(proof)
         #expect(
             proof.destinationSignature.signedProjectionDigestSHA256
                 == proofDigest
         )
         try ProviderHandoffCrypto.verify(
             proof.destinationSignature,
-            publicKey: try identity.trustKey(
+            publicKey: identity.trustKey(
                 for: .destinationPossessionSigning
             ).rawPublicKey
         )
@@ -833,7 +833,7 @@ struct ContainerEngineProviderSessionTests {
     private func withServer(
         responder: any DockerHTTPResponder = TestResponder(),
         handoffControlResponder:
-            (any ContainerEngineProviderHandoffControlResponder)? = nil,
+        (any ContainerEngineProviderHandoffControlResponder)? = nil,
         _ operation: (
             _ socket: String,
             _ declaration: ContainerEngineProviderDeclaration,
@@ -877,7 +877,7 @@ struct ContainerEngineProviderSessionTests {
         )
         #expect(descriptor.fingerprint.declaration == declaration)
         #expect(descriptor.fingerprint.stateRootUUID == stateRoot)
-        #expect(descriptor.codeIdentity == (try ProviderHandoffCodeIdentity.current()))
+        #expect(try descriptor.codeIdentity == (ProviderHandoffCodeIdentity.current()))
         return ContainerEngineProviderSessionClient(
             socketPath: socket,
             expectedFingerprint: descriptor.fingerprint
@@ -890,7 +890,7 @@ struct ContainerEngineProviderSessionTests {
         let response = await client.respond(
             to: DockerHTTPRequest(method: .post, target: "/hijack")
         )
-        guard case .hijack(let session, let terminal) = response.body else {
+        guard case let .hijack(session, terminal) = response.body else {
             throw ProviderSessionTestError.expectedHijack
         }
         #expect(!terminal)

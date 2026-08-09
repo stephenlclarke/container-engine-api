@@ -23,7 +23,7 @@ struct ProviderHandoffCodecTests {
     func `deterministic CBOR uses canonical key and integer encoding`() throws {
         let value: ProviderHandoffCanonicalValue = .map([
             .init("bb", .textString("x")),
-            .init("a", .unsigned(1)),
+            .init("a", .unsigned(1))
         ])
         let encoded = try ProviderHandoffCanonicalCBOR.encode(value)
 
@@ -57,7 +57,7 @@ struct ProviderHandoffCodecTests {
 
     @Test
     func `HChaCha20 matches the published fixed vector`() throws {
-        let key = Data((0x00...0x1F).map(UInt8.init))
+        let key = Data((0x00 ... 0x1F).map(UInt8.init))
         let nonce = try #require(
             data(hex: "000000090000004a0000000031415927")
         )
@@ -161,7 +161,7 @@ struct ProviderHandoffCodecTests {
             destinationStateRootUUID: destination,
             destinationKeyID: destinationKeyID,
             destinationPublicKey: destinationPublicKey,
-            nonce: Data((0x00...0x17).map(UInt8.init))
+            nonce: Data((0x00 ... 0x17).map(UInt8.init))
         )
 
         #expect(payload.descriptor.canonicalContentDigest.digest != payload.descriptor.transportDigestSHA256)
@@ -219,7 +219,7 @@ struct ProviderHandoffCodecTests {
                 Data(
                     repeating: 0x5A,
                     count:
-                        ProviderHandoffPayloadCodec
+                    ProviderHandoffPayloadCodec
                         .maximumSealedFramePlaintextBytes + 1024
                 )
             )
@@ -285,7 +285,7 @@ struct ProviderHandoffCodecTests {
             ),
             transportFileURL: transportURL,
             mediaType:
-                "application/vnd.io.github.stephenlclarke.container.handoff-logging.v1+cbor",
+            "application/vnd.io.github.stephenlclarke.container.handoff-logging.v1+cbor",
             tokenID: "token-1",
             manifestID: "manifest-1",
             sourceOrder: [source],
@@ -294,7 +294,7 @@ struct ProviderHandoffCodecTests {
             destinationStateRootUUID: destination,
             destinationKeyID: destinationKeyID,
             destinationPublicKey: destinationPublicKey,
-            nonce: Data((0x00...0x17).map(UInt8.init))
+            nonce: Data((0x00 ... 0x17).map(UInt8.init))
         )
 
         #expect(
@@ -345,7 +345,7 @@ struct ProviderHandoffCodecTests {
         #expect(opened.entries.count == 1)
         guard
             case let .file(openedRecordURL, openedByteLength) =
-                opened.entries[0].canonicalRecord
+            opened.entries[0].canonicalRecord
         else {
             Issue.record("expected a file-backed canonical record")
             return
@@ -361,7 +361,7 @@ struct ProviderHandoffCodecTests {
             partKind: .logging,
             entries: [
                 evidenceEntry(identifier: "z", source: source),
-                evidenceEntry(identifier: "a", source: source),
+                evidenceEntry(identifier: "a", source: source)
             ]
         )
 
@@ -391,7 +391,7 @@ struct ProviderHandoffCodecTests {
         var index = hex.startIndex
         while index < hex.endIndex {
             let next = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            guard let byte = UInt8(hex[index ..< next], radix: 16) else { return nil }
             output.append(byte)
             index = next
         }

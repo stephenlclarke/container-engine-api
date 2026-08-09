@@ -24,7 +24,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
     public init(
         responder: any DockerHTTPResponder,
         handoffControlResponder:
-            (any ContainerEngineProviderHandoffControlResponder)? = nil,
+        (any ContainerEngineProviderHandoffControlResponder)? = nil,
         socketPath: String,
         declaration: ContainerEngineProviderDeclaration,
         stateRootUUID: UUID
@@ -76,9 +76,9 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             return (acceptTask, listener != nil)
         }
         if state.1,
-            let wakeConnection = try? ProviderSessionUnixSocket.connect(
-                path: socketPath
-            )
+           let wakeConnection = try? ProviderSessionUnixSocket.connect(
+               path: socketPath
+           )
         {
             wakeConnection.close()
         }
@@ -145,7 +145,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 gatewayHello.kind == .gatewayHello,
                 gatewayHello.expectedFingerprintDigest == fingerprint.digest,
                 let claimedGatewayIdentity = gatewayHello.codeIdentity,
-                claimedGatewayIdentity == (try connection.peerCodeIdentity())
+                try claimedGatewayIdentity == (connection.peerCodeIdentity())
             else {
                 if gatewayHello.expectedFingerprintDigest != fingerprint.digest {
                     throw ContainerEngineProviderSessionError.fingerprintMismatch(
@@ -161,20 +161,20 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 return
             }
             if frame.kind == .controlRequest,
-                let request = frame.controlRequest
+               let request = frame.controlRequest
             {
                 try await serveControl(
                     request,
-                    body: try await readRequestBody(
+                    body: readRequestBody(
                         on: connection,
                         maximumBytes:
-                            ContainerEngineProviderHandoffControlRequestV1
+                        ContainerEngineProviderHandoffControlRequestV1
                             .maximumBodyBytes
                     ),
                     context: ContainerEngineProviderHandoffControlContextV1(
                         providerFingerprint: fingerprint,
                         authenticatedGatewayCodeIdentity:
-                            claimedGatewayIdentity
+                        claimedGatewayIdentity
                     ),
                     on: connection
                 )
@@ -252,7 +252,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
         on connection: ProviderSessionSocket
     ) async throws {
         switch response.body {
-        case .bytes(let data):
+        case let .bytes(data):
             try await writeHead(
                 response,
                 bodyKind: .bytes,
@@ -261,7 +261,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
             )
             try await writeData(data, channel: nil, on: connection)
             try await connection.writeFrame(ProviderSessionFrame(kind: .responseEnd))
-        case .managedStream(let session):
+        case let .managedStream(session):
             try await writeHead(
                 response,
                 bodyKind: .stream,
@@ -269,7 +269,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveManagedStream(session, on: connection)
-        case .stream(let stream):
+        case let .stream(stream):
             try await writeHead(
                 response,
                 bodyKind: .stream,
@@ -277,7 +277,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveLegacyStream(stream, on: connection)
-        case .hijack(let session, let terminal):
+        case let .hijack(session, terminal):
             try await writeHead(
                 response,
                 bodyKind: .hijack,
@@ -285,7 +285,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
                 on: connection
             )
             try await serveHijack(session, on: connection)
-        case .webSocket(let session):
+        case let .webSocket(session):
             try await writeHead(
                 response,
                 bodyKind: .webSocket,
@@ -323,7 +323,7 @@ public final class ContainerEngineProviderSessionServer: @unchecked Sendable {
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
             var frame = ProviderSessionFrame(kind: .responseBody)
-            frame.data = data.subdata(in: offset..<end)
+            frame.data = data.subdata(in: offset ..< end)
             frame.channel = channel
             try await connection.writeFrame(frame)
             offset = end

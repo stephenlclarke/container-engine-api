@@ -89,7 +89,7 @@ public struct ProviderHandoffPendingPossessionChallengeV1: Equatable, Sendable {
             challengeEphemeralPublicKey: challengeEphemeralPublicKey,
             challengeNonce: challengeNonce,
             challengeAssociatedDataDigestSHA256:
-                challengeAssociatedDataDigestSHA256,
+            challengeAssociatedDataDigestSHA256,
             challengeCiphertext: challengeCiphertext
         )
     }
@@ -147,14 +147,6 @@ public struct ProviderHandoffDestinationPossessionChallengeV1:
 public struct ProviderHandoffValidatedPossessionProofV1: Sendable {
     public let proof: ProviderHandoffDestinationKeyPossessionProofV1
     public let proofRecordDigestSHA256: String
-
-    internal init(
-        proof: ProviderHandoffDestinationKeyPossessionProofV1,
-        proofRecordDigestSHA256: String
-    ) {
-        self.proof = proof
-        self.proofRecordDigestSHA256 = proofRecordDigestSHA256
-    }
 }
 
 public enum ProviderHandoffEnvelopeCodecError:
@@ -228,7 +220,7 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
         let plaintext = try encode(lineageKey)
         let ephemeral =
             ephemeralPrivateKey
-            ?? ProviderHandoffCrypto.generateX25519PrivateKey()
+                ?? ProviderHandoffCrypto.generateX25519PrivateKey()
         let ephemeralPublicKey = try ProviderHandoffCrypto.x25519PublicKey(
             for: ephemeral
         )
@@ -251,7 +243,7 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
             plaintext,
             destinationPublicKey: destinationPublicKey,
             nonce: nonce,
-            salt: try hkdfSalt(associated),
+            salt: hkdfSalt(associated),
             info: hkdfInfo(associatedDigest),
             associatedData: associatedDigest,
             ephemeralPrivateKey: ephemeral
@@ -339,14 +331,14 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
         )
         guard
             envelope.encryptionAlgorithm
-                == .x25519HKDFSHA256XChaCha20Poly1305V1,
+            == .x25519HKDFSHA256XChaCha20Poly1305V1,
             envelope.destinationKeyPurpose == .destinationLineageKeyEncryption,
             !envelope.envelopeID.isEmpty,
             envelope.canonicalPlaintextByteLength > 0,
             envelope.ciphertext.count
-                == Int(envelope.canonicalPlaintextByteLength) + 16,
-            ProviderHandoffDigest.hex(
-                try ProviderHandoffPayloadCodec.associatedDataDigest(associated)
+            == Int(envelope.canonicalPlaintextByteLength) + 16,
+            try ProviderHandoffDigest.hex(
+                ProviderHandoffPayloadCodec.associatedDataDigest(associated)
             ) == envelope.associatedDataDigestSHA256
         else {
             throw ProviderHandoffEnvelopeCodecError.invalidEnvelope
@@ -410,7 +402,7 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
                 ciphertext: envelope.ciphertext
             ),
             destinationPrivateKey: destinationPrivateKey,
-            salt: try hkdfSalt(associated),
+            salt: hkdfSalt(associated),
             info: hkdfInfo(associatedDigest),
             associatedData: associatedDigest
         )
@@ -437,15 +429,16 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
                 .init("keyVersion", .unsigned(value.keyVersion)),
                 .init("rawLineageHMACSHA256Key", .byteString(value.rawHMACSHA256Key)),
                 .init("schemaVersion", .unsigned(1)),
-                .init("sourceStateRootUUID", .optional(value.sourceStateRootUUID)),
-            ]))
+                .init("sourceStateRootUUID", .optional(value.sourceStateRootUUID))
+            ])
+        )
     }
 
     private static func decode(
         _ data: Data
     ) throws -> ProviderHandoffEnvelopeLineageKeyV1 {
         let decoded = try ProviderHandoffCanonicalCBOR.decode(data)
-        guard case .map(let entries) = decoded else {
+        guard case let .map(entries) = decoded else {
             throw ProviderHandoffEnvelopeCodecError.invalidLineageKey
         }
         let values = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0.value) })
@@ -455,12 +448,12 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
                 "keyVersion",
                 "rawLineageHMACSHA256Key",
                 "schemaVersion",
-                "sourceStateRootUUID",
+                "sourceStateRootUUID"
             ],
             case .unsigned(1)? = values["schemaVersion"],
-            case .textString(let lineage)? = values["authorityLineageUUID"],
-            case .unsigned(let version)? = values["keyVersion"],
-            case .byteString(let key)? = values["rawLineageHMACSHA256Key"]
+            case let .textString(lineage)? = values["authorityLineageUUID"],
+            case let .unsigned(version)? = values["keyVersion"],
+            case let .byteString(key)? = values["rawLineageHMACSHA256Key"]
         else {
             throw ProviderHandoffEnvelopeCodecError.invalidLineageKey
         }
@@ -468,7 +461,7 @@ public enum ProviderHandoffLineageKeyEnvelopeCodec {
         switch values["sourceStateRootUUID"] {
         case .null?:
             source = nil
-        case .textString(let value)?:
+        case let .textString(value)?:
             source = value
         default:
             throw ProviderHandoffEnvelopeCodecError.invalidLineageKey
@@ -561,7 +554,7 @@ public enum ProviderHandoffPossessionProofCodec {
         guard
             !proofID.isEmpty,
             [.destinationPayloadEncryption, .destinationLineageKeyEncryption]
-                .contains(destinationKeyPurpose),
+            .contains(destinationKeyPurpose),
             nonce.count == 24
         else {
             throw ProviderHandoffEnvelopeCodecError.invalidPossessionProof
@@ -572,7 +565,7 @@ public enum ProviderHandoffPossessionProofCodec {
         }
         let ephemeral =
             ephemeralPrivateKey
-            ?? ProviderHandoffCrypto.generateX25519PrivateKey()
+                ?? ProviderHandoffCrypto.generateX25519PrivateKey()
         let ephemeralPublicKey = try ProviderHandoffCrypto.x25519PublicKey(
             for: ephemeral
         )
@@ -594,7 +587,7 @@ public enum ProviderHandoffPossessionProofCodec {
             plaintext,
             destinationPublicKey: destinationPublicKey,
             nonce: nonce,
-            salt: try hkdfSalt(associated),
+            salt: hkdfSalt(associated),
             info: hkdfInfo(associatedDigest),
             associatedData: associatedDigest,
             ephemeralPrivateKey: ephemeral
@@ -644,7 +637,7 @@ public enum ProviderHandoffPossessionProofCodec {
         )
         guard
             ProviderHandoffDigest.hex(associatedDigest)
-                == challenge.challengeAssociatedDataDigestSHA256
+            == challenge.challengeAssociatedDataDigestSHA256
         else {
             throw ProviderHandoffEnvelopeCodecError.invalidAssociatedData
         }
@@ -655,7 +648,7 @@ public enum ProviderHandoffPossessionProofCodec {
                 ciphertext: challenge.challengeCiphertext
             ),
             destinationPrivateKey: destinationPrivateKey,
-            salt: try hkdfSalt(associated),
+            salt: hkdfSalt(associated),
             info: hkdfInfo(associatedDigest),
             associatedData: associatedDigest
         )
@@ -676,13 +669,13 @@ public enum ProviderHandoffPossessionProofCodec {
         )
         proof.responseDigestSHA256 =
             try ProviderHandoffProjections
-            .destinationPossessionResponseDigest(
-                proof,
-                challengePlaintext: plaintext
-            )
+                .destinationPossessionResponseDigest(
+                    proof,
+                    challengePlaintext: plaintext
+                )
         let recordDigest =
             try ProviderHandoffProjections
-            .destinationPossessionProofRecordDigest(proof)
+                .destinationPossessionProofRecordDigest(proof)
         proof.destinationSignature = try ProviderHandoffCrypto.sign(
             projectionDigestSHA256: recordDigest,
             purpose: .destinationPossessionSigning,
@@ -708,19 +701,19 @@ public enum ProviderHandoffPossessionProofCodec {
             proof.tokenID == challenge.tokenID,
             proof.manifestID == challenge.manifestID,
             proof.destinationProviderFingerprint
-                == challenge.destinationProviderFingerprint,
+            == challenge.destinationProviderFingerprint,
             proof.destinationStateRootUUID == challenge.destinationStateRootUUID,
             proof.destinationKeyPurpose == challenge.destinationKeyPurpose,
             proof.destinationKeyID == challenge.destinationKeyID,
             proof.challengeEphemeralPublicKey
-                == challenge.challengeEphemeralPublicKey,
+            == challenge.challengeEphemeralPublicKey,
             proof.challengeNonce == challenge.challengeNonce,
             proof.challengeAssociatedDataDigestSHA256
-                == challenge.challengeAssociatedDataDigestSHA256,
+            == challenge.challengeAssociatedDataDigestSHA256,
             proof.challengeCiphertext == challenge.challengeCiphertext,
-            ProviderHandoffDigest.constantTimeEqual(
-                try ProviderHandoffDigest.parseSHA256(proof.responseDigestSHA256),
-                try ProviderHandoffDigest.parseSHA256(
+            try ProviderHandoffDigest.constantTimeEqual(
+                ProviderHandoffDigest.parseSHA256(proof.responseDigestSHA256),
+                ProviderHandoffDigest.parseSHA256(
                     ProviderHandoffProjections.destinationPossessionResponseDigest(
                         proof,
                         challengePlaintext: challenge.challengePlaintext
@@ -751,20 +744,20 @@ public enum ProviderHandoffPossessionProofCodec {
             tokenID: proof.tokenID,
             manifestID: proof.manifestID,
             destinationProviderFingerprint:
-                proof.destinationProviderFingerprint,
+            proof.destinationProviderFingerprint,
             destinationStateRootUUID: proof.destinationStateRootUUID,
             destinationKeyPurpose: proof.destinationKeyPurpose,
             destinationKeyID: proof.destinationKeyID,
             challengeEphemeralPublicKey:
-                proof.challengeEphemeralPublicKey,
+            proof.challengeEphemeralPublicKey,
             challengeNonce: proof.challengeNonce,
             challengeAssociatedDataDigestSHA256:
-                proof.challengeAssociatedDataDigestSHA256,
+            proof.challengeAssociatedDataDigestSHA256,
             challengeCiphertext: proof.challengeCiphertext
         )
         let associatedDigest =
             try ProviderHandoffPayloadCodec
-            .associatedDataDigest(associatedData(challenge))
+                .associatedDataDigest(associatedData(challenge))
         guard
             proof.schemaVersion == 1,
             !proof.proofID.isEmpty,
@@ -772,8 +765,8 @@ public enum ProviderHandoffPossessionProofCodec {
             !proof.manifestID.isEmpty,
             proof.challengeCiphertext.count == 48,
             ProviderHandoffDigest.hex(associatedDigest)
-                == proof.challengeAssociatedDataDigestSHA256,
-            (try ProviderHandoffDigest.parseSHA256(
+            == proof.challengeAssociatedDataDigestSHA256,
+            try (ProviderHandoffDigest.parseSHA256(
                 proof.responseDigestSHA256
             )).count == 32
         else {
@@ -789,7 +782,7 @@ public enum ProviderHandoffPossessionProofCodec {
         )
         let recordDigest =
             try ProviderHandoffProjections
-            .destinationPossessionProofRecordDigest(proof)
+                .destinationPossessionProofRecordDigest(proof)
         try trustRegistry.verify(
             proof.destinationSignature,
             expectedPurpose: .destinationPossessionSigning,
@@ -829,7 +822,7 @@ public enum ProviderHandoffPossessionProofCodec {
             tokenID: value.tokenID,
             manifestID: value.manifestID,
             destinationProviderFingerprint:
-                value.destinationProviderFingerprint,
+            value.destinationProviderFingerprint,
             destinationStateRootUUID: value.destinationStateRootUUID,
             destinationKeyPurpose: value.destinationKeyPurpose,
             destinationKeyID: value.destinationKeyID,
@@ -900,7 +893,7 @@ private func hkdfSalt(
             .init("manifestID", .textString(associated.manifestID)),
             .init("objectKind", .textString(associated.objectKind.rawValue)),
             .init("objectLocalID", .textString(associated.objectLocalID)),
-            .init("tokenID", .textString(associated.tokenID)),
+            .init("tokenID", .textString(associated.tokenID))
         ])
     )
 }
@@ -920,7 +913,8 @@ private func canonicalUUID(_ value: String) -> Bool {
 private func randomBytes(count: Int) -> Data {
     var generator = SystemRandomNumberGenerator()
     return Data(
-        (0..<count).map { _ in
+        (0 ..< count).map { _ in
             UInt8.random(in: .min ... .max, using: &generator)
-        })
+        }
+    )
 }

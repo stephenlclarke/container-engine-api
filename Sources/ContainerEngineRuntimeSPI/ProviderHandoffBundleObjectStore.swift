@@ -294,8 +294,8 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             }
             let chunkDigest = ProviderHandoffDigest.sha256(bytes)
             if let pendingOffset = record.pendingChunkOffset,
-                let pendingLength = record.pendingChunkByteLength,
-                let pendingDigest = record.pendingChunkDigestSHA256
+               let pendingLength = record.pendingChunkByteLength,
+               let pendingDigest = record.pendingChunkDigestSHA256
             {
                 guard
                     pendingOffset == offset,
@@ -588,7 +588,7 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             throw ProviderHandoffBundleObjectStoreError.invalidMetadata
         }
         while record.state != .verified,
-            record.receivedByteCount < transportByteLength
+              record.receivedByteCount < transportByteLength
         {
             let remaining = transportByteLength - record.receivedByteCount
             let count = min(UInt64(Self.maximumChunkBytes), remaining)
@@ -679,8 +679,8 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
     ) throws {
         let name =
             record.state == .verified
-            ? Self.verifiedFileName(record.bundleObjectID)
-            : Self.partialFileName(record.bundleObjectID)
+                ? Self.verifiedFileName(record.bundleObjectID)
+                : Self.partialFileName(record.bundleObjectID)
         let descriptor = try Self.openManagedFile(
             rootDescriptor: rootDescriptor,
             name: name,
@@ -691,8 +691,8 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
         let metadata = try Self.validateRegularFile(descriptor)
         let expected =
             record.state == .verified
-            ? record.transportByteLength
-            : record.receivedByteCount
+                ? record.transportByteLength
+                : record.receivedByteCount
         guard metadata.st_size >= 0 else {
             throw ProviderHandoffBundleObjectStoreError.integrityMismatch
         }
@@ -764,7 +764,7 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
         let pendingFields = [
             record.pendingChunkOffset != nil,
             record.pendingChunkByteLength != nil,
-            record.pendingChunkDigestSHA256 != nil,
+            record.pendingChunkDigestSHA256 != nil
         ]
         let pendingCount = pendingFields.filter(\.self).count
         if let pendingDigest = record.pendingChunkDigestSHA256 {
@@ -772,8 +772,8 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
         }
         guard
             record.schemaVersion
-                == ProviderHandoffBundleObjectRecordV1
-                .currentSchemaVersion,
+            == ProviderHandoffBundleObjectRecordV1
+            .currentSchemaVersion,
             record.transportByteLength > 0,
             record.transportByteLength <= UInt64(Int64.max),
             record.transportDigestSHA256 == digest,
@@ -782,12 +782,12 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             pendingCount == 0 || pendingCount == 3,
             record.state == .receiving || pendingCount == 0,
             record.state == .receiving
-                || record.receivedByteCount == record.transportByteLength
+            || record.receivedByteCount == record.transportByteLength
         else {
             throw ProviderHandoffBundleObjectStoreError.invalidRecord
         }
         if let pendingOffset = record.pendingChunkOffset,
-            let pendingLength = record.pendingChunkByteLength
+           let pendingLength = record.pendingChunkByteLength
         {
             let (upperBound, overflow) = pendingOffset.addingReportingOverflow(
                 pendingLength
@@ -917,7 +917,7 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             throw ProviderHandoffBundleObjectStoreError.invalidMetadata
         }
         if root.path.withCString({ Darwin.mkdir($0, mode_t(0o700)) }) != 0,
-            errno != EEXIST
+           errno != EEXIST
         {
             throw ProviderHandoffBundleObjectStoreError.ioFailure(
                 .createDirectory,
@@ -967,7 +967,7 @@ public struct ProviderHandoffBundleObjectStore: Sendable {
             .openFile,
             ENOENT
         ) {
-            let value = Data((0..<keyByteCount).map { _ in UInt8.random(in: .min ... .max) })
+            let value = Data((0 ..< keyByteCount).map { _ in UInt8.random(in: .min ... .max) })
             do {
                 let descriptor = try openNewFile(
                     rootDescriptor: rootDescriptor,
@@ -1241,7 +1241,7 @@ private struct BundleObjectDataReader {
             throw ProviderHandoffBundleObjectStoreError.invalidEncoding
         }
         defer { offset += count }
-        return data.subdata(in: offset..<offset + count)
+        return data.subdata(in: offset ..< offset + count)
     }
 
     mutating func readUInt32() throws -> UInt32 {

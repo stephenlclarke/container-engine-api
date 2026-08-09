@@ -14,10 +14,9 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
+@testable import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
-
-@testable import ContainerEngineRuntimeSPI
 
 struct ProviderHandoffPartStagingStateMachineTests {
     @Test
@@ -30,7 +29,7 @@ struct ProviderHandoffPartStagingStateMachineTests {
         try ProviderHandoffPartStagingStateMachine.recordReceivedRanges(
             [
                 .init(lowerBound: 8, upperBoundExclusive: 16),
-                .init(lowerBound: 0, upperBoundExclusive: 8),
+                .init(lowerBound: 0, upperBoundExclusive: 8)
             ],
             transportByteLength: 16,
             in: &record,
@@ -39,7 +38,8 @@ struct ProviderHandoffPartStagingStateMachineTests {
         #expect(
             record.receivedRanges == [
                 .init(lowerBound: 0, upperBoundExclusive: 16)
-            ])
+            ]
+        )
         try ProviderHandoffPartStagingStateMachine.recordTransportVerified(
             transportDigestSHA256: digest("transport"),
             transportByteLength: 16,

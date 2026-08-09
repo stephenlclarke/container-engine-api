@@ -47,7 +47,7 @@ enum ProviderHandoffPayloadPackageFileDecoder {
         }
         var entries: [ProviderHandoffPayloadPackageEntrySourceV2] = []
         entries.reserveCapacity(entryCount)
-        for index in 0..<entryCount {
+        for index in 0 ..< entryCount {
             guard try reader.argument(major: 5) == 5 else {
                 throw ProviderHandoffPayloadCodecError.invalidPackage
             }
@@ -96,7 +96,7 @@ enum ProviderHandoffPayloadPackageFileDecoder {
         try reader.requireText("schemaVersion")
         guard
             try reader.argument(major: 0)
-                == UInt64(ProviderHandoffPayloadPackageV1.currentSchemaVersion),
+            == UInt64(ProviderHandoffPayloadPackageV1.currentSchemaVersion),
             try reader.isAtEnd()
         else {
             throw ProviderHandoffPayloadCodecError.invalidPackage
@@ -152,7 +152,7 @@ enum ProviderHandoffPayloadPackageFileDecoder {
             guard
                 length <= UInt64(Self.maximumTextBytes),
                 let count = Int(exactly: length),
-                let value = String(data: try readExactly(count), encoding: .utf8),
+                let value = try String(data: readExactly(count), encoding: .utf8),
                 value.precomposedStringWithCanonicalMapping == value
             else {
                 throw ProviderHandoffCanonicalCBORError.invalidText
@@ -162,14 +162,14 @@ enum ProviderHandoffPayloadPackageFileDecoder {
 
         func optionalText() throws -> String? {
             let initial = try byte()
-            if initial == 0xf6 {
+            if initial == 0xF6 {
                 return nil
             }
             let length = try argument(initial: initial, major: 3)
             guard
                 length <= UInt64(Self.maximumTextBytes),
                 let count = Int(exactly: length),
-                let value = String(data: try readExactly(count), encoding: .utf8),
+                let value = try String(data: readExactly(count), encoding: .utf8),
                 value.precomposedStringWithCanonicalMapping == value
             else {
                 throw ProviderHandoffCanonicalCBORError.invalidText
@@ -228,24 +228,24 @@ enum ProviderHandoffPayloadPackageFileDecoder {
             guard initial >> 5 == major else {
                 throw ProviderHandoffCanonicalCBORError.malformed
             }
-            let additional = initial & 0x1f
+            let additional = initial & 0x1F
             switch additional {
-            case 0..<24:
+            case 0 ..< 24:
                 return UInt64(additional)
             case 24:
-                let value = UInt64(try byte())
+                let value = try UInt64(byte())
                 guard value >= 24 else {
                     throw ProviderHandoffCanonicalCBORError.nonCanonical
                 }
                 return value
             case 25:
-                let value = UInt64(try integer(UInt16.self))
+                let value = try UInt64(integer(UInt16.self))
                 guard value > UInt8.max else {
                     throw ProviderHandoffCanonicalCBORError.nonCanonical
                 }
                 return value
             case 26:
-                let value = UInt64(try integer(UInt32.self))
+                let value = try UInt64(integer(UInt32.self))
                 guard value > UInt16.max else {
                     throw ProviderHandoffCanonicalCBORError.nonCanonical
                 }
@@ -266,7 +266,7 @@ enum ProviderHandoffPayloadPackageFileDecoder {
             try readExactly(1)[0]
         }
 
-        private func integer<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        private func integer<T: FixedWidthInteger>(_: T.Type) throws -> T {
             let bytes = try readExactly(MemoryLayout<T>.size)
             return bytes.withUnsafeBytes { raw in
                 raw.loadUnaligned(as: T.self).bigEndian

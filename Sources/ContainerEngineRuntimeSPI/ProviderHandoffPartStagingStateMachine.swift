@@ -130,7 +130,7 @@ public enum ProviderHandoffPartStagingStateMachine {
             throw ProviderHandoffPartStagingError.boundsExceeded
         }
         if record.state == .transportVerified,
-            record.verifiedTransportDigestSHA256 == transportDigestSHA256
+           record.verifiedTransportDigestSHA256 == transportDigestSHA256
         {
             return
         }
@@ -142,12 +142,12 @@ public enum ProviderHandoffPartStagingStateMachine {
         }
         guard
             record.receivedRanges
-                == [
-                    ProviderHandoffByteRangeV1(
-                        lowerBound: 0,
-                        upperBoundExclusive: transportByteLength
-                    )
-                ]
+            == [
+                ProviderHandoffByteRangeV1(
+                    lowerBound: 0,
+                    upperBoundExclusive: transportByteLength
+                )
+            ]
         else {
             throw ProviderHandoffPartStagingError.transportIncomplete
         }
@@ -192,14 +192,14 @@ public enum ProviderHandoffPartStagingStateMachine {
                 throw ProviderHandoffPartStagingError.invalidRecord
             }
         case .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1,
-            .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2:
+             .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2:
             guard !sourceDigestVerifications.isEmpty else {
                 throw ProviderHandoffPartStagingError.invalidRecord
             }
         }
         if record.state == .contentVerified,
-            record.verifiedCanonicalContentDigest == canonicalContentDigest,
-            record.sourceDigestVerifications == sourceDigestVerifications
+           record.verifiedCanonicalContentDigest == canonicalContentDigest,
+           record.sourceDigestVerifications == sourceDigestVerifications
         {
             return
         }
@@ -263,7 +263,7 @@ public enum ProviderHandoffPartStagingStateMachine {
             )
         }
         if let existing = record.stagedImportReceiptDigestSHA256,
-            existing != receiptDigestSHA256
+           existing != receiptDigestSHA256
         {
             throw ProviderHandoffPartStagingError.receiptMismatch
         }
@@ -397,7 +397,7 @@ public enum ProviderHandoffPartStagingStateMachine {
             record.partKind == expected.partKind,
             record.bundleObjectID == expected.bundleObjectID,
             record.payloadDescriptorDigestSHA256
-                == expected.payloadDescriptorDigestSHA256
+            == expected.payloadDescriptorDigestSHA256
         else {
             throw ProviderHandoffPartStagingError.immutableIdentityMismatch
         }
@@ -430,7 +430,7 @@ public enum ProviderHandoffPartStagingStateMachine {
         var result: [ProviderHandoffByteRangeV1] = []
         for range in ordered where range.lowerBound < range.upperBoundExclusive {
             if let last = result.last,
-                range.lowerBound <= last.upperBoundExclusive
+               range.lowerBound <= last.upperBoundExclusive
             {
                 result[result.count - 1].upperBoundExclusive = max(
                     last.upperBoundExclusive,
@@ -448,7 +448,7 @@ public enum ProviderHandoffPartStagingStateMachine {
     ) throws {
         guard
             values.map(\.sourceStateRootUUID).count
-                == Set(values.map(\.sourceStateRootUUID)).count
+            == Set(values.map(\.sourceStateRootUUID)).count
         else {
             throw ProviderHandoffPartStagingError.invalidRecord
         }

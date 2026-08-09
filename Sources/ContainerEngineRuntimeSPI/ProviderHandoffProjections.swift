@@ -120,7 +120,7 @@ public enum ProviderHandoffProjections {
                     "handoffChainHeadDigestSHA256",
                     optionalDigest(header.handoffChainHeadDigest)
                 ),
-                .init("stateRootUUID", .textString(header.stateRootUUID)),
+                .init("stateRootUUID", .textString(header.stateRootUUID))
             ])
         }
         return try ProviderHandoffDigest.domain(
@@ -130,7 +130,7 @@ public enum ProviderHandoffProjections {
                     "commitDigestSHA256",
                     .byteString(digestBytes(commitDigestSHA256))
                 ),
-                .init("orderedPriorChainHeads", .array(roots)),
+                .init("orderedPriorChainHeads", .array(roots))
             ])
         )
     }
@@ -151,7 +151,7 @@ public enum ProviderHandoffProjections {
                 .init("role", .textString(record.role.rawValue)),
                 .init("schemaVersion", .unsigned(UInt64(record.schemaVersion))),
                 .init("stateRootUUID", .textString(record.stateRootUUID)),
-                .init("tokenID", .textString(record.tokenID)),
+                .init("tokenID", .textString(record.tokenID))
             ])
         )
     }
@@ -170,7 +170,7 @@ public enum ProviderHandoffProjections {
                 .init("phase", .textString(outcome.phase.rawValue)),
                 .init("roots", .array(outcome.roots.map(terminalRoot))),
                 .init("schemaVersion", .unsigned(UInt64(outcome.schemaVersion))),
-                .init("tokenID", .textString(outcome.tokenID)),
+                .init("tokenID", .textString(outcome.tokenID))
             ])
         )
     }
@@ -191,7 +191,7 @@ public enum ProviderHandoffProjections {
             .init("selectedProviderFingerprint", .optional(header.selectedProviderFingerprint)),
             .init("stagedAuthorityLineageUUID", .optional(header.stagedAuthorityLineageUUID)),
             .init("stateRootUUID", .textString(header.stateRootUUID)),
-            .init("writerEpoch", .unsigned(header.writerEpoch)),
+            .init("writerEpoch", .unsigned(header.writerEpoch))
         ])
     }
 
@@ -225,7 +225,7 @@ public enum ProviderHandoffProjections {
             .init("rootStoreRevision", .unsigned(vector.rootStoreRevision)),
             .init("schemaVersion", .unsigned(UInt64(vector.schemaVersion))),
             .init("snapshotCheckpointID", .optional(vector.snapshotCheckpointID)),
-            .init("stateRootUUID", .textString(vector.stateRootUUID)),
+            .init("stateRootUUID", .textString(vector.stateRootUUID))
         ])
     }
 
@@ -237,9 +237,9 @@ public enum ProviderHandoffProjections {
         }
         guard
             (record.selectedProviderFingerprint == nil)
-                == (record.selectedStateRootUUID == nil),
+            == (record.selectedStateRootUUID == nil),
             (record.selectedProviderFingerprint == nil)
-                == (record.providerRegistrationDigestSHA256 == nil)
+            == (record.providerRegistrationDigestSHA256 == nil)
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
@@ -249,7 +249,7 @@ public enum ProviderHandoffProjections {
             .init("selectedProviderFingerprint", .optional(record.selectedProviderFingerprint)),
             .init("selectedStateRootUUID", .optional(record.selectedStateRootUUID)),
             .init("selectionRevision", .unsigned(record.selectionRevision)),
-            .init("trustRegistryRevision", .unsigned(record.trustRegistryRevision)),
+            .init("trustRegistryRevision", .unsigned(record.trustRegistryRevision))
         ])
     }
 
@@ -262,7 +262,7 @@ public enum ProviderHandoffProjections {
         }
         guard
             (record.selectedProviderFingerprint == nil)
-                == (record.selectedStateRootUUID == nil),
+            == (record.selectedStateRootUUID == nil),
             !record.minimumEngineAPIVersion.isEmpty,
             !record.maximumEngineAPIVersion.isEmpty
         else {
@@ -276,7 +276,7 @@ public enum ProviderHandoffProjections {
             .init("schemaVersion", .unsigned(UInt64(record.schemaVersion))),
             .init("selectedProviderFingerprint", .optional(record.selectedProviderFingerprint)),
             .init("selectedStateRootUUID", .optional(record.selectedStateRootUUID)),
-            .init("socketInstanceUUID", .textString(record.socketInstanceUUID)),
+            .init("socketInstanceUUID", .textString(record.socketInstanceUUID))
         ])
     }
 
@@ -290,13 +290,13 @@ public enum ProviderHandoffProjections {
             expectation.preCommitRevisionVector.stateRootUUID == expectation.stateRootUUID,
             expectation.abortRevisionVector.stateRootUUID == expectation.stateRootUUID,
             try stateRootHeaderDigest(expectation.expectedHeader)
-                == expectation.expectedHeaderDigestSHA256,
+            == expectation.expectedHeaderDigestSHA256,
             try stateRootHeaderDigest(expectation.abortHeader)
-                == expectation.abortHeaderDigestSHA256,
+            == expectation.abortHeaderDigestSHA256,
             try revisionVectorDigest(expectation.preCommitRevisionVector)
-                == expectation.preCommitRevisionVector.revisionVectorDigestSHA256,
+            == expectation.preCommitRevisionVector.revisionVectorDigestSHA256,
             try revisionVectorDigest(expectation.abortRevisionVector)
-                == expectation.abortRevisionVector.revisionVectorDigestSHA256
+            == expectation.abortRevisionVector.revisionVectorDigestSHA256
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
@@ -309,7 +309,7 @@ public enum ProviderHandoffProjections {
             .init("preCommitRevisionVector", revisionVectorWithDigest(expectation.preCommitRevisionVector)),
             .init("role", .textString(expectation.role.rawValue)),
             .init("schemaVersion", .unsigned(UInt64(expectation.schemaVersion))),
-            .init("stateRootUUID", .textString(expectation.stateRootUUID)),
+            .init("stateRootUUID", .textString(expectation.stateRootUUID))
         ])
     }
 
@@ -319,7 +319,7 @@ public enum ProviderHandoffProjections {
         try .map([
             .init("partKind", .textString(expectation.partKind.rawValue)),
             .init("payloadDescriptorDigestSHA256", .byteString(digestBytes(expectation.payloadDescriptorDigestSHA256))),
-            .init("stagedImportReceiptDigestSHA256", .byteString(digestBytes(expectation.stagedImportReceiptDigestSHA256))),
+            .init("stagedImportReceiptDigestSHA256", .byteString(digestBytes(expectation.stagedImportReceiptDigestSHA256)))
         ])
     }
 
@@ -343,7 +343,7 @@ public enum ProviderHandoffProjections {
                     .init("destinationKeyPurpose", .textString(value.destinationKeyPurpose.rawValue)),
                     .init("encryptionAlgorithm", .textString(value.encryptionAlgorithm.rawValue)),
                     .init("ephemeralPublicKey", .byteString(value.ephemeralPublicKey)),
-                    .init("nonce", .byteString(value.nonce)),
+                    .init("nonce", .byteString(value.nonce))
                 ])
             } else {
                 .null
@@ -363,7 +363,7 @@ public enum ProviderHandoffProjections {
             guard
                 let destination = descriptor.destinationEncryption,
                 destination.encryptionAlgorithm
-                    == .x25519HKDFSHA256XChaCha20Poly1305V1,
+                == .x25519HKDFSHA256XChaCha20Poly1305V1,
                 destination.destinationKeyPurpose == .destinationPayloadEncryption,
                 destination.ephemeralPublicKey.count == 32,
                 destination.nonce.count == 24,
@@ -377,7 +377,7 @@ public enum ProviderHandoffProjections {
             guard
                 let destination = descriptor.destinationEncryption,
                 destination.encryptionAlgorithm
-                    == .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
+                == .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
                 destination.destinationKeyPurpose == .destinationPayloadEncryption,
                 destination.ephemeralPublicKey.count == 32,
                 destination.nonce.count == 24,
@@ -398,7 +398,7 @@ public enum ProviderHandoffProjections {
             .init("protection", .textString(descriptor.protection.rawValue)),
             .init("schemaVersion", .unsigned(UInt64(descriptor.schemaVersion))),
             .init("transportByteLength", .unsigned(descriptor.transportByteLength)),
-            .init("transportDigestSHA256", .byteString(digestBytes(descriptor.transportDigestSHA256))),
+            .init("transportDigestSHA256", .byteString(digestBytes(descriptor.transportDigestSHA256)))
         ])
     }
 
@@ -430,7 +430,7 @@ public enum ProviderHandoffProjections {
             .init("schemaVersion", .unsigned(UInt64(intent.schemaVersion))),
             .init("socketSelection", socketSelectionExpectation(intent.socketSelection)),
             .init("tokenID", .textString(intent.tokenID)),
-            .init("trustRegistryRevision", .unsigned(intent.trustRegistryRevision)),
+            .init("trustRegistryRevision", .unsigned(intent.trustRegistryRevision))
         ])
     }
 
@@ -440,7 +440,7 @@ public enum ProviderHandoffProjections {
         try .map([
             .init("canonicalStateDigestSHA256", .byteString(digestBytes(controller.canonicalStateDigestSHA256))),
             .init("controllerID", .textString(controller.controllerID)),
-            .init("revision", .unsigned(controller.revision)),
+            .init("revision", .unsigned(controller.revision))
         ])
     }
 
@@ -454,7 +454,7 @@ public enum ProviderHandoffProjections {
                 "orderedSourceDigests",
                 .array(digest.orderedSourceDigests.map(contentSourceDigest))
             ),
-            .init("scope", .textString(digest.scope.rawValue)),
+            .init("scope", .textString(digest.scope.rawValue))
         ])
     }
 
@@ -466,7 +466,7 @@ public enum ProviderHandoffProjections {
             .init("lineageDigestKeyVersion", .unsigned(digest.lineageDigestKeyVersion)),
             .init("orderedEntryIDs", .array(digest.orderedEntryIDs.map(ProviderHandoffCanonicalValue.textString))),
             .init("sourceDigestHMACSHA256", .byteString(digestBytes(digest.sourceDigestHMACSHA256))),
-            .init("sourceStateRootUUID", .textString(digest.sourceStateRootUUID)),
+            .init("sourceStateRootUUID", .textString(digest.sourceStateRootUUID))
         ])
     }
 
@@ -494,9 +494,9 @@ public enum ProviderHandoffProjections {
     ) throws -> ProviderHandoffCanonicalValue {
         guard
             try providerSelectionDigest(expectation.expectedRecord)
-                == expectation.expectedRecordDigestSHA256,
+            == expectation.expectedRecordDigestSHA256,
             try providerSelectionDigest(expectation.resultingRecord)
-                == expectation.resultingRecordDigestSHA256
+            == expectation.resultingRecordDigestSHA256
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
@@ -504,7 +504,7 @@ public enum ProviderHandoffProjections {
             .init("expectedRecord", providerSelection(expectation.expectedRecord)),
             .init("expectedRecordDigestSHA256", .byteString(digestBytes(expectation.expectedRecordDigestSHA256))),
             .init("resultingRecord", providerSelection(expectation.resultingRecord)),
-            .init("resultingRecordDigestSHA256", .byteString(digestBytes(expectation.resultingRecordDigestSHA256))),
+            .init("resultingRecordDigestSHA256", .byteString(digestBytes(expectation.resultingRecordDigestSHA256)))
         ])
     }
 
@@ -513,9 +513,9 @@ public enum ProviderHandoffProjections {
     ) throws -> ProviderHandoffCanonicalValue {
         guard
             try socketDiscoveryDigest(expectation.expectedRecord)
-                == expectation.expectedRecordDigestSHA256,
+            == expectation.expectedRecordDigestSHA256,
             try socketDiscoveryDigest(expectation.resultingRecord)
-                == expectation.resultingRecordDigestSHA256
+            == expectation.resultingRecordDigestSHA256
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
@@ -523,7 +523,7 @@ public enum ProviderHandoffProjections {
             .init("expectedRecord", socketDiscovery(expectation.expectedRecord)),
             .init("expectedRecordDigestSHA256", .byteString(digestBytes(expectation.expectedRecordDigestSHA256))),
             .init("resultingRecord", socketDiscovery(expectation.resultingRecord)),
-            .init("resultingRecordDigestSHA256", .byteString(digestBytes(expectation.resultingRecordDigestSHA256))),
+            .init("resultingRecordDigestSHA256", .byteString(digestBytes(expectation.resultingRecordDigestSHA256)))
         ])
     }
 
@@ -534,9 +534,9 @@ public enum ProviderHandoffProjections {
             root.stateRootUUID == root.terminalHeader.stateRootUUID,
             root.stateRootUUID == root.terminalRevisionVector.stateRootUUID,
             try stateRootHeaderDigest(root.terminalHeader)
-                == root.terminalHeaderDigestSHA256,
+            == root.terminalHeaderDigestSHA256,
             try revisionVectorDigest(root.terminalRevisionVector)
-                == root.terminalRevisionVector.revisionVectorDigestSHA256
+            == root.terminalRevisionVector.revisionVectorDigestSHA256
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
@@ -545,7 +545,7 @@ public enum ProviderHandoffProjections {
             .init("stateRootUUID", .textString(root.stateRootUUID)),
             .init("terminalHeader", stateRootHeader(root.terminalHeader)),
             .init("terminalHeaderDigestSHA256", .byteString(digestBytes(root.terminalHeaderDigestSHA256))),
-            .init("terminalRevisionVector", revisionVectorWithDigest(root.terminalRevisionVector)),
+            .init("terminalRevisionVector", revisionVectorWithDigest(root.terminalRevisionVector))
         ])
     }
 
@@ -564,11 +564,11 @@ public enum ProviderHandoffProjections {
             header.minimumWriterSchemaVersion > 0,
             header.lineageDigestKeyVersion > 0,
             (header.handoffState == .destinationStaged)
-                == (header.stagedAuthorityLineageUUID != nil),
+            == (header.stagedAuthorityLineageUUID != nil),
             requiresActiveToken(header.handoffState)
-                == (header.activeHandoffTokenID != nil),
+            == (header.activeHandoffTokenID != nil),
             header.handoffState != .sourceTransferred
-                || header.handoffChainHeadDigest != nil
+            || header.handoffChainHeadDigest != nil
         else {
             throw ProviderHandoffProjectionError.invalidHeader(
                 header.stateRootUUID
@@ -579,7 +579,7 @@ public enum ProviderHandoffProjections {
     private static func requiresActiveToken(_ state: StateRootHandoffStateV1) -> Bool {
         switch state {
         case .sourceDraining, .sourceQuiesced, .destinationStaged,
-            .destinationReconciling:
+             .destinationReconciling:
             true
         case .none, .sourceTransferred, .destinationActive:
             false

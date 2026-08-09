@@ -21,8 +21,8 @@ public enum DockerCommandValue: Decodable, Equatable, Sendable {
 
     public var values: [String] {
         switch self {
-        case .string(let value): [value]
-        case .array(let values): values
+        case let .string(value): [value]
+        case let .array(values): values
         }
     }
 }
@@ -225,9 +225,9 @@ public protocol DockerContainerWaitBackend: Sendable {
     ) async throws -> DockerContainerWaitResult
 }
 
-extension DockerContainerWaitBackend {
+public extension DockerContainerWaitBackend {
     /// Waits without needing the HTTP acknowledgement hook.
-    public func waitForContainer(
+    func waitForContainer(
         containerID: String,
         condition: DockerContainerWaitCondition
     ) async throws -> DockerContainerWaitResult {

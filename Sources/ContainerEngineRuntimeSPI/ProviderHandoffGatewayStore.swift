@@ -54,13 +54,13 @@ public enum ProviderHandoffGatewayStoreError:
             "provider handoff gateway state encoding is invalid"
         case .invalidMetadata:
             "provider handoff gateway state metadata is unsafe"
-        case .ioFailure(let operation, let code):
+        case let .ioFailure(operation, code):
             "provider handoff gateway store \(operation.rawValue) failed with errno \(code)"
         case .notFound:
             "provider handoff gateway state does not exist"
         case .revisionOverflow:
             "provider handoff gateway store revision cannot advance beyond UInt64.max"
-        case .revisionMismatch(let expected, let actual):
+        case let .revisionMismatch(expected, actual):
             "provider handoff gateway store revision mismatch: expected \(expected), found \(actual)"
         case .stateTooLarge:
             "provider handoff gateway state exceeds its 32 MiB bound"
@@ -190,7 +190,7 @@ public struct ProviderHandoffGatewayStore: Sendable {
             envelope.schemaVersion == 1,
             envelope.payload.count <= Self.maximumPayloadBytes,
             ProviderHandoffDigest.sha256(envelope.payload)
-                == envelope.payloadDigestSHA256
+            == envelope.payloadDigestSHA256
         else {
             throw ProviderHandoffGatewayStoreError.integrityMismatch
         }
@@ -319,7 +319,9 @@ public struct ProviderHandoffGatewayStore: Sendable {
                     rawBuffer.baseAddress?.advanced(by: offset),
                     count - offset
                 )
-                if result < 0, errno == EINTR { continue }
+                if result < 0, errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw ProviderHandoffGatewayStoreError.ioFailure(.read, errno)
                 }
@@ -338,7 +340,9 @@ public struct ProviderHandoffGatewayStore: Sendable {
                     rawBuffer.baseAddress?.advanced(by: offset),
                     rawBuffer.count - offset
                 )
-                if result < 0, errno == EINTR { continue }
+                if result < 0, errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw ProviderHandoffGatewayStoreError.ioFailure(.write, errno)
                 }

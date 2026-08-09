@@ -64,8 +64,8 @@ public enum ProviderHandoffRecordValidator {
             }
             let proofDigests =
                 possessionProofs
-                .map(\.proofRecordDigestSHA256)
-                .sorted()
+                    .map(\.proofRecordDigestSHA256)
+                    .sorted()
             guard
                 proofDigests == manifest.destinationKeyPossessionProofDigestsSHA256,
                 Set(proofDigests).count == proofDigests.count
@@ -92,9 +92,9 @@ public enum ProviderHandoffRecordValidator {
                     proof.proof.tokenID == manifest.tokenID
                         && proof.proof.manifestID == manifest.manifestID
                         && proof.proof.destinationProviderFingerprint
-                            == manifest.destinationProviderFingerprint
+                        == manifest.destinationProviderFingerprint
                         && proof.proof.destinationStateRootUUID
-                            == manifest.destinationStateRootUUID
+                        == manifest.destinationStateRootUUID
                 })
             else {
                 throw ProviderHandoffRecordValidationError.invalidManifest
@@ -168,18 +168,18 @@ public enum ProviderHandoffRecordValidator {
             guard
                 record.schemaVersion == 1,
                 record.intent.trustRegistryRevision
-                    == trustRegistry.registry.registryRevision,
+                == trustRegistry.registry.registryRevision,
                 try ProviderHandoffProjections.commitIntentDigest(record.intent)
-                    == record.commitDigestSHA256,
+                == record.commitDigestSHA256,
                 try ProviderHandoffProjections.chainHeadDigest(
                     commitDigestSHA256: record.commitDigestSHA256,
                     orderedPreCommitHeaders: record.intent.preCommitRootExpectations
                         .map(\.expectedHeader)
                 ) == record.handoffChainHeadDigestSHA256,
                 record.rootPrepareRecordDigestsSHA256.count
-                    == record.intent.preCommitRootExpectations.count,
+                == record.intent.preCommitRootExpectations.count,
                 Set(record.rootPrepareRecordDigestsSHA256).count
-                    == record.rootPrepareRecordDigestsSHA256.count,
+                == record.rootPrepareRecordDigestsSHA256.count,
                 record.postCommitRoots == derivedRoots
             else {
                 throw ProviderHandoffRecordValidationError.invalidCommit
@@ -220,7 +220,7 @@ public enum ProviderHandoffRecordValidator {
                 !outcome.roots.isEmpty,
                 Set(outcome.roots.map(\.stateRootUUID)).count == outcome.roots.count,
                 try ProviderHandoffProjections.terminalOutcomeDigest(outcome)
-                    == outcome.outcomeDigestSHA256
+                == outcome.outcomeDigestSHA256
             else {
                 throw ProviderHandoffRecordValidationError.invalidOutcome
             }
@@ -257,7 +257,7 @@ public enum ProviderHandoffRecordValidator {
             !manifest.sources.isEmpty,
             manifest.parts.map(\.kind) == ProviderHandoffPartKindV1.allCases,
             Set(manifest.sources.map(\.stateRootUUID)).count
-                == manifest.sources.count,
+            == manifest.sources.count,
             !manifest.sources.contains(where: {
                 $0.stateRootUUID == manifest.destinationStateRootUUID
             })
@@ -276,9 +276,9 @@ public enum ProviderHandoffRecordValidator {
                 source.preCommitExpectation.role == .source,
                 source.preCommitExpectation.stateRootUUID == source.stateRootUUID,
                 source.preCommitExpectation.expectedHeader.authorityLineageUUID
-                    == source.authorityLineageUUID,
+                == source.authorityLineageUUID,
                 source.preCommitExpectation.expectedHeader.lineageDigestKeyVersion
-                    == source.lineageDigestKeyVersion
+                == source.lineageDigestKeyVersion
             else {
                 throw ProviderHandoffRecordValidationError.invalidManifest
             }
@@ -289,10 +289,10 @@ public enum ProviderHandoffRecordValidator {
         guard
             manifest.destinationPreCommitExpectation.role == .destination,
             manifest.destinationPreCommitExpectation.stateRootUUID
-                == manifest.destinationStateRootUUID,
+            == manifest.destinationStateRootUUID,
             manifest.destinationPreCommitExpectation.expectedHeader
-                .stagedAuthorityLineageUUID
-                == manifest.resultingAuthorityLineageUUID
+            .stagedAuthorityLineageUUID
+            == manifest.resultingAuthorityLineageUUID
         else {
             throw ProviderHandoffRecordValidationError.invalidManifest
         }
@@ -313,10 +313,10 @@ public enum ProviderHandoffRecordValidator {
             }
             let order =
                 envelope.sourceStateRootUUID.flatMap { sourceIndex[$0] }
-                ?? sourceOrder.count
+                    ?? sourceOrder.count
             guard
                 envelope.sourceStateRootUUID == nil
-                    || sourceIndex[envelope.sourceStateRootUUID ?? ""] != nil,
+                || sourceIndex[envelope.sourceStateRootUUID ?? ""] != nil,
                 lastEnvelopeOrder.map({ previous in
                     previous.0 < order
                         || (previous.0 == order
@@ -338,7 +338,7 @@ public enum ProviderHandoffRecordValidator {
                 part.schemaVersion == 1,
                 part.payload.schemaVersion == part.schemaVersion,
                 Set(part.sourceStateRootUUIDs).count
-                    == part.sourceStateRootUUIDs.count,
+                == part.sourceStateRootUUIDs.count,
                 part.sourceStateRootUUIDs.allSatisfy({ sourceIndex[$0] != nil }),
                 part.sourceStateRootUUIDs == orderedSourceRoots,
                 canonicalStringList(part.requiredCapabilities)
@@ -351,7 +351,7 @@ public enum ProviderHandoffRecordValidator {
             if part.payload.protection
                 == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1
                 || part.payload.protection
-                    == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
+                == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
             {
                 let sourceDigestsMatch = sourceDigests.allSatisfy { digest in
                     guard
@@ -362,11 +362,11 @@ public enum ProviderHandoffRecordValidator {
                     return digest.authorityLineageUUID
                         == source.authorityLineageUUID
                         && digest.lineageDigestKeyVersion
-                            == source.lineageDigestKeyVersion
+                        == source.lineageDigestKeyVersion
                 }
                 guard
                     sourceDigests.map(\.sourceStateRootUUID)
-                        == part.sourceStateRootUUIDs,
+                    == part.sourceStateRootUUIDs,
                     sourceDigestsMatch
                 else {
                     throw ProviderHandoffRecordValidationError.invalidManifest
@@ -468,7 +468,7 @@ public enum ProviderHandoffRecordValidator {
                 )
                 header.selectedProviderFingerprint =
                     intent.providerSelection
-                    .resultingRecord.selectedProviderFingerprint
+                        .resultingRecord.selectedProviderFingerprint
                 header.handoffState = .destinationReconciling
                 header.activeHandoffTokenID = intent.tokenID
             } else {
@@ -487,13 +487,13 @@ public enum ProviderHandoffRecordValidator {
             vector.rootStoreRevision = rootRevision
             vector.revisionVectorDigestSHA256 =
                 try ProviderHandoffProjections
-                .revisionVectorDigest(vector)
+                    .revisionVectorDigest(vector)
             return try ProviderHandoffPostCommitRootV1(
                 role: expectation.role,
                 stateRootUUID: expectation.stateRootUUID,
                 postCommitHeader: header,
                 postCommitHeaderDigestSHA256:
-                    ProviderHandoffProjections
+                ProviderHandoffProjections
                     .stateRootHeaderDigest(header),
                 postCommitRevisionVector: vector
             )
@@ -513,25 +513,25 @@ public enum ProviderHandoffRecordValidator {
             !providerOverflow,
             !socketOverflow,
             provider.resultingRecord.selectionRevision
-                == nextProviderRevision,
+            == nextProviderRevision,
             provider.resultingRecord.selectedProviderFingerprint != nil,
             provider.resultingRecord.selectedStateRootUUID != nil,
             provider.resultingRecord.providerRegistrationDigestSHA256 != nil,
             provider.resultingRecord.trustRegistryRevision
-                == intent.trustRegistryRevision,
+            == intent.trustRegistryRevision,
             socket.resultingRecord.discoveryRevision
-                == nextSocketRevision,
+            == nextSocketRevision,
             socket.resultingRecord.socketInstanceUUID
-                == socket.expectedRecord.socketInstanceUUID,
+            == socket.expectedRecord.socketInstanceUUID,
             socket.resultingRecord.ownerUID == socket.expectedRecord.ownerUID,
             socket.resultingRecord.minimumEngineAPIVersion
-                == socket.expectedRecord.minimumEngineAPIVersion,
+            == socket.expectedRecord.minimumEngineAPIVersion,
             socket.resultingRecord.maximumEngineAPIVersion
-                == socket.expectedRecord.maximumEngineAPIVersion,
+            == socket.expectedRecord.maximumEngineAPIVersion,
             socket.resultingRecord.selectedProviderFingerprint
-                == provider.resultingRecord.selectedProviderFingerprint,
+            == provider.resultingRecord.selectedProviderFingerprint,
             socket.resultingRecord.selectedStateRootUUID
-                == provider.resultingRecord.selectedStateRootUUID
+            == provider.resultingRecord.selectedStateRootUUID
         else {
             throw ProviderHandoffRecordValidationError.invalidCommit
         }
@@ -615,20 +615,20 @@ public enum ProviderHandoffRecordSigner {
     ) throws {
         record.commitDigestSHA256 =
             try ProviderHandoffProjections
-            .commitIntentDigest(record.intent)
+                .commitIntentDigest(record.intent)
         record.handoffChainHeadDigestSHA256 =
             try ProviderHandoffProjections
-            .chainHeadDigest(
-                commitDigestSHA256: record.commitDigestSHA256,
-                orderedPreCommitHeaders: record.intent.preCommitRootExpectations
-                    .map(\.expectedHeader)
-            )
+                .chainHeadDigest(
+                    commitDigestSHA256: record.commitDigestSHA256,
+                    orderedPreCommitHeaders: record.intent.preCommitRootExpectations
+                        .map(\.expectedHeader)
+                )
         record.postCommitRoots =
             try ProviderHandoffRecordValidator
-            .derivePostCommitRoots(
-                intent: record.intent,
-                chainHeadDigestSHA256: record.handoffChainHeadDigestSHA256
-            )
+                .derivePostCommitRoots(
+                    intent: record.intent,
+                    chainHeadDigestSHA256: record.handoffChainHeadDigestSHA256
+                )
         let digest = try ProviderHandoffProjections.commitRecordDigest(record)
         record.coordinatorSignature = try ProviderHandoffCrypto.sign(
             projectionDigestSHA256: digest,
@@ -650,7 +650,7 @@ public enum ProviderHandoffRecordSigner {
     ) throws {
         outcome.outcomeDigestSHA256 =
             try ProviderHandoffProjections
-            .terminalOutcomeDigest(outcome)
+                .terminalOutcomeDigest(outcome)
         outcome.coordinatorSignature = try ProviderHandoffCrypto.sign(
             projectionDigestSHA256: outcome.outcomeDigestSHA256,
             purpose: .coordinatorTerminalOutcomeSigning,

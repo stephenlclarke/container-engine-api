@@ -3,15 +3,14 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
+@testable import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
 
-@testable import ContainerEngineRuntimeSPI
-
 @Suite("Provider handoff gateway key store", .serialized)
 struct ProviderHandoffGatewayKeyStoreTests {
-    @Test("Gateway identity signs a complete provider trust registry")
-    func initialRegistry() throws {
+    @Test
+    func `Gateway identity signs a complete provider trust registry`() throws {
         let gatewayService =
             "io.github.stephenlclarke.container-engine.gateway-tests.\(UUID().uuidString)"
         let providerService =
@@ -34,17 +33,17 @@ struct ProviderHandoffGatewayKeyStoreTests {
                 count: 64
             )
         )
-        let gatewayContext = ProviderHandoffGatewayKeyEnrollmentContextV1(
+        let gatewayContext = try ProviderHandoffGatewayKeyEnrollmentContextV1(
             owningBundleIdentifier: codeIdentity.signingIdentifier,
             codeRequirementDigestSHA256:
-                codeIdentity.designatedRequirementDigestSHA256,
+            codeIdentity.designatedRequirementDigestSHA256,
             teamIdentifier: codeIdentity.teamIdentifier,
             gatewayRegistrationDigestSHA256:
-                try ProviderHandoffGatewayKeyEnrollmentContextV1
+            ProviderHandoffGatewayKeyEnrollmentContextV1
                 .registrationDigest(codeIdentity: codeIdentity),
             enrolledAtUnixSeconds: 100,
             notBeforeUnixSeconds: 100,
-            notAfterUnixSeconds: 10_000
+            notAfterUnixSeconds: 10000
         )
         let gatewayStore = ProviderHandoffGatewayKeyStore(
             service: gatewayService,
@@ -54,7 +53,7 @@ struct ProviderHandoffGatewayKeyStoreTests {
         var restartedContext = gatewayContext
         restartedContext.enrolledAtUnixSeconds = 101
         restartedContext.notBeforeUnixSeconds = 101
-        restartedContext.notAfterUnixSeconds = 10_001
+        restartedContext.notAfterUnixSeconds = 10001
         #expect(
             try gatewayStore.loadOrCreate(context: restartedContext).trustKeys
                 == gateway.trustKeys
@@ -69,7 +68,7 @@ struct ProviderHandoffGatewayKeyStoreTests {
             providerRegistrationDigestSHA256: String(repeating: "b", count: 64),
             enrolledAtUnixSeconds: 100,
             notBeforeUnixSeconds: 100,
-            notAfterUnixSeconds: 10_000
+            notAfterUnixSeconds: 10000
         )
         let provider = try ProviderHandoffProviderKeyStore(
             service: providerService,
@@ -89,7 +88,7 @@ struct ProviderHandoffGatewayKeyStoreTests {
         )
         #expect(
             try validated.key(
-                identifier: (try provider.trustKey(
+                identifier: (provider.trustKey(
                     for: .destinationPayloadEncryption
                 )).keyID,
                 purpose: .destinationPayloadEncryption,

@@ -30,10 +30,10 @@ public struct ContainerEngineProviderSourceHandoffResponder:
 {
     public typealias ExportPackage =
         @Sendable (ProviderHandoffPartExportRequestV1) async throws
-        -> ProviderHandoffPayloadPackageV1
+            -> ProviderHandoffPayloadPackageV1
     public typealias ExportPackageSource =
         @Sendable (ProviderHandoffPartExportRequestV1) async throws
-        -> ProviderHandoffPayloadPackageSourceV2
+            -> ProviderHandoffPayloadPackageSourceV2
     public typealias ExportPackageSourceToDirectory =
         @Sendable (
             ProviderHandoffPartExportRequestV1,
@@ -78,7 +78,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             return UInt64(value.rounded(.down))
         },
         downstream:
-            (any ContainerEngineProviderHandoffControlResponder)? = nil
+        (any ContainerEngineProviderHandoffControlResponder)? = nil
     ) throws {
         let orderedCapabilities = requiredCapabilities.sorted {
             $0.utf8.lexicographicallyPrecedes($1.utf8)
@@ -135,7 +135,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             return UInt64(value.rounded(.down))
         },
         downstream:
-            (any ContainerEngineProviderHandoffControlResponder)? = nil
+        (any ContainerEngineProviderHandoffControlResponder)? = nil
     ) throws {
         let orderedCapabilities = requiredCapabilities.sorted {
             $0.utf8.lexicographicallyPrecedes($1.utf8)
@@ -178,7 +178,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         trustRegistryStore: ProviderHandoffTrustRegistryStore,
         providerIdentity: ProviderHandoffProviderIdentityV1,
         exportPackageSourceToDirectory:
-            @escaping ExportPackageSourceToDirectory,
+        @escaping ExportPackageSourceToDirectory,
         nowUnixSeconds: @escaping @Sendable () throws -> UInt64 = {
             let value = Date().timeIntervalSince1970
             guard
@@ -191,7 +191,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             return UInt64(value.rounded(.down))
         },
         downstream:
-            (any ContainerEngineProviderHandoffControlResponder)? = nil
+        (any ContainerEngineProviderHandoffControlResponder)? = nil
     ) throws {
         let orderedCapabilities = requiredCapabilities.sorted {
             $0.utf8.lexicographicallyPrecedes($1.utf8)
@@ -229,14 +229,14 @@ public struct ContainerEngineProviderSourceHandoffResponder:
     ) async -> ContainerEngineProviderHandoffControlResultV1 {
         guard
             request.operation == .partExport
-                || request.operation == .sourceSignManifest
+            || request.operation == .sourceSignManifest
         else {
             guard let downstream else {
                 return Self.failure(
                     requestID: request.requestID,
                     disposition: .rejected,
                     message:
-                        "selected provider does not implement this handoff operation"
+                    "selected provider does not implement this handoff operation"
                 )
             }
             return await downstream.respond(
@@ -259,10 +259,10 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                 return try Self.completed(
                     requestID: request.requestID,
                     body:
-                        ProviderHandoffSourceControlCodec
+                    ProviderHandoffSourceControlCodec
                         .encodeContribution(contribution),
                     mediaType:
-                        ProviderHandoffSourceControlCodec.contributionMediaType
+                    ProviderHandoffSourceControlCodec.contributionMediaType
                 )
             case .sourceSignManifest:
                 try Self.requireMediaType(
@@ -276,15 +276,15 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                 return try Self.completed(
                     requestID: request.requestID,
                     body:
-                        ProviderHandoffSourceControlCodec
+                    ProviderHandoffSourceControlCodec
                         .encodeSignReceipt(receipt),
                     mediaType:
-                        ProviderHandoffSourceControlCodec.signReceiptMediaType
+                    ProviderHandoffSourceControlCodec.signReceiptMediaType
                 )
             case .destinationKeyPossession, .destinationKeySnapshot,
-                .objectAppend, .objectDeclare, .objectRead, .objectVerify,
-                .partActivate, .partCompensate, .partPromote, .partStage,
-                .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
+                 .objectAppend, .objectDeclare, .objectRead, .objectVerify,
+                 .partActivate, .partCompensate, .partPromote, .partStage,
+                 .rootApply, .rootPrepare, .rootRelease, .rootSnapshot:
                 preconditionFailure("non-source operation passed source switch")
             }
         } catch {
@@ -303,7 +303,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         let validated = try validateExport(request, context: context)
         let requestDigest =
             try ProviderHandoffSourceControlCodec
-            .exportRequestDigest(request)
+                .exportRequestDigest(request)
         do {
             let existing = try contributionStore.load(
                 tokenID: request.tokenID,
@@ -351,12 +351,12 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             sourceOrder: [request.sourceStateRootUUID],
             lineageKeys: [lineageKey],
             destinationProviderFingerprint:
-                request.destinationProviderFingerprint,
+            request.destinationProviderFingerprint,
             destinationStateRootUUID: request.destinationStateRootUUID,
             destinationKeyID:
-                request.destinationPayloadEncryptionKey.keyID,
+            request.destinationPayloadEncryptionKey.keyID,
             destinationPublicKey:
-                request.destinationPayloadEncryptionKey.rawPublicKey,
+            request.destinationPayloadEncryptionKey.rawPublicKey,
             nonce: Self.derivedBytes(
                 domain: "provider-part-payload-nonce-v1",
                 requestDigest: requestDigest,
@@ -382,12 +382,12 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             tokenID: request.tokenID,
             manifestID: request.manifestID,
             destinationProviderFingerprint:
-                request.destinationProviderFingerprint,
+            request.destinationProviderFingerprint,
             destinationStateRootUUID: request.destinationStateRootUUID,
             destinationKeyID:
-                request.destinationLineageKeyEncryptionKey.keyID,
+            request.destinationLineageKeyEncryptionKey.keyID,
             destinationPublicKey:
-                request.destinationLineageKeyEncryptionKey.rawPublicKey,
+            request.destinationLineageKeyEncryptionKey.rawPublicKey,
             nonce: Self.derivedBytes(
                 domain: "provider-lineage-nonce-v1",
                 requestDigest: requestDigest,
@@ -412,38 +412,38 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         )
         let contribution =
             try ProviderHandoffSourceControlCodec
-            .finalizeContribution(
-                ProviderHandoffSourceContributionV1(
-                    partKind: partKind,
-                    tokenID: request.tokenID,
-                    manifestID: request.manifestID,
-                    trustRegistryRevision: request.trustRegistryRevision,
-                    exportRequestDigestSHA256: requestDigest,
-                    sourceProviderFingerprint:
+                .finalizeContribution(
+                    ProviderHandoffSourceContributionV1(
+                        partKind: partKind,
+                        tokenID: request.tokenID,
+                        manifestID: request.manifestID,
+                        trustRegistryRevision: request.trustRegistryRevision,
+                        exportRequestDigestSHA256: requestDigest,
+                        sourceProviderFingerprint:
                         request.sourceProviderFingerprint,
-                    sourceStateRootUUID: request.sourceStateRootUUID,
-                    authorityLineageUUID: request.authorityLineageUUID,
-                    lineageDigestKeyVersion:
+                        sourceStateRootUUID: request.sourceStateRootUUID,
+                        authorityLineageUUID: request.authorityLineageUUID,
+                        lineageDigestKeyVersion:
                         request.lineageDigestKeyVersion,
-                    sourcePreCommitExpectation:
+                        sourcePreCommitExpectation:
                         request.sourcePreCommitExpectation,
-                    destinationProviderFingerprint:
+                        destinationProviderFingerprint:
                         request.destinationProviderFingerprint,
-                    destinationStateRootUUID:
+                        destinationStateRootUUID:
                         request.destinationStateRootUUID,
-                    destinationPreCommitExpectation:
+                        destinationPreCommitExpectation:
                         request.destinationPreCommitExpectation,
-                    destinationKeyPossessionProofDigestsSHA256:
+                        destinationKeyPossessionProofDigestsSHA256:
                         validated.proofDigests,
-                    resultingAuthorityLineageUUID:
+                        resultingAuthorityLineageUUID:
                         request.resultingAuthorityLineageUUID,
-                    resultingLineageDigestKeyVersion:
+                        resultingLineageDigestKeyVersion:
                         request.resultingLineageDigestKeyVersion,
-                    destinationSealedLineageKeyEnvelope: lineageEnvelope,
-                    part: part,
-                    sourceObjectRecord: objectRecord
+                        destinationSealedLineageKeyEnvelope: lineageEnvelope,
+                        part: part,
+                        sourceObjectRecord: objectRecord
+                    )
                 )
-            )
         return try contributionStore.store(contribution)
     }
 
@@ -461,23 +461,23 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         guard
             request.partKind == partKind,
             request.contributionDigestSHA256
-                == contribution.contributionDigestSHA256,
+            == contribution.contributionDigestSHA256,
             manifest.trustRegistryRevision
-                == contribution.trustRegistryRevision,
+            == contribution.trustRegistryRevision,
             manifest.destinationProviderFingerprint
-                == contribution.destinationProviderFingerprint,
+            == contribution.destinationProviderFingerprint,
             manifest.destinationStateRootUUID
-                == contribution.destinationStateRootUUID,
+            == contribution.destinationStateRootUUID,
             manifest.destinationPreCommitExpectation
-                == contribution.destinationPreCommitExpectation,
+            == contribution.destinationPreCommitExpectation,
             manifest.destinationKeyPossessionProofDigestsSHA256
-                == contribution.destinationKeyPossessionProofDigestsSHA256,
+            == contribution.destinationKeyPossessionProofDigestsSHA256,
             manifest.resultingAuthorityLineageUUID
-                == contribution.resultingAuthorityLineageUUID,
+            == contribution.resultingAuthorityLineageUUID,
             manifest.resultingLineageDigestKeyVersion
-                == contribution.resultingLineageDigestKeyVersion,
+            == contribution.resultingLineageDigestKeyVersion,
             manifest.parts.filter({ $0.kind == partKind })
-                == [contribution.part],
+            == [contribution.part],
             manifest.destinationSealedLineageKeyEnvelopes.filter({
                 $0.sourceStateRootUUID == contribution.sourceStateRootUUID
             }) == [contribution.destinationSealedLineageKeyEnvelope],
@@ -485,13 +485,13 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                 $0.stateRootUUID == contribution.sourceStateRootUUID
             }),
             source.providerFingerprint
-                == contribution.sourceProviderFingerprint,
+            == contribution.sourceProviderFingerprint,
             source.authorityLineageUUID
-                == contribution.authorityLineageUUID,
+            == contribution.authorityLineageUUID,
             source.lineageDigestKeyVersion
-                == contribution.lineageDigestKeyVersion,
+            == contribution.lineageDigestKeyVersion,
             source.preCommitExpectation
-                == contribution.sourcePreCommitExpectation
+            == contribution.sourcePreCommitExpectation
         else {
             throw ContainerEngineProviderSourceHandoffError.invalidManifest
         }
@@ -510,7 +510,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                 purpose: .sourceManifestSigning,
                 role: .sourceProvider,
                 providerFingerprint:
-                    providerIdentity.context.providerFingerprint,
+                providerIdentity.context.providerFingerprint,
                 stateRootUUID: providerIdentity.context.stateRootUUID,
                 atUnixSeconds: now
             ) == signingKey
@@ -532,7 +532,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
             manifestID: manifest.manifestID,
             sourceStateRootUUID: contribution.sourceStateRootUUID,
             contributionDigestSHA256:
-                contribution.contributionDigestSHA256,
+            contribution.contributionDigestSHA256,
             sourceProjectionDigestSHA256: digest,
             sourceSignature: signature
         )
@@ -546,9 +546,9 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         guard
             request.partKind == partKind,
             request.sourceProviderFingerprint
-                == providerIdentity.context.providerFingerprint,
+            == providerIdentity.context.providerFingerprint,
             request.sourceStateRootUUID
-                == providerIdentity.context.stateRootUUID
+            == providerIdentity.context.stateRootUUID
         else {
             throw ContainerEngineProviderSourceHandoffError.invalidRequest
         }
@@ -559,7 +559,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         )
         for purpose in [
             ProviderHandoffKeyPurposeV1.sourceManifestSigning,
-            .lineageKeyEnvelopeSigning,
+            .lineageKeyEnvelopeSigning
         ] {
             let key = try providerIdentity.trustKey(for: purpose)
             guard
@@ -568,7 +568,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                     purpose: purpose,
                     role: .sourceProvider,
                     providerFingerprint:
-                        providerIdentity.context.providerFingerprint,
+                    providerIdentity.context.providerFingerprint,
                     stateRootUUID: providerIdentity.context.stateRootUUID,
                     atUnixSeconds: now
                 ) == key
@@ -578,7 +578,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         }
         for key in [
             request.destinationPayloadEncryptionKey,
-            request.destinationLineageKeyEncryptionKey,
+            request.destinationLineageKeyEncryptionKey
         ] {
             guard
                 try trustRegistry.key(
@@ -586,7 +586,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                     purpose: key.purpose,
                     role: .destinationProvider,
                     providerFingerprint:
-                        request.destinationProviderFingerprint,
+                    request.destinationProviderFingerprint,
                     stateRootUUID: request.destinationStateRootUUID,
                     atUnixSeconds: now
                 ) == key
@@ -604,10 +604,10 @@ public struct ContainerEngineProviderSourceHandoffResponder:
         }
         guard
             Set(proofs.map(\.proof.destinationKeyID))
-                == Set([
-                    request.destinationPayloadEncryptionKey.keyID,
-                    request.destinationLineageKeyEncryptionKey.keyID,
-                ])
+            == Set([
+                request.destinationPayloadEncryptionKey.keyID,
+                request.destinationLineageKeyEncryptionKey.keyID
+            ])
         else {
             throw ContainerEngineProviderSourceHandoffError.invalidRequest
         }
@@ -622,12 +622,12 @@ public struct ContainerEngineProviderSourceHandoffResponder:
     ) throws {
         guard
             bootstrap.codeRequirementDigestSHA256
-                == context.authenticatedGatewayCodeIdentity
-                .designatedRequirementDigestSHA256,
+            == context.authenticatedGatewayCodeIdentity
+            .designatedRequirementDigestSHA256,
             context.providerFingerprint.digest
-                == providerIdentity.context.providerFingerprint,
+            == providerIdentity.context.providerFingerprint,
             context.providerFingerprint.stateRootUUID.uuidString.lowercased()
-                == providerIdentity.context.stateRootUUID
+            == providerIdentity.context.stateRootUUID
         else {
             throw ContainerEngineProviderSourceHandoffError
                 .invalidGatewayIdentity
@@ -696,7 +696,7 @@ public struct ContainerEngineProviderSourceHandoffResponder:
                 validatedRequestID: requestID,
                 disposition: disposition,
                 bodyMediaType:
-                    "application/vnd.io.github.stephenlclarke.container.handoff-error.v1+json",
+                "application/vnd.io.github.stephenlclarke.container.handoff-error.v1+json",
                 body: body,
                 validatedMessage: String(
                     decoding: message.utf8.prefix(1024),
@@ -712,16 +712,16 @@ public struct ContainerEngineProviderSourceHandoffResponder:
     ) -> ContainerEngineProviderHandoffDispositionV1 {
         switch error {
         case ProviderHandoffSourceContributionStoreError.conflict,
-            ProviderHandoffBundleObjectStoreError.conflictingChunk,
-            ProviderHandoffBundleObjectStoreError.identityMismatch,
-            ProviderHandoffBundleObjectStoreError.revisionMismatch:
+             ProviderHandoffBundleObjectStoreError.conflictingChunk,
+             ProviderHandoffBundleObjectStoreError.identityMismatch,
+             ProviderHandoffBundleObjectStoreError.revisionMismatch:
             .conflict
         case ProviderHandoffBundleObjectStoreError.ioFailure,
-            ProviderHandoffSourceContributionStoreError.ioFailure:
+             ProviderHandoffSourceContributionStoreError.ioFailure:
             .retryableFailure
         case ProviderHandoffBundleObjectStoreError.integrityMismatch,
-            ProviderHandoffBundleObjectStoreError.invalidMetadata,
-            ProviderHandoffSourceContributionStoreError.invalidMetadata:
+             ProviderHandoffBundleObjectStoreError.invalidMetadata,
+             ProviderHandoffSourceContributionStoreError.invalidMetadata:
             .recoveryRequired
         default:
             .rejected

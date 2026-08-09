@@ -31,13 +31,13 @@ let package = Package(
         .library(name: "ContainerEngineRuntimeSPI", targets: ["ContainerEngineRuntimeSPI"]),
         .library(name: "ContainerEngineService", targets: ["ContainerEngineService"]),
         .library(name: "ContainerUnixHTTPServer", targets: ["ContainerUnixHTTPServer"]),
-        .executable(name: "container-engine", targets: ["ContainerEngineServiceExecutable"]),
+        .executable(name: "container-engine", targets: ["ContainerEngineServiceExecutable"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.80.0"),
-        .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0"),
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0")
     ],
     targets: [
         .target(name: "ContainerEngineWire"),
@@ -49,7 +49,7 @@ let package = Package(
             name: "ContainerEngineLogging",
             dependencies: [
                 "ContainerEngineRouter",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .target(
@@ -60,7 +60,7 @@ let package = Package(
             name: "ContainerEngineProviderSession",
             dependencies: [
                 "ContainerEngineRuntimeSPI",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .target(
@@ -69,7 +69,7 @@ let package = Package(
                 "ContainerEngineProviderSession",
                 "ContainerEngineRouter",
                 "ContainerEngineRuntimeSPI",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .target(
@@ -82,7 +82,7 @@ let package = Package(
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
-                .product(name: "NIOWebSocket", package: "swift-nio"),
+                .product(name: "NIOWebSocket", package: "swift-nio")
             ]
         ),
         .target(
@@ -92,7 +92,7 @@ let package = Package(
                 "ContainerEngineProviderSession",
                 "ContainerEngineRuntimeSPI",
                 "ContainerUnixHTTPServer",
-                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Logging", package: "swift-log")
             ]
         ),
         .executableTarget(
@@ -109,7 +109,7 @@ let package = Package(
                 "ContainerEngineRuntimeSPI",
                 "ContainerEngineWire",
                 "ContainerUnixHTTPServer",
-                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Logging", package: "swift-log")
             ],
             path: "Tools/ContainerEngineStreamingPerformanceFixture"
         ),
@@ -121,7 +121,7 @@ let package = Package(
             name: "ContainerEngineRouterTests",
             dependencies: [
                 "ContainerEngineRouter",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .testTarget(
@@ -129,7 +129,7 @@ let package = Package(
             dependencies: [
                 "ContainerEngineLogging",
                 "ContainerEngineRouter",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .testTarget(
@@ -141,7 +141,7 @@ let package = Package(
             dependencies: [
                 "ContainerEngineProviderSession",
                 "ContainerEngineRuntimeSPI",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .testTarget(
@@ -153,7 +153,7 @@ let package = Package(
                 "ContainerEngineRuntimeSPI",
                 "ContainerEngineWire",
                 "ContainerUnixHTTPServer",
-                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Logging", package: "swift-log")
             ]
         ),
         .testTarget(
@@ -162,7 +162,7 @@ let package = Package(
                 "ContainerEngineProviderSession",
                 "ContainerEngineRuntimeSPI",
                 "ContainerEngineService",
-                "ContainerEngineWire",
+                "ContainerEngineWire"
             ]
         ),
         .testTarget(
@@ -170,9 +170,9 @@ let package = Package(
             dependencies: [
                 "ContainerEngineWire",
                 "ContainerUnixHTTPServer",
-                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Logging", package: "swift-log")
             ]
-        ),
+        )
     ],
     swiftLanguageModes: [.v6]
 )

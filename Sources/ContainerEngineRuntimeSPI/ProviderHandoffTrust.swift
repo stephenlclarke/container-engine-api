@@ -57,29 +57,29 @@ public enum ProviderHandoffTrustError:
 
     public var description: String {
         switch self {
-        case .duplicateKey(let identifier):
+        case let .duplicateKey(identifier):
             "provider handoff trust registry contains duplicate key \(identifier)"
-        case .expiredKey(let identifier):
+        case let .expiredKey(identifier):
             "provider handoff trust key \(identifier) is outside its validity interval"
-        case .invalidBinding(let identifier):
+        case let .invalidBinding(identifier):
             "provider handoff trust key \(identifier) has an invalid role or provider binding"
-        case .invalidEnrollmentProof(let identifier):
+        case let .invalidEnrollmentProof(identifier):
             "provider handoff trust key \(identifier) has an invalid enrollment proof"
-        case .invalidKey(let identifier):
+        case let .invalidKey(identifier):
             "provider handoff trust key \(identifier) is invalid"
         case .invalidOrder:
             "provider handoff trust keys are not in canonical key-ID order"
         case .invalidRegistry:
             "provider handoff trust registry is invalid"
-        case .invalidRegistryRevision(let expected, let actual):
+        case let .invalidRegistryRevision(expected, actual):
             "provider handoff trust registry revision mismatch: expected \(expected), found \(actual)"
-        case .invalidSignature(let identifier):
+        case let .invalidSignature(identifier):
             "provider handoff signature from key \(identifier) is invalid"
-        case .keyNotFound(let identifier):
+        case let .keyNotFound(identifier):
             "provider handoff trust key \(identifier) was not found"
-        case .overlappingKey(let first, let second):
+        case let .overlappingKey(first, second):
             "provider handoff trust keys \(first) and \(second) overlap without an explicit rotation chain"
-        case .revokedKey(let identifier):
+        case let .revokedKey(identifier):
             "provider handoff trust key \(identifier) is revoked"
         }
     }
@@ -308,7 +308,7 @@ public enum ProviderHandoffTrustRegistryValidator {
                     key.keyID == bootstrap.keyID,
                     key.rawPublicKey == bootstrap.rawPublicKey,
                     key.provenance.codeRequirementDigestSHA256
-                        == bootstrap.codeRequirementDigestSHA256,
+                    == bootstrap.codeRequirementDigestSHA256,
                     key.provenance.enrollmentProofSignature == nil
                 else {
                     throw ProviderHandoffTrustError.invalidKey(key.keyID)
@@ -354,38 +354,31 @@ public enum ProviderHandoffTrustRegistryValidator {
                 throw ProviderHandoffTrustError.invalidBinding(key.keyID)
             }
         }
-        let valid: Bool
-        switch key.purpose {
+        let valid: Bool = switch key.purpose {
         case .trustRegistrySigning:
-            valid =
-                key.algorithm == .ed25519V1
+            key.algorithm == .ed25519V1
                 && key.role == .gatewayCoordinator
                 && coordinatorBound
                 && key.keyID == bootstrap?.keyID
         case .coordinatorManifestSigning, .coordinatorCommitSigning,
-            .coordinatorTerminalOutcomeSigning:
-            valid =
-                key.algorithm == .ed25519V1
+             .coordinatorTerminalOutcomeSigning:
+            key.algorithm == .ed25519V1
                 && key.role == .gatewayCoordinator
                 && coordinatorBound
         case .sourceManifestSigning:
-            valid =
-                key.algorithm == .ed25519V1
+            key.algorithm == .ed25519V1
                 && key.role == .sourceProvider
                 && providerBound
         case .lineageKeyEnvelopeSigning:
-            valid =
-                key.algorithm == .ed25519V1
+            key.algorithm == .ed25519V1
                 && ((key.role == .sourceProvider && providerBound)
                     || (key.role == .gatewayCoordinator && coordinatorBound))
         case .destinationPossessionSigning:
-            valid =
-                key.algorithm == .ed25519V1
+            key.algorithm == .ed25519V1
                 && key.role == .destinationProvider
                 && providerBound
         case .destinationPayloadEncryption, .destinationLineageKeyEncryption:
-            valid =
-                key.algorithm == .x25519V1
+            key.algorithm == .x25519V1
                 && key.role == .destinationProvider
                 && providerBound
         }
@@ -408,13 +401,13 @@ public enum ProviderHandoffTrustRegistryValidator {
                     first.providerFingerprint == second.providerFingerprint,
                     first.stateRootUUID == second.stateRootUUID,
                     max(first.notBeforeUnixSeconds, second.notBeforeUnixSeconds)
-                        <= min(first.notAfterUnixSeconds, second.notAfterUnixSeconds)
+                    <= min(first.notAfterUnixSeconds, second.notAfterUnixSeconds)
                 else {
                     continue
                 }
                 let chained =
                     first.rotationPredecessorKeyID == second.keyID
-                    || second.rotationPredecessorKeyID == first.keyID
+                        || second.rotationPredecessorKeyID == first.keyID
                 guard chained else {
                     throw ProviderHandoffTrustError.overlappingKey(
                         first.keyID,

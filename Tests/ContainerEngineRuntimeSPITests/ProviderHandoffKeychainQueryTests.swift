@@ -3,15 +3,14 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
+@testable import ContainerEngineRuntimeSPI
 import LocalAuthentication
 import Security
 import Testing
 
-@testable import ContainerEngineRuntimeSPI
-
 struct ProviderHandoffKeychainQueryTests {
-    @Test("Provider handoff Keychain access disables all authentication UI")
-    func disablesAuthenticationUI() throws {
+    @Test
+    func `Provider handoff Keychain access disables all authentication UI`() throws {
         var query: [CFString: Any] = [:]
         #expect(
             ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)

@@ -141,7 +141,7 @@ public enum ProviderHandoffBundleObjectControlCodec {
             value.schemaVersion == 1,
             value.transportByteLength > 0,
             value.bundleObjectID
-                == "sha256:\(value.transportDigestSHA256)",
+            == "sha256:\(value.transportDigestSHA256)",
             (try? ProviderHandoffDigest.parseSHA256(
                 value.transportDigestSHA256
             )) != nil
@@ -176,7 +176,7 @@ public enum ProviderHandoffBundleObjectControlCodec {
         let encoded = try encode(value)
         guard
             encoded.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffBundleObjectControlCodecError.boundsExceeded
         }
@@ -287,7 +287,7 @@ public enum ProviderHandoffBundleObjectControlCodec {
             )) != nil
     }
 
-    private static func encode<T: Encodable>(_ value: T) throws -> Data {
+    private static func encode(_ value: some Encodable) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         do {
@@ -301,7 +301,7 @@ public enum ProviderHandoffBundleObjectControlCodec {
         guard
             !data.isEmpty,
             data.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffBundleObjectControlCodecError.boundsExceeded
         }

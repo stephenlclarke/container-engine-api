@@ -32,13 +32,13 @@ public enum ProviderHandoffTrustRegistryStoreError:
 
     public var description: String {
         switch self {
-        case .conflictingArchive(let revision):
+        case let .conflictingArchive(revision):
             "provider handoff trust registry revision \(revision) conflicts with its immutable Keychain archive"
         case .invalidEncoding:
             "provider handoff trust registry Keychain value is invalid"
-        case .invalidInitialRevision(let revision):
+        case let .invalidInitialRevision(revision):
             "provider handoff initial trust registry revision must be 1, found \(revision)"
-        case .keychain(let status):
+        case let .keychain(status):
             "provider handoff trust registry Keychain operation failed with status \(status)"
         case .notFound:
             "provider handoff trust registry does not exist"
@@ -199,7 +199,7 @@ public struct ProviderHandoffTrustRegistryStore: Sendable {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: account,
-            kSecAttrSynchronizable: kCFBooleanFalse as Any,
+            kSecAttrSynchronizable: kCFBooleanFalse as Any
         ]
         if let accessGroup {
             query[kSecAttrAccessGroup] = accessGroup
@@ -221,8 +221,9 @@ public struct ProviderHandoffTrustRegistryStore: Sendable {
                     kSecClass: kSecClassGenericPassword,
                     kSecAttrService: service,
                     kSecAttrAccount: value,
-                    kSecAttrSynchronizable: kCFBooleanFalse as Any,
-                ] as CFDictionary)
+                    kSecAttrSynchronizable: kCFBooleanFalse as Any
+                ] as CFDictionary
+            )
             guard
                 status == errSecSuccess || status == errSecItemNotFound
             else {

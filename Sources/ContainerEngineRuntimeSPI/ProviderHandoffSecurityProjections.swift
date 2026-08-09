@@ -26,7 +26,7 @@ extension ProviderHandoffProjections {
                 .init("issuedAtUnixSeconds", .unsigned(registry.issuedAtUnixSeconds)),
                 .init("keys", .array(registry.keys.map(trustKey))),
                 .init("registryRevision", .unsigned(registry.registryRevision)),
-                .init("schemaVersion", .unsigned(UInt64(registry.schemaVersion))),
+                .init("schemaVersion", .unsigned(UInt64(registry.schemaVersion)))
             ])
         )
     }
@@ -44,7 +44,7 @@ extension ProviderHandoffProjections {
                 .init("purpose", .textString(key.purpose.rawValue)),
                 .init("rawPublicKey", .byteString(key.rawPublicKey)),
                 .init("role", .textString(key.role.rawValue)),
-                .init("stateRootUUID", .optional(key.stateRootUUID)),
+                .init("stateRootUUID", .optional(key.stateRootUUID))
             ])
         )
     }
@@ -119,13 +119,13 @@ extension ProviderHandoffProjections {
             if part.payload.protection
                 == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1
                 || part.payload.protection
-                    == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
+                == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2
             {
                 guard
                     let digest = part.payload.canonicalContentDigest
-                        .orderedSourceDigests.first(where: {
-                            $0.sourceStateRootUUID == source.stateRootUUID
-                        })
+                    .orderedSourceDigests.first(where: {
+                        $0.sourceStateRootUUID == source.stateRootUUID
+                    })
                 else {
                     throw ProviderHandoffProjectionError.invalidRecord
                 }
@@ -135,7 +135,7 @@ extension ProviderHandoffProjections {
             }
             return try ProviderHandoffCanonicalValue.map([
                 .init("part", handoffPart(part)),
-                .init("sourceDigest", sourceDigest),
+                .init("sourceDigest", sourceDigest)
             ])
         }
         return try ProviderHandoffDigest.domain(
@@ -153,7 +153,7 @@ extension ProviderHandoffProjections {
                 .init("schemaVersion", .unsigned(UInt64(manifest.schemaVersion))),
                 .init("source", handoffSource(source, includeSignature: false)),
                 .init("tokenID", .textString(manifest.tokenID)),
-                .init("trustRegistryRevision", .unsigned(manifest.trustRegistryRevision)),
+                .init("trustRegistryRevision", .unsigned(manifest.trustRegistryRevision))
             ])
         )
     }
@@ -169,7 +169,7 @@ extension ProviderHandoffProjections {
                 .init("intent", commitIntent(record.intent)),
                 .init("postCommitRoots", .array(record.postCommitRoots.map(postCommitRoot))),
                 .init("rootPrepareRecordDigestsSHA256", .array(record.rootPrepareRecordDigestsSHA256.map(digestValue))),
-                .init("schemaVersion", .unsigned(UInt64(record.schemaVersion))),
+                .init("schemaVersion", .unsigned(UInt64(record.schemaVersion)))
             ])
         )
     }
@@ -187,7 +187,7 @@ extension ProviderHandoffProjections {
             .init("signerKeyID", .textString(value.signerKeyID)),
             .init("signerRole", .textString(value.signerRole.rawValue)),
             .init("stateRootUUID", .optional(value.stateRootUUID)),
-            .init("trustRegistryRevision", .unsigned(value.trustRegistryRevision)),
+            .init("trustRegistryRevision", .unsigned(value.trustRegistryRevision))
         ])
     }
 
@@ -207,7 +207,7 @@ extension ProviderHandoffProjections {
             .init("ephemeralPublicKey", .byteString(value.ephemeralPublicKey)),
             .init("keyVersion", .unsigned(value.keyVersion)),
             .init("nonce", .byteString(value.nonce)),
-            .init("sourceStateRootUUID", .optional(value.sourceStateRootUUID)),
+            .init("sourceStateRootUUID", .optional(value.sourceStateRootUUID))
         ]
         if includeSignature {
             try entries.append(.init("envelopeSignature", signature(value.envelopeSignature)))
@@ -222,7 +222,7 @@ extension ProviderHandoffProjections {
             .init("algorithm", .textString(value.algorithm.rawValue)),
             .init("digest", digestValue(value.digest)),
             .init("orderedSourceDigests", .array(value.orderedSourceDigests.map(contentSourceDigest))),
-            .init("scope", .textString(value.scope.rawValue)),
+            .init("scope", .textString(value.scope.rawValue))
         ])
     }
 
@@ -234,7 +234,7 @@ extension ProviderHandoffProjections {
             .init("lineageDigestKeyVersion", .unsigned(value.lineageDigestKeyVersion)),
             .init("orderedEntryIDs", .array(value.orderedEntryIDs.map(ProviderHandoffCanonicalValue.textString))),
             .init("sourceDigestHMACSHA256", digestValue(value.sourceDigestHMACSHA256)),
-            .init("sourceStateRootUUID", .textString(value.sourceStateRootUUID)),
+            .init("sourceStateRootUUID", .textString(value.sourceStateRootUUID))
         ])
     }
 
@@ -254,7 +254,7 @@ extension ProviderHandoffProjections {
             .init("revokedAtUnixSeconds", .optional(key.revokedAtUnixSeconds)),
             .init("role", .textString(key.role.rawValue)),
             .init("rotationPredecessorKeyID", .optional(key.rotationPredecessorKeyID)),
-            .init("stateRootUUID", .optional(key.stateRootUUID)),
+            .init("stateRootUUID", .optional(key.stateRootUUID))
         ])
     }
 
@@ -268,7 +268,7 @@ extension ProviderHandoffProjections {
             .init("enrollmentID", .textString(value.enrollmentID)),
             .init("owningBundleIdentifier", .textString(value.owningBundleIdentifier)),
             .init("providerRegistrationDigestSHA256", digestValue(value.providerRegistrationDigestSHA256)),
-            .init("teamIdentifier", .optional(value.teamIdentifier)),
+            .init("teamIdentifier", .optional(value.teamIdentifier))
         ]
         if includeProof {
             entries.append(.init("enrollmentProofSignature", value.enrollmentProofSignature.map(ProviderHandoffCanonicalValue.byteString) ?? .null))
@@ -293,7 +293,7 @@ extension ProviderHandoffProjections {
             .init("manifestID", .textString(value.manifestID)),
             .init("proofID", .textString(value.proofID)),
             .init("schemaVersion", .unsigned(UInt64(value.schemaVersion))),
-            .init("tokenID", .textString(value.tokenID)),
+            .init("tokenID", .textString(value.tokenID))
         ]
         if includeResponse {
             try entries.append(.init("responseDigestSHA256", digestValue(value.responseDigestSHA256)))
@@ -322,7 +322,7 @@ extension ProviderHandoffProjections {
             .init("schemaVersion", .unsigned(UInt64(manifest.schemaVersion))),
             .init("sources", .array(manifest.sources.map { try handoffSource($0, includeSignature: true) })),
             .init("tokenID", .textString(manifest.tokenID)),
-            .init("trustRegistryRevision", .unsigned(manifest.trustRegistryRevision)),
+            .init("trustRegistryRevision", .unsigned(manifest.trustRegistryRevision))
         ])
     }
 
@@ -335,7 +335,7 @@ extension ProviderHandoffProjections {
             .init("lineageDigestKeyVersion", .unsigned(value.lineageDigestKeyVersion)),
             .init("preCommitExpectation", headerExpectation(value.preCommitExpectation)),
             .init("providerFingerprint", .textString(value.providerFingerprint)),
-            .init("stateRootUUID", .textString(value.stateRootUUID)),
+            .init("stateRootUUID", .textString(value.stateRootUUID))
         ]
         if includeSignature {
             try entries.append(.init("sourceSignature", signature(value.sourceSignature)))
@@ -352,7 +352,7 @@ extension ProviderHandoffProjections {
             .init("payload", payloadDescriptor(value.payload)),
             .init("requiredCapabilities", .array(value.requiredCapabilities.map(ProviderHandoffCanonicalValue.textString))),
             .init("schemaVersion", .unsigned(UInt64(value.schemaVersion))),
-            .init("sourceStateRootUUIDs", .array(value.sourceStateRootUUIDs.map(ProviderHandoffCanonicalValue.textString))),
+            .init("sourceStateRootUUIDs", .array(value.sourceStateRootUUIDs.map(ProviderHandoffCanonicalValue.textString)))
         ])
     }
 
@@ -363,9 +363,9 @@ extension ProviderHandoffProjections {
             value.stateRootUUID == value.postCommitHeader.stateRootUUID,
             value.stateRootUUID == value.postCommitRevisionVector.stateRootUUID,
             try stateRootHeaderDigest(value.postCommitHeader)
-                == value.postCommitHeaderDigestSHA256,
+            == value.postCommitHeaderDigestSHA256,
             try revisionVectorDigest(value.postCommitRevisionVector)
-                == value.postCommitRevisionVector.revisionVectorDigestSHA256
+            == value.postCommitRevisionVector.revisionVectorDigestSHA256
         else {
             throw ProviderHandoffProjectionError.invalidRecord
         }
@@ -374,7 +374,7 @@ extension ProviderHandoffProjections {
             .init("postCommitHeaderDigestSHA256", digestValue(value.postCommitHeaderDigestSHA256)),
             .init("postCommitRevisionVector", revisionVectorWithDigestForSecurity(value.postCommitRevisionVector)),
             .init("role", .textString(value.role.rawValue)),
-            .init("stateRootUUID", .textString(value.stateRootUUID)),
+            .init("stateRootUUID", .textString(value.stateRootUUID))
         ])
     }
 

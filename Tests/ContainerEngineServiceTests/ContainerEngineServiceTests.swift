@@ -4,17 +4,16 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerEngineProviderSession
+@testable import ContainerEngineRuntimeSPI
+@testable import ContainerEngineService
 import ContainerEngineWire
 import Foundation
 import Testing
 
-@testable import ContainerEngineRuntimeSPI
-@testable import ContainerEngineService
-
 struct ContainerEngineServiceTests {
-    @Test func `production trust stores are scoped to selected provider root`() {
-        let firstRoot = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
-        let secondRoot = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+    @Test func `production trust stores are scoped to selected provider root`() throws {
+        let firstRoot = try #require(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        let secondRoot = try #require(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
         let first = ContainerEngineServiceTrustConfiguration.production.scoped(
             to: firstRoot
         )
@@ -47,7 +46,7 @@ struct ContainerEngineServiceTests {
             arguments: [
                 "--provider-socket", "/tmp/provider.sock",
                 "--state-directory", "/tmp/state",
-                "--socket", "/tmp/docker.sock",
+                "--socket", "/tmp/docker.sock"
             ]
         )
         let expected = try ContainerEngineServiceOptions(
@@ -68,7 +67,7 @@ struct ContainerEngineServiceTests {
                     "--socket", "/tmp/a.sock",
                     "--socket", "/tmp/b.sock",
                     "--provider-socket", "/tmp/provider.sock",
-                    "--state-directory", "/tmp/state",
+                    "--state-directory", "/tmp/state"
                 ]
             )
         }
@@ -174,7 +173,7 @@ struct ContainerEngineServiceTests {
                 timeout: .milliseconds(1)
             )
         }
-        guard case .timedOut(let socketPath, _) = error else {
+        guard case let .timedOut(socketPath, _) = error else {
             Issue.record("expected a timed-out health probe")
             return
         }
@@ -229,7 +228,7 @@ struct ContainerEngineServiceTests {
             try? ProviderHandoffTrustRegistryStore.removeForTesting(
                 service: trustService,
                 account: "registry",
-                archivedRevisions: 1...1
+                archivedRevisions: 1 ... 1
             )
         }
 
@@ -246,9 +245,9 @@ struct ContainerEngineServiceTests {
                 ),
                 ContainerEngineProviderCapability(
                     identifier:
-                        "engine.handoff.provider-key-enrollment.v1",
+                    "engine.handoff.provider-key-enrollment.v1",
                     status: .native
-                ),
+                )
             ]
         )
         let stateRootUUID = UUID()
@@ -266,23 +265,23 @@ struct ContainerEngineServiceTests {
                 stateRootUUID: stateRootUUID.uuidString.lowercased(),
                 owningBundleIdentifier: codeIdentity.signingIdentifier,
                 codeRequirementDigestSHA256:
-                    codeIdentity.designatedRequirementDigestSHA256,
+                codeIdentity.designatedRequirementDigestSHA256,
                 teamIdentifier: codeIdentity.teamIdentifier,
                 providerRegistrationDigestSHA256: String(
                     fingerprint.digest.dropFirst("sha256:".count)
                 ),
                 enrolledAtUnixSeconds: 100,
                 notBeforeUnixSeconds: 100,
-                notAfterUnixSeconds: 10_000
+                notAfterUnixSeconds: 10000
             )
         )
         let providerSocket = root.appendingPathComponent("provider.sock").path
         let provider = try ContainerEngineProviderSessionServer(
             responder: HealthProviderResponder(),
             handoffControlResponder:
-                ContainerEngineProviderIdentityControlResponder(
-                    identity: providerIdentity
-                ),
+            ContainerEngineProviderIdentityControlResponder(
+                identity: providerIdentity
+            ),
             socketPath: providerSocket,
             declaration: declaration,
             stateRootUUID: stateRootUUID
@@ -314,16 +313,16 @@ struct ContainerEngineServiceTests {
                 #expect(
                     state.providerSelection.trustRegistryRevision == 1
                 )
-                let gatewayContext =
+                let try gatewayContext =
                     ProviderHandoffGatewayKeyEnrollmentContextV1(
                         owningBundleIdentifier:
-                            codeIdentity.signingIdentifier,
+                        codeIdentity.signingIdentifier,
                         codeRequirementDigestSHA256:
-                            codeIdentity
+                        codeIdentity
                             .designatedRequirementDigestSHA256,
                         teamIdentifier: codeIdentity.teamIdentifier,
                         gatewayRegistrationDigestSHA256:
-                            try ProviderHandoffGatewayKeyEnrollmentContextV1
+                        ProviderHandoffGatewayKeyEnrollmentContextV1
                             .registrationDigest(
                                 codeIdentity: codeIdentity
                             ),
@@ -340,8 +339,8 @@ struct ContainerEngineServiceTests {
                 #expect(registry.registry.registryRevision == 1)
                 #expect(registry.registry.keys.count == 10)
                 #expect(
-                    registry.registry.keys.contains(
-                        try providerIdentity.trustKey(
+                    try registry.registry.keys.contains(
+                        providerIdentity.trustKey(
                             for: .destinationPayloadEncryption
                         )
                     )

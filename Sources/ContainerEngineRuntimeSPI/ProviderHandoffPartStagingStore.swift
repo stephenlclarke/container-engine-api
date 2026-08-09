@@ -56,13 +56,13 @@ public enum ProviderHandoffPartStagingStoreError:
             "provider handoff part staging store encoding is invalid"
         case .invalidMetadata:
             "provider handoff part staging store metadata is unsafe"
-        case .ioFailure(let operation, let code):
+        case let .ioFailure(operation, code):
             "provider handoff part staging store \(operation.rawValue) failed with errno \(code)"
         case .notFound:
             "provider handoff part staging record does not exist"
         case .revisionOverflow:
             "provider handoff part staging store revision cannot advance beyond UInt64.max"
-        case .revisionMismatch(let expected, let actual):
+        case let .revisionMismatch(expected, actual):
             "provider handoff part staging revision mismatch: expected \(expected), found \(actual)"
         case .stateTooLarge:
             "provider handoff part staging store exceeds its 32 MiB bound"
@@ -187,7 +187,9 @@ public struct ProviderHandoffPartStagingStore: Sendable {
                 matches: before
             )
             try ProviderHandoffPartStagingStateMachine.validate(after)
-            if after == before { return after }
+            if after == before {
+                return after
+            }
             guard
                 after.stagingRevision == expectedStagingRevision + 1
             else {
@@ -268,7 +270,7 @@ public struct ProviderHandoffPartStagingStore: Sendable {
             envelope.schemaVersion == 1,
             envelope.payload.count <= Self.maximumPayloadBytes,
             ProviderHandoffDigest.sha256(envelope.payload)
-                == envelope.payloadDigestSHA256
+            == envelope.payloadDigestSHA256
         else {
             throw ProviderHandoffPartStagingStoreError.integrityMismatch
         }
@@ -314,7 +316,9 @@ public struct ProviderHandoffPartStagingStore: Sendable {
         var published = false
         defer {
             Darwin.close(descriptor)
-            if !published { try? FileManager.default.removeItem(at: temporaryURL) }
+            if !published {
+                try? FileManager.default.removeItem(at: temporaryURL)
+            }
         }
         _ = try validateFile(descriptor, maximumSize: 0)
         try writeAll(encoded, descriptor: descriptor)
@@ -405,7 +409,9 @@ public struct ProviderHandoffPartStagingStore: Sendable {
                     buffer.baseAddress?.advanced(by: offset),
                     count - offset
                 )
-                if result < 0, errno == EINTR { continue }
+                if result < 0, errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw ProviderHandoffPartStagingStoreError.ioFailure(
                         .read,
@@ -427,7 +433,9 @@ public struct ProviderHandoffPartStagingStore: Sendable {
                     buffer.baseAddress?.advanced(by: offset),
                     data.count - offset
                 )
-                if result < 0, errno == EINTR { continue }
+                if result < 0, errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw ProviderHandoffPartStagingStoreError.ioFailure(
                         .write,

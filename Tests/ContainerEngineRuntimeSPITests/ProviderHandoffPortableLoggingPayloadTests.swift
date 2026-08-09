@@ -173,7 +173,7 @@ struct ProviderHandoffPortableLoggingPayloadTests {
                     containerID: "container-1",
                     providerID: "devcontainer.apple-container",
                     providerVersion: "1",
-                    records: (0...formerMaximum).map { index in
+                    records: (0 ... formerMaximum).map { index in
                         ProviderHandoffPortableLogRecordV1(
                             secondsSinceUnixEpoch: Int64(index),
                             nanoseconds: 0,
@@ -237,7 +237,7 @@ struct ProviderHandoffPortableLoggingPayloadTests {
 
     @Test
     func `streamed portable records produce the exact canonical package`() async throws {
-        let records = (0..<8).map { index in
+        let records = (0 ..< 8).map { index in
             ProviderHandoffPortableLogRecordV1(
                 secondsSinceUnixEpoch: Int64(index),
                 nanoseconds: UInt32(index),
@@ -282,7 +282,9 @@ struct ProviderHandoffPortableLoggingPayloadTests {
             )
         #expect(
             source.entries.filter {
-                if case .file = $0.canonicalRecord { return true }
+                if case .file = $0.canonicalRecord {
+                    return true
+                }
                 return false
             }.count > 1
         )

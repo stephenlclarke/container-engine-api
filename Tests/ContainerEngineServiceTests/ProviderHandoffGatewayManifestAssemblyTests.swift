@@ -4,13 +4,12 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerEngineProviderSession
+@testable import ContainerEngineRuntimeSPI
 import ContainerEngineService
 import ContainerEngineWire
 import Foundation
 import Security
 import Testing
-
-@testable import ContainerEngineRuntimeSPI
 
 @Suite("Provider handoff gateway manifest assembly", .serialized)
 struct ProviderHandoffGatewayManifestAssemblyTests {
@@ -40,7 +39,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             tokenRevision: 1,
             orderedSourceStateRootUUIDs: [Self.sourceRoot],
             destinationProviderFingerprint:
-                fixture.destinationEndpoint.fingerprint.digest,
+            fixture.destinationEndpoint.fingerprint.digest,
             destinationStateRootUUID: Self.destinationRoot,
             trustRegistryRevision: 1,
             resultingAuthorityLineageUUID: Self.resultingLineage,
@@ -66,9 +65,9 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                     root: fixture.root.appendingPathComponent("proofs")
                 ),
                 transactionSecretStore:
-                    ProviderHandoffGatewayTransactionSecretStore(
-                        service: fixture.secretService
-                    ),
+                ProviderHandoffGatewayTransactionSecretStore(
+                    service: fixture.secretService
+                ),
                 nowUnixSeconds: { Self.useTime }
             ),
             transport: transport
@@ -80,10 +79,10 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
         )
         let possession =
             try await coordinator
-            .proveDestinationKeyPossession(
-                tokenID: token.tokenID,
-                destination: fixture.destinationEndpoint
-            )
+                .proveDestinationKeyPossession(
+                    tokenID: token.tokenID,
+                    destination: fixture.destinationEndpoint
+                )
         let proofDigests = try possession.proofs.map {
             try ProviderHandoffProjections
                 .destinationPossessionProofRecordDigest($0)
@@ -140,7 +139,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             SecItemDelete(
                 [
                     kSecClass: kSecClassGenericPassword,
-                    kSecAttrService: lineageService,
+                    kSecAttrService: lineageService
                 ] as CFDictionary
             )
         }
@@ -152,7 +151,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             tokenRevision: 1,
             orderedSourceStateRootUUIDs: [Self.sourceRoot],
             destinationProviderFingerprint:
-                fixture.destinationEndpoint.fingerprint.digest,
+            fixture.destinationEndpoint.fingerprint.digest,
             destinationStateRootUUID: Self.destinationRoot,
             trustRegistryRevision: 1,
             resultingAuthorityLineageUUID: Self.resultingLineage,
@@ -178,9 +177,9 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                     root: fixture.root.appendingPathComponent("source-proof")
                 ),
                 transactionSecretStore:
-                    ProviderHandoffGatewayTransactionSecretStore(
-                        service: fixture.secretService
-                    ),
+                ProviderHandoffGatewayTransactionSecretStore(
+                    service: fixture.secretService
+                ),
                 nowUnixSeconds: { Self.useTime }
             ),
             transport: transport
@@ -192,10 +191,10 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
         )
         let possession =
             try await coordinator
-            .proveDestinationKeyPossession(
-                tokenID: token.tokenID,
-                destination: fixture.destinationEndpoint
-            )
+                .proveDestinationKeyPossession(
+                    tokenID: token.tokenID,
+                    destination: fixture.destinationEndpoint
+                )
 
         let objectStore = ProviderHandoffBundleObjectStore(
             root: fixture.root.appendingPathComponent("source-objects")
@@ -241,19 +240,19 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             manifestID: Self.manifestID,
             trustRegistryRevision: 1,
             sourceProviderFingerprint:
-                fixture.sourceEndpoint.fingerprint.digest,
+            fixture.sourceEndpoint.fingerprint.digest,
             sourceStateRootUUID: Self.sourceRoot,
             authorityLineageUUID: Self.sourceLineage,
             lineageDigestKeyVersion: 1,
             sourcePreCommitExpectation: expectations[0],
             destinationProviderFingerprint:
-                fixture.destinationEndpoint.fingerprint.digest,
+            fixture.destinationEndpoint.fingerprint.digest,
             destinationStateRootUUID: Self.destinationRoot,
             destinationPreCommitExpectation: expectations[1],
             destinationPayloadEncryptionKey:
-                possession.payloadEncryptionKey,
+            possession.payloadEncryptionKey,
             destinationLineageKeyEncryptionKey:
-                possession.lineageEncryptionKey,
+            possession.lineageEncryptionKey,
             destinationKeyPossessionProofs: possession.proofs,
             resultingAuthorityLineageUUID: Self.resultingLineage,
             resultingLineageDigestKeyVersion: 2,
@@ -261,12 +260,12 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
         )
         let body =
             try ProviderHandoffSourceControlCodec
-            .encodeExportRequest(export)
+                .encodeExportRequest(export)
         let control = try ContainerEngineProviderHandoffControlRequestV1(
             requestID: "source-export-logging",
             operation: .partExport,
             bodyMediaType:
-                ProviderHandoffSourceControlCodec.exportRequestMediaType,
+            ProviderHandoffSourceControlCodec.exportRequestMediaType,
             body: body
         )
         let context = ContainerEngineProviderHandoffControlContextV1(
@@ -275,7 +274,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 signingIdentifier: "gateway-test",
                 teamIdentifier: nil,
                 designatedRequirementDigestSHA256:
-                    fixture.gatewayIdentity.bootstrap
+                fixture.gatewayIdentity.bootstrap
                     .codeRequirementDigestSHA256
             )
         )
@@ -288,7 +287,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
         #expect(first.response.disposition == .completed)
         let contribution =
             try ProviderHandoffSourceControlCodec
-            .decodeContribution(first.body)
+                .decodeContribution(first.body)
         #expect(contribution.part.kind == .logging)
         #expect(
             contribution.part.payload.mediaType
@@ -345,11 +344,11 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             tokenID: tokenID,
             manifestID: manifestID,
             destinationProviderFingerprint:
-                fixture.destinationEndpoint.fingerprint.digest,
+            fixture.destinationEndpoint.fingerprint.digest,
             destinationStateRootUUID: destinationRoot,
             destinationKeyID: possession.lineageEncryptionKey.keyID,
             destinationPublicKey:
-                possession.lineageEncryptionKey.rawPublicKey,
+            possession.lineageEncryptionKey.rawPublicKey,
             nonce: Data(repeating: 0x31, count: 24),
             trustRegistryRevision: 1,
             ephemeralPrivateKey: Data(repeating: 0x32, count: 32)
@@ -367,32 +366,32 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                             recordKind: "manifest-assembly-test",
                             schemaVersion: 1,
                             canonicalRecordBytes:
-                                ProviderHandoffCanonicalCBOR.encode(
-                                    .map([
-                                        .init(
-                                            "kind",
-                                            .textString(kind.rawValue)
-                                        )
-                                    ])
-                                )
+                            ProviderHandoffCanonicalCBOR.encode(
+                                .map([
+                                    .init(
+                                        "kind",
+                                        .textString(kind.rawValue)
+                                    )
+                                ])
+                            )
                         )
                     ]
                 ),
                 mediaType:
-                    "application/vnd.io.github.stephenlclarke.container.handoff-test.v1+cbor",
+                "application/vnd.io.github.stephenlclarke.container.handoff-test.v1+cbor",
                 tokenID: tokenID,
                 manifestID: manifestID,
                 sourceOrder: [sourceRoot],
                 lineageKeys: [lineageKey],
                 destinationProviderFingerprint:
-                    fixture.destinationEndpoint.fingerprint.digest,
+                fixture.destinationEndpoint.fingerprint.digest,
                 destinationStateRootUUID: destinationRoot,
                 destinationKeyID: possession.payloadEncryptionKey.keyID,
                 destinationPublicKey:
-                    possession.payloadEncryptionKey.rawPublicKey,
+                possession.payloadEncryptionKey.rawPublicKey,
                 nonce: Data(repeating: UInt8(index + 1), count: 24),
                 ephemeralPrivateKey:
-                    Data(repeating: UInt8(index + 33), count: 32)
+                Data(repeating: UInt8(index + 33), count: 32)
             )
             let part = ProviderHandoffPartV1(
                 kind: kind,
@@ -406,41 +405,41 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 bundleObjectID: payload.descriptor.bundleObjectID,
                 transportByteLength: payload.descriptor.transportByteLength,
                 transportDigestSHA256:
-                    payload.descriptor.transportDigestSHA256,
+                payload.descriptor.transportDigestSHA256,
                 receivedByteCount: payload.descriptor.transportByteLength,
                 objectRevision: 2,
                 state: .verified
             )
             let contribution =
                 try ProviderHandoffSourceControlCodec
-                .finalizeContribution(
-                    ProviderHandoffSourceContributionV1(
-                        partKind: kind,
-                        tokenID: tokenID,
-                        manifestID: manifestID,
-                        trustRegistryRevision: 1,
-                        exportRequestDigestSHA256:
+                    .finalizeContribution(
+                        ProviderHandoffSourceContributionV1(
+                            partKind: kind,
+                            tokenID: tokenID,
+                            manifestID: manifestID,
+                            trustRegistryRevision: 1,
+                            exportRequestDigestSHA256:
                             digest("export-\(kind.rawValue)"),
-                        sourceProviderFingerprint:
+                            sourceProviderFingerprint:
                             fixture.sourceEndpoint.fingerprint.digest,
-                        sourceStateRootUUID: sourceRoot,
-                        authorityLineageUUID: sourceLineage,
-                        lineageDigestKeyVersion: 1,
-                        sourcePreCommitExpectation: expectations[0],
-                        destinationProviderFingerprint:
+                            sourceStateRootUUID: sourceRoot,
+                            authorityLineageUUID: sourceLineage,
+                            lineageDigestKeyVersion: 1,
+                            sourcePreCommitExpectation: expectations[0],
+                            destinationProviderFingerprint:
                             fixture.destinationEndpoint.fingerprint.digest,
-                        destinationStateRootUUID: destinationRoot,
-                        destinationPreCommitExpectation: expectations[1],
-                        destinationKeyPossessionProofDigestsSHA256:
+                            destinationStateRootUUID: destinationRoot,
+                            destinationPreCommitExpectation: expectations[1],
+                            destinationKeyPossessionProofDigestsSHA256:
                             proofDigests,
-                        resultingAuthorityLineageUUID: resultingLineage,
-                        resultingLineageDigestKeyVersion: 2,
-                        destinationSealedLineageKeyEnvelope:
+                            resultingAuthorityLineageUUID: resultingLineage,
+                            resultingLineageDigestKeyVersion: 2,
+                            destinationSealedLineageKeyEnvelope:
                             lineageEnvelope,
-                        part: part,
-                        sourceObjectRecord: object
+                            part: part,
+                            sourceObjectRecord: object
+                        )
                     )
-                )
             parts.append(part)
             contributions.append(contribution)
         }
@@ -470,7 +469,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 state: .destinationStaged,
                 abortState: .none,
                 checkpoint: nil
-            ),
+            )
         ]
     }
 
@@ -519,7 +518,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
         )
         expectedVector.revisionVectorDigestSHA256 =
             try ProviderHandoffProjections
-            .revisionVectorDigest(expectedVector)
+                .revisionVectorDigest(expectedVector)
         var abortVector = ProviderHandoffRevisionVectorV1(
             stateRootUUID: root,
             rootStoreRevision: 13,
@@ -534,12 +533,12 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             stateRootUUID: root,
             expectedHeader: expected,
             expectedHeaderDigestSHA256:
-                ProviderHandoffProjections
+            ProviderHandoffProjections
                 .stateRootHeaderDigest(expected),
             preCommitRevisionVector: expectedVector,
             abortHeader: aborted,
             abortHeaderDigestSHA256:
-                ProviderHandoffProjections
+            ProviderHandoffProjections
                 .stateRootHeaderDigest(aborted),
             abortRevisionVector: abortVector
         )
@@ -588,7 +587,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 signingIdentifier: "container-engine-manifest-tests",
                 teamIdentifier: "TESTTEAM",
                 designatedRequirementDigestSHA256:
-                    String(repeating: "c", count: 64)
+                String(repeating: "c", count: 64)
             )
             gatewayIdentity = try ProviderHandoffGatewayKeyStore(
                 service: gatewayService,
@@ -597,10 +596,10 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 context: ProviderHandoffGatewayKeyEnrollmentContextV1(
                     owningBundleIdentifier: codeIdentity.signingIdentifier,
                     codeRequirementDigestSHA256:
-                        codeIdentity.designatedRequirementDigestSHA256,
+                    codeIdentity.designatedRequirementDigestSHA256,
                     teamIdentifier: codeIdentity.teamIdentifier,
                     gatewayRegistrationDigestSHA256:
-                        ProviderHandoffGatewayKeyEnrollmentContextV1
+                    ProviderHandoffGatewayKeyEnrollmentContextV1
                         .registrationDigest(codeIdentity: codeIdentity),
                     enrolledAtUnixSeconds: 100,
                     notBeforeUnixSeconds: 100,
@@ -619,7 +618,7 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             )
             let registry = try gatewayIdentity.makeTrustRegistry(
                 providerKeys:
-                    sourceIdentity.trustKeys
+                sourceIdentity.trustKeys
                     + destinationIdentity.trustKeys,
                 registryRevision: 1,
                 issuedAtUnixSeconds: 100
@@ -638,30 +637,30 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             _ = try gatewayStore.loadOrCreate(
                 initial: ProviderHandoffGatewayStateMachine.initialState(
                     providerSelection:
-                        ProviderHandoffProviderSelectionRecordV1(
-                            selectionRevision: 1,
-                            selectedProviderFingerprint:
-                                sourceEndpoint.fingerprint.digest,
-                            selectedStateRootUUID: sourceRoot,
-                            providerRegistrationDigestSHA256:
-                                String(
-                                    sourceEndpoint.fingerprint.digest
-                                        .dropFirst("sha256:".count)
-                                ),
-                            trustRegistryRevision: 1
+                    ProviderHandoffProviderSelectionRecordV1(
+                        selectionRevision: 1,
+                        selectedProviderFingerprint:
+                        sourceEndpoint.fingerprint.digest,
+                        selectedStateRootUUID: sourceRoot,
+                        providerRegistrationDigestSHA256:
+                        String(
+                            sourceEndpoint.fingerprint.digest
+                                .dropFirst("sha256:".count)
                         ),
+                        trustRegistryRevision: 1
+                    ),
                     socketDiscovery:
-                        ProviderHandoffSocketDiscoveryRecordV1(
-                            discoveryRevision: 1,
-                            socketInstanceUUID:
-                                "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-                            ownerUID: 501,
-                            minimumEngineAPIVersion: "1.44",
-                            maximumEngineAPIVersion: "1.53",
-                            selectedProviderFingerprint:
-                                sourceEndpoint.fingerprint.digest,
-                            selectedStateRootUUID: sourceRoot
-                        )
+                    ProviderHandoffSocketDiscoveryRecordV1(
+                        discoveryRevision: 1,
+                        socketInstanceUUID:
+                        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                        ownerUID: 501,
+                        minimumEngineAPIVersion: "1.44",
+                        maximumEngineAPIVersion: "1.53",
+                        selectedProviderFingerprint:
+                        sourceEndpoint.fingerprint.digest,
+                        selectedStateRootUUID: sourceRoot
+                    )
                 )
             )
         }
@@ -683,12 +682,12 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
             try? ProviderHandoffTrustRegistryStore.removeForTesting(
                 service: trustService,
                 account: "registry",
-                archivedRevisions: UInt64(1)...UInt64(1)
+                archivedRevisions: UInt64(1) ... UInt64(1)
             )
             SecItemDelete(
                 [
                     kSecClass: kSecClassGenericPassword,
-                    kSecAttrService: secretService,
+                    kSecAttrService: secretService
                 ] as CFDictionary
             )
         }
@@ -705,17 +704,17 @@ struct ProviderHandoffGatewayManifestAssemblyTests {
                 context: ProviderHandoffProviderKeyEnrollmentContextV1(
                     providerFingerprint: endpoint.fingerprint.digest,
                     stateRootUUID:
-                        endpoint.fingerprint.stateRootUUID.uuidString
+                    endpoint.fingerprint.stateRootUUID.uuidString
                         .lowercased(),
                     owningBundleIdentifier: "manifest-assembly-provider",
                     codeRequirementDigestSHA256:
-                        String(repeating: "e", count: 64),
+                    String(repeating: "e", count: 64),
                     teamIdentifier: "TESTTEAM",
                     providerRegistrationDigestSHA256:
-                        String(
-                            endpoint.fingerprint.digest
-                                .dropFirst("sha256:".count)
-                        ),
+                    String(
+                        endpoint.fingerprint.digest
+                            .dropFirst("sha256:".count)
+                    ),
                     enrolledAtUnixSeconds: 100,
                     notBeforeUnixSeconds: 100,
                     notAfterUnixSeconds: 10000
@@ -817,14 +816,14 @@ private actor ManifestAssemblyTransport:
             }
             let challenge =
                 try ProviderHandoffProviderKeyControlCodec
-                .decodePossessionChallenge(body)
+                    .decodePossessionChallenge(body)
             let proof = try destinationIdentity.respond(
                 to: challenge.challenge,
                 trustRegistryRevision: challenge.trustRegistryRevision
             )
             let responseBody =
                 try ProviderHandoffProviderKeyControlCodec
-                .encodePossessionProof(proof)
+                    .encodePossessionProof(proof)
             return try result(
                 requestID: request.requestID,
                 mediaType: ProviderHandoffProviderKeyControlCodec
@@ -839,7 +838,7 @@ private actor ManifestAssemblyTransport:
             signCount += 1
             let value =
                 try ProviderHandoffSourceControlCodec
-                .decodeSignRequest(body)
+                    .decodeSignRequest(body)
             let source = try #require(
                 value.candidateManifest.sources.first(where: {
                     $0.stateRootUUID
@@ -848,30 +847,30 @@ private actor ManifestAssemblyTransport:
             )
             let digest =
                 try ProviderHandoffProjections
-                .sourceManifestDigest(
-                    source: source,
-                    manifest: value.candidateManifest
-                )
+                    .sourceManifestDigest(
+                        source: source,
+                        manifest: value.candidateManifest
+                    )
             let signature = try sourceIdentity.sign(
                 projectionDigestSHA256: digest,
                 purpose: .sourceManifestSigning,
                 trustRegistryRevision:
-                    value.candidateManifest.trustRegistryRevision
+                value.candidateManifest.trustRegistryRevision
             )
             let responseBody =
                 try ProviderHandoffSourceControlCodec
-                .encodeSignReceipt(
-                    ProviderHandoffSourceManifestSignReceiptV1(
-                        partKind: value.partKind,
-                        tokenID: value.candidateManifest.tokenID,
-                        manifestID: value.candidateManifest.manifestID,
-                        sourceStateRootUUID: source.stateRootUUID,
-                        contributionDigestSHA256:
+                    .encodeSignReceipt(
+                        ProviderHandoffSourceManifestSignReceiptV1(
+                            partKind: value.partKind,
+                            tokenID: value.candidateManifest.tokenID,
+                            manifestID: value.candidateManifest.manifestID,
+                            sourceStateRootUUID: source.stateRootUUID,
+                            contributionDigestSHA256:
                             value.contributionDigestSHA256,
-                        sourceProjectionDigestSHA256: digest,
-                        sourceSignature: signature
+                            sourceProjectionDigestSHA256: digest,
+                            sourceSignature: signature
+                        )
                     )
-                )
             return try result(
                 requestID: request.requestID,
                 mediaType: ProviderHandoffSourceControlCodec

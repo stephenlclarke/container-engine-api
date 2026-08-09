@@ -14,9 +14,10 @@ struct ProviderHandoffBundleObjectStoreTests {
     func `bundle object resumes chunks verifies streaming and replays exactly`() throws {
         try withStore { store, root in
             let bytes = Data(
-                (0..<(5 * 1024 * 1024 + 17)).map {
+                (0 ..< (5 * 1024 * 1024 + 17)).map {
                     UInt8(truncatingIfNeeded: $0)
-                })
+                }
+            )
             let digest = ProviderHandoffDigest.sha256(bytes)
             let objectID = "sha256:\(digest)"
             var record = try store.declare(

@@ -39,11 +39,11 @@ public indirect enum ProviderHandoffCanonicalValue: Equatable, Sendable {
     case null
 
     public static func optional(_ value: String?) -> Self {
-        value.map(Self.textString) ?? .null
+        value.map(textString) ?? .null
     }
 
     public static func optional(_ value: UInt64?) -> Self {
-        value.map(Self.unsigned) ?? .null
+        value.map(unsigned) ?? .null
     }
 
     public static func optional(_ value: ProviderHandoffCanonicalValue?) -> Self {
@@ -91,9 +91,9 @@ public enum ProviderHandoffCanonicalCBORError:
         switch self {
         case .boundsExceeded:
             "deterministic CBOR value exceeds its configured bound"
-        case .duplicateMapKey(let key):
+        case let .duplicateMapKey(key):
             "deterministic CBOR map contains duplicate key \(key)"
-        case .invalidAdditionalInformation(let value):
+        case let .invalidAdditionalInformation(value):
             "deterministic CBOR contains invalid additional information \(value)"
         case .invalidMapKey:
             "deterministic CBOR maps require text-string keys"
@@ -103,11 +103,11 @@ public enum ProviderHandoffCanonicalCBORError:
             "deterministic CBOR is malformed"
         case .nonCanonical:
             "CBOR input is not the deterministic v1 representation"
-        case .nonNFCText(let value):
+        case let .nonNFCText(value):
             "deterministic CBOR text is not NFC: \(value)"
         case .trailingBytes:
             "deterministic CBOR contains trailing bytes"
-        case .unsupportedType(let value):
+        case let .unsupportedType(value):
             "deterministic CBOR contains unsupported major type \(value)"
         }
     }
@@ -144,34 +144,34 @@ public enum ProviderHandoffCanonicalCBOR {
             throw ProviderHandoffCanonicalCBORError.boundsExceeded
         }
         switch value {
-        case .unsigned(let number):
+        case let .unsigned(number):
             appendMajor(0, value: number, to: &output)
-        case .negative(let magnitude):
+        case let .negative(magnitude):
             appendMajor(1, value: magnitude, to: &output)
-        case .byteString(let bytes):
+        case let .byteString(bytes):
             appendMajor(2, value: UInt64(bytes.count), to: &output)
             output.append(bytes)
-        case .textString(let text):
+        case let .textString(text):
             try validate(text)
             let bytes = Data(text.utf8)
             appendMajor(3, value: UInt64(bytes.count), to: &output)
             output.append(bytes)
-        case .array(let values):
+        case let .array(values):
             appendMajor(4, value: UInt64(values.count), to: &output)
             for item in values {
                 try append(item, to: &output, depth: depth + 1)
             }
-        case .map(let entries):
+        case let .map(entries):
             let sorted = try canonicalEntries(entries)
             appendMajor(5, value: UInt64(sorted.count), to: &output)
             for item in sorted {
                 try append(.textString(item.entry.key), to: &output, depth: depth + 1)
                 try append(item.entry.value, to: &output, depth: depth + 1)
             }
-        case .boolean(let value):
-            output.append(value ? 0xf5 : 0xf4)
+        case let .boolean(value):
+            output.append(value ? 0xF5 : 0xF4)
         case .null:
-            output.append(0xf6)
+            output.append(0xF6)
         }
     }
 
@@ -201,7 +201,7 @@ public enum ProviderHandoffCanonicalCBOR {
     private static func validate(_ text: String) throws {
         guard
             Data(text.precomposedStringWithCanonicalMapping.utf8)
-                == Data(text.utf8)
+            == Data(text.utf8)
         else {
             throw ProviderHandoffCanonicalCBORError.nonNFCText(text)
         }
@@ -210,15 +210,15 @@ public enum ProviderHandoffCanonicalCBOR {
     private static func appendMajor(_ major: UInt8, value: UInt64, to output: inout Data) {
         let prefix = major << 5
         switch value {
-        case 0..<24:
+        case 0 ..< 24:
             output.append(prefix | UInt8(value))
-        case 24...UInt64(UInt8.max):
+        case 24 ... UInt64(UInt8.max):
             output.append(prefix | 24)
             output.append(UInt8(value))
-        case 0...UInt64(UInt16.max):
+        case 0 ... UInt64(UInt16.max):
             output.append(prefix | 25)
             appendBigEndian(UInt16(value), to: &output)
-        case 0...UInt64(UInt32.max):
+        case 0 ... UInt64(UInt32.max):
             output.append(prefix | 26)
             appendBigEndian(UInt32(value), to: &output)
         default:
@@ -227,7 +227,7 @@ public enum ProviderHandoffCanonicalCBOR {
         }
     }
 
-    private static func appendBigEndian<T: FixedWidthInteger>(_ value: T, to output: inout Data) {
+    private static func appendBigEndian(_ value: some FixedWidthInteger, to output: inout Data) {
         var bigEndian = value.bigEndian
         withUnsafeBytes(of: &bigEndian) { output.append(contentsOf: $0) }
     }
@@ -238,7 +238,9 @@ public enum ProviderHandoffCanonicalCBOR {
         var offset = 0
         var totalCollectionEntries = 0
 
-        var isAtEnd: Bool { offset == data.count }
+        var isAtEnd: Bool {
+            offset == data.count
+        }
 
         mutating func decode(depth: Int) throws -> ProviderHandoffCanonicalValue {
             guard depth <= limits.maximumDepth else {
@@ -246,18 +248,18 @@ public enum ProviderHandoffCanonicalCBOR {
             }
             let initial = try readByte()
             let major = initial >> 5
-            let additional = initial & 0x1f
+            let additional = initial & 0x1F
             switch major {
             case 0:
-                return .unsigned(try readArgument(additional))
+                return try .unsigned(readArgument(additional))
             case 1:
-                return .negative(try readArgument(additional))
+                return try .negative(readArgument(additional))
             case 2:
                 let count = try boundedCount(
                     readArgument(additional),
                     maximum: limits.maximumByteStringBytes
                 )
-                return .byteString(try read(count))
+                return try .byteString(read(count))
             case 3:
                 let count = try boundedCount(
                     readArgument(additional),
@@ -273,8 +275,8 @@ public enum ProviderHandoffCanonicalCBOR {
                 let count = try collectionCount(readArgument(additional))
                 var values: [ProviderHandoffCanonicalValue] = []
                 values.reserveCapacity(count)
-                for _ in 0..<count {
-                    values.append(try decode(depth: depth + 1))
+                for _ in 0 ..< count {
+                    try values.append(decode(depth: depth + 1))
                 }
                 return .array(values)
             case 5:
@@ -282,17 +284,17 @@ public enum ProviderHandoffCanonicalCBOR {
                 var entries: [ProviderHandoffCanonicalMapEntry] = []
                 entries.reserveCapacity(count)
                 var seen = Set<String>()
-                for _ in 0..<count {
-                    guard case .textString(let key) = try decode(depth: depth + 1) else {
+                for _ in 0 ..< count {
+                    guard case let .textString(key) = try decode(depth: depth + 1) else {
                         throw ProviderHandoffCanonicalCBORError.invalidMapKey
                     }
                     guard seen.insert(key).inserted else {
                         throw ProviderHandoffCanonicalCBORError.duplicateMapKey(key)
                     }
-                    entries.append(
+                    try entries.append(
                         ProviderHandoffCanonicalMapEntry(
                             key,
-                            try decode(depth: depth + 1)
+                            decode(depth: depth + 1)
                         )
                     )
                 }
@@ -315,22 +317,22 @@ public enum ProviderHandoffCanonicalCBOR {
 
         private mutating func readArgument(_ additional: UInt8) throws -> UInt64 {
             switch additional {
-            case 0..<24:
+            case 0 ..< 24:
                 return UInt64(additional)
             case 24:
-                let value = UInt64(try readByte())
+                let value = try UInt64(readByte())
                 guard value >= 24 else {
                     throw ProviderHandoffCanonicalCBORError.nonCanonical
                 }
                 return value
             case 25:
-                let value = UInt64(try readInteger(UInt16.self))
+                let value = try UInt64(readInteger(UInt16.self))
                 guard value > UInt8.max else {
                     throw ProviderHandoffCanonicalCBORError.nonCanonical
                 }
                 return value
             case 26:
-                let value = UInt64(try readInteger(UInt32.self))
+                let value = try UInt64(readInteger(UInt32.self))
                 guard value > UInt16.max else {
                     throw ProviderHandoffCanonicalCBORError.nonCanonical
                 }
@@ -375,10 +377,10 @@ public enum ProviderHandoffCanonicalCBOR {
                 throw ProviderHandoffCanonicalCBORError.malformed
             }
             defer { offset += count }
-            return data.subdata(in: offset..<(offset + count))
+            return data.subdata(in: offset ..< (offset + count))
         }
 
-        private mutating func readInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        private mutating func readInteger<T: FixedWidthInteger>(_: T.Type) throws -> T {
             let bytes = try read(MemoryLayout<T>.size)
             return bytes.withUnsafeBytes { rawBuffer in
                 rawBuffer.loadUnaligned(as: T.self).bigEndian
@@ -396,7 +398,7 @@ public enum ProviderHandoffDigest {
         _ domain: String,
         projection: ProviderHandoffCanonicalValue
     ) throws -> String {
-        hex(try domainBytes(domain, projection: projection))
+        try hex(domainBytes(domain, projection: projection))
     }
 
     public static func domainBytes(
@@ -408,7 +410,7 @@ public enum ProviderHandoffDigest {
         }
         var data = Data(domain.utf8)
         data.append(0)
-        data.append(try ProviderHandoffCanonicalCBOR.encode(projection))
+        try data.append(ProviderHandoffCanonicalCBOR.encode(projection))
         return Data(SHA256.hash(data: data))
     }
 
@@ -427,9 +429,9 @@ public enum ProviderHandoffDigest {
         var bytes = Data()
         bytes.reserveCapacity(32)
         var index = value.startIndex
-        for _ in 0..<32 {
+        for _ in 0 ..< 32 {
             let next = value.index(index, offsetBy: 2)
-            guard let byte = UInt8(value[index..<next], radix: 16) else {
+            guard let byte = UInt8(value[index ..< next], radix: 16) else {
                 throw ProviderHandoffCanonicalCBORError.malformed
             }
             bytes.append(byte)

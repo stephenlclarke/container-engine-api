@@ -145,7 +145,7 @@ final class ProviderSessionSocket: @unchecked Sendable {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         let peerAuditToken = withUnsafeBytes(of: &peerToken) { Data($0) }
-        var path = [CChar](repeating: 0, count: 4_096)
+        var path = [CChar](repeating: 0, count: 4096)
         let count = proc_pidpath(
             peerPID,
             &path,
@@ -368,10 +368,10 @@ enum ProviderSessionUnixSocket {
         Darwin.close(listener.descriptor)
         var status = stat()
         if lstat(path, &status) == 0,
-            status.st_uid == getuid(),
-            status.st_mode & S_IFMT == S_IFSOCK,
-            status.st_dev == listener.device,
-            status.st_ino == listener.inode
+           status.st_uid == getuid(),
+           status.st_mode & S_IFMT == S_IFSOCK,
+           status.st_dev == listener.device,
+           status.st_ino == listener.inode
         {
             try? FileManager.default.removeItem(atPath: path)
         }

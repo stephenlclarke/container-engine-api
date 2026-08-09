@@ -39,7 +39,7 @@ public enum ProviderHandoffCodeIdentityError:
 
     public var description: String {
         switch self {
-        case .invalidCode(let status):
+        case let .invalidCode(status):
             "provider handoff code identity failed validation with status \(status)"
         case .invalidIdentity:
             "provider handoff code identity is incomplete"

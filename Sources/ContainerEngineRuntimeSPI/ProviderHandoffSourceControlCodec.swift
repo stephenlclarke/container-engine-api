@@ -56,7 +56,7 @@ public struct ProviderHandoffPartExportRequestV1:
         destinationPayloadEncryptionKey: ProviderHandoffTrustKeyV1,
         destinationLineageKeyEncryptionKey: ProviderHandoffTrustKeyV1,
         destinationKeyPossessionProofs:
-            [ProviderHandoffDestinationKeyPossessionProofV1],
+        [ProviderHandoffDestinationKeyPossessionProofV1],
         resultingAuthorityLineageUUID: String,
         resultingLineageDigestKeyVersion: UInt64,
         selectedResourceIDs: [String]
@@ -140,7 +140,7 @@ public struct ProviderHandoffSourceContributionV1:
         resultingAuthorityLineageUUID: String,
         resultingLineageDigestKeyVersion: UInt64,
         destinationSealedLineageKeyEnvelope:
-            DestinationSealedLineageKeyEnvelopeV1,
+        DestinationSealedLineageKeyEnvelopeV1,
         part: ProviderHandoffPartV1,
         sourceObjectRecord: ProviderHandoffBundleObjectRecordV1,
         contributionDigestSHA256: String = ""
@@ -335,8 +335,8 @@ public enum ProviderHandoffSourceControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffSourceManifestSignRequestV1
-                .currentSchemaVersion,
+            == ProviderHandoffSourceManifestSignRequestV1
+            .currentSchemaVersion,
             validBootstrap(value.bootstrap),
             validDigest(value.contributionDigestSHA256),
             !value.candidateManifest.tokenID.isEmpty,
@@ -367,8 +367,8 @@ public enum ProviderHandoffSourceControlCodec {
         let signature = value.sourceSignature
         guard
             value.schemaVersion
-                == ProviderHandoffSourceManifestSignReceiptV1
-                .currentSchemaVersion,
+            == ProviderHandoffSourceManifestSignReceiptV1
+            .currentSchemaVersion,
             !value.tokenID.isEmpty,
             !value.manifestID.isEmpty,
             canonicalUUID(value.sourceStateRootUUID),
@@ -378,7 +378,7 @@ public enum ProviderHandoffSourceControlCodec {
             signature.signerRole == .sourceProvider,
             signature.stateRootUUID == value.sourceStateRootUUID,
             signature.signedProjectionDigestSHA256
-                == value.sourceProjectionDigestSHA256,
+            == value.sourceProjectionDigestSHA256,
             signature.trustRegistryRevision > 0,
             !signature.signerKeyID.isEmpty,
             signature.providerFingerprint?.isEmpty == false,
@@ -439,29 +439,29 @@ public enum ProviderHandoffSourceControlCodec {
             && proofs.count == 2
             && Set(proofPurposes).count == 2
             && Set(proofPurposes)
-                == Set([
-                    .destinationPayloadEncryption,
-                    .destinationLineageKeyEncryption,
-                ])
+            == Set([
+                .destinationPayloadEncryption,
+                .destinationLineageKeyEncryption
+            ])
             && proofs
-                == proofs.sorted {
-                    $0.destinationKeyPurpose.rawValue.utf8.lexicographicallyPrecedes(
-                        $1.destinationKeyPurpose.rawValue.utf8
-                    )
-                }
+            == proofs.sorted {
+                $0.destinationKeyPurpose.rawValue.utf8.lexicographicallyPrecedes(
+                    $1.destinationKeyPurpose.rawValue.utf8
+                )
+            }
             && proofs.allSatisfy { proof in
                 proof.schemaVersion == 1
                     && proof.tokenID == value.tokenID
                     && proof.manifestID == value.manifestID
                     && proof.destinationProviderFingerprint
-                        == value.destinationProviderFingerprint
+                    == value.destinationProviderFingerprint
                     && proof.destinationStateRootUUID
-                        == value.destinationStateRootUUID
+                    == value.destinationStateRootUUID
                     && proof.destinationKeyID
-                        == (proof.destinationKeyPurpose
-                            == .destinationPayloadEncryption
-                            ? value.destinationPayloadEncryptionKey.keyID
-                            : value.destinationLineageKeyEncryptionKey.keyID)
+                    == (proof.destinationKeyPurpose
+                        == .destinationPayloadEncryption
+                        ? value.destinationPayloadEncryptionKey.keyID
+                        : value.destinationLineageKeyEncryptionKey.keyID)
             }
             && canonicalUUID(value.resultingAuthorityLineageUUID)
             && value.resultingLineageDigestKeyVersion > 0
@@ -511,16 +511,16 @@ public enum ProviderHandoffSourceControlCodec {
             && (part.payload.protection
                 == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1
                 || part.payload.protection
-                    == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2)
+                == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2)
             && part.payload.destinationEncryption?.destinationKeyPurpose
-                == .destinationPayloadEncryption
+            == .destinationPayloadEncryption
             && object.schemaVersion
-                == ProviderHandoffBundleObjectRecordV1.currentSchemaVersion
+            == ProviderHandoffBundleObjectRecordV1.currentSchemaVersion
             && object.state == .verified
             && object.bundleObjectID == part.payload.bundleObjectID
             && object.transportByteLength == part.payload.transportByteLength
             && object.transportDigestSHA256
-                == part.payload.transportDigestSHA256
+            == part.payload.transportDigestSHA256
             && object.receivedByteCount == object.transportByteLength
             && object.pendingChunkOffset == nil
             && object.pendingChunkByteLength == nil
@@ -530,10 +530,10 @@ public enum ProviderHandoffSourceControlCodec {
             && envelope.authorityLineageUUID == value.authorityLineageUUID
             && envelope.keyVersion == value.lineageDigestKeyVersion
             && envelope.destinationKeyPurpose
-                == .destinationLineageKeyEncryption
+            == .destinationLineageKeyEncryption
             && validDigest(value.contributionDigestSHA256)
             && (try? contributionDigest(value))
-                == value.contributionDigestSHA256
+            == value.contributionDigestSHA256
     }
 
     private static func validDestinationKey(
@@ -603,9 +603,9 @@ public enum ProviderHandoffSourceControlCodec {
                     && $0.precomposedStringWithCanonicalMapping == $0
             }
             && values
-                == values.sorted {
-                    $0.utf8.lexicographicallyPrecedes($1.utf8)
-                }
+            == values.sorted {
+                $0.utf8.lexicographicallyPrecedes($1.utf8)
+            }
     }
 
     private static func canonicalDigests(
@@ -630,7 +630,7 @@ public enum ProviderHandoffSourceControlCodec {
         guard
             !data.isEmpty,
             data.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffSourceControlCodecError.boundsExceeded
         }
@@ -641,7 +641,7 @@ public enum ProviderHandoffSourceControlCodec {
         guard
             !data.isEmpty,
             data.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffSourceControlCodecError.boundsExceeded
         }

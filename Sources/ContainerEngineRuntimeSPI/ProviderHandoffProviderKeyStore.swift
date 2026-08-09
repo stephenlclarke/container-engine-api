@@ -172,7 +172,7 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
     ) throws -> ProviderHandoffSignatureV1 {
         guard
             [.sourceManifestSigning, .lineageKeyEnvelopeSigning]
-                .contains(purpose),
+            .contains(purpose),
             let privateKey = privateKeysByPurpose[purpose]
         else {
             throw ProviderHandoffProviderKeyStoreError.keyNotFound(purpose)
@@ -206,15 +206,15 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
     ) throws -> ProviderHandoffDestinationKeyPossessionProofV1 {
         guard
             challenge.destinationProviderFingerprint
-                == context.providerFingerprint,
+            == context.providerFingerprint,
             challenge.destinationStateRootUUID == context.stateRootUUID,
             [.destinationPayloadEncryption, .destinationLineageKeyEncryption]
-                .contains(challenge.destinationKeyPurpose),
+            .contains(challenge.destinationKeyPurpose),
             let destinationPrivateKey = privateKeysByPurpose[
                 challenge.destinationKeyPurpose
             ],
             try trustKey(for: challenge.destinationKeyPurpose).keyID
-                == challenge.destinationKeyID,
+            == challenge.destinationKeyID,
             let possessionPrivateKey = privateKeysByPurpose[
                 .destinationPossessionSigning
             ]
@@ -243,9 +243,9 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
     ) throws -> ProviderHandoffEnvelopeLineageKeyV1 {
         guard
             envelope.destinationKeyPurpose
-                == .destinationLineageKeyEncryption,
+            == .destinationLineageKeyEncryption,
             try trustKey(for: .destinationLineageKeyEncryption).keyID
-                == envelope.destinationKeyID,
+            == envelope.destinationKeyID,
             let privateKey = privateKeysByPurpose[
                 .destinationLineageKeyEncryption
             ]
@@ -317,9 +317,9 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
     ) throws -> ProviderHandoffPayloadPackageV1 {
         guard
             payload.descriptor.destinationEncryption?.destinationKeyPurpose
-                == .destinationPayloadEncryption,
+            == .destinationPayloadEncryption,
             let keyID = payload.descriptor.destinationEncryption?
-                .destinationKeyID,
+            .destinationKeyID,
             try trustKey(for: .destinationPayloadEncryption).keyID == keyID,
             let privateKey = privateKeysByPurpose[
                 .destinationPayloadEncryption
@@ -351,9 +351,9 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
     ) throws -> ProviderHandoffPayloadPackageV1 {
         guard
             payload.descriptor.destinationEncryption?.destinationKeyPurpose
-                == .destinationPayloadEncryption,
+            == .destinationPayloadEncryption,
             let keyID = payload.descriptor.destinationEncryption?
-                .destinationKeyID,
+            .destinationKeyID,
             try trustKey(for: .destinationPayloadEncryption).keyID == keyID,
             let privateKey = privateKeysByPurpose[
                 .destinationPayloadEncryption
@@ -387,9 +387,9 @@ public struct ProviderHandoffProviderIdentityV1: Sendable {
     ) throws -> ProviderHandoffPayloadPackageSourceV2 {
         guard
             payload.descriptor.destinationEncryption?.destinationKeyPurpose
-                == .destinationPayloadEncryption,
+            == .destinationPayloadEncryption,
             let keyID = payload.descriptor.destinationEncryption?
-                .destinationKeyID,
+            .destinationKeyID,
             try trustKey(for: .destinationPayloadEncryption).keyID == keyID,
             let privateKey = privateKeysByPurpose[
                 .destinationPayloadEncryption
@@ -512,7 +512,7 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: account,
-            kSecAttrSynchronizable: kCFBooleanFalse as Any,
+            kSecAttrSynchronizable: kCFBooleanFalse as Any
         ]
         if let accessGroup {
             query[kSecAttrAccessGroup] = accessGroup
@@ -529,7 +529,7 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
                 kSecClass: kSecClassGenericPassword,
                 kSecAttrService: service,
                 kSecAttrAccount: account,
-                kSecAttrSynchronizable: kCFBooleanFalse as Any,
+                kSecAttrSynchronizable: kCFBooleanFalse as Any
             ] as CFDictionary
         )
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -560,7 +560,7 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             (.lineageKeyEnvelopeSigning, .ed25519V1, .sourceProvider),
             (.destinationPossessionSigning, .ed25519V1, .destinationProvider),
             (.destinationPayloadEncryption, .x25519V1, .destinationProvider),
-            (.destinationLineageKeyEncryption, .x25519V1, .destinationProvider),
+            (.destinationLineageKeyEncryption, .x25519V1, .destinationProvider)
         ]
 
     private static func generate(
@@ -601,10 +601,10 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
                     enrollmentID: UUID().uuidString.lowercased(),
                     owningBundleIdentifier: context.owningBundleIdentifier,
                     codeRequirementDigestSHA256:
-                        context.codeRequirementDigestSHA256,
+                    context.codeRequirementDigestSHA256,
                     teamIdentifier: context.teamIdentifier,
                     providerRegistrationDigestSHA256:
-                        context.providerRegistrationDigestSHA256,
+                    context.providerRegistrationDigestSHA256,
                     enrolledAtUnixSeconds: context.enrolledAtUnixSeconds,
                     enrollmentProofSignature: nil
                 ),
@@ -617,10 +617,10 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             if specification.algorithm == .ed25519V1 {
                 trustKey.provenance.enrollmentProofSignature =
                     try ProviderHandoffTrustRegistryValidator
-                    .enrollmentProofSignature(
-                        for: trustKey,
-                        privateKey: privateKey
-                    )
+                        .enrollmentProofSignature(
+                            for: trustKey,
+                            privateKey: privateKey
+                        )
             }
             return StoredKeyMaterialV1(
                 trustKey: trustKey,
@@ -686,12 +686,12 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             && stored.providerFingerprint == expected.providerFingerprint
             && stored.stateRootUUID == expected.stateRootUUID
             && stored.owningBundleIdentifier
-                == expected.owningBundleIdentifier
+            == expected.owningBundleIdentifier
             && stored.codeRequirementDigestSHA256
-                == expected.codeRequirementDigestSHA256
+            == expected.codeRequirementDigestSHA256
             && stored.teamIdentifier == expected.teamIdentifier
             && stored.providerRegistrationDigestSHA256
-                == expected.providerRegistrationDigestSHA256
+            == expected.providerRegistrationDigestSHA256
     }
 
     private static func validate(
@@ -700,24 +700,24 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
         let fingerprintDigest =
             context.providerFingerprint
                 .hasPrefix("sha256:")
-            ? String(context.providerFingerprint.dropFirst(7))
-            : ""
+                ? String(context.providerFingerprint.dropFirst(7))
+                : ""
         guard
             context.schemaVersion
-                == ProviderHandoffProviderKeyEnrollmentContextV1
-                .currentSchemaVersion,
+            == ProviderHandoffProviderKeyEnrollmentContextV1
+            .currentSchemaVersion,
             context.providerFingerprint.utf8.count <= 256,
             context.providerFingerprint.precomposedStringWithCanonicalMapping
-                == context.providerFingerprint,
+            == context.providerFingerprint,
             (try? ProviderHandoffDigest.parseSHA256(fingerprintDigest))?.count
-                == 32,
+            == 32,
             let root = UUID(uuidString: context.stateRootUUID),
             root.uuidString.lowercased() == context.stateRootUUID,
             !context.owningBundleIdentifier.isEmpty,
             context.owningBundleIdentifier.utf8.count <= 256,
             context.owningBundleIdentifier
-                .precomposedStringWithCanonicalMapping
-                == context.owningBundleIdentifier,
+            .precomposedStringWithCanonicalMapping
+            == context.owningBundleIdentifier,
             (try? ProviderHandoffDigest.parseSHA256(
                 context.codeRequirementDigestSHA256
             ))?.count == 32,
@@ -748,14 +748,14 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             key.providerFingerprint == context.providerFingerprint,
             key.stateRootUUID == context.stateRootUUID,
             key.provenance.owningBundleIdentifier
-                == context.owningBundleIdentifier,
+            == context.owningBundleIdentifier,
             key.provenance.codeRequirementDigestSHA256
-                == context.codeRequirementDigestSHA256,
+            == context.codeRequirementDigestSHA256,
             key.provenance.teamIdentifier == context.teamIdentifier,
             key.provenance.providerRegistrationDigestSHA256
-                == context.providerRegistrationDigestSHA256,
+            == context.providerRegistrationDigestSHA256,
             key.provenance.enrolledAtUnixSeconds
-                == context.enrolledAtUnixSeconds,
+            == context.enrolledAtUnixSeconds,
             key.notBeforeUnixSeconds == context.notBeforeUnixSeconds,
             key.notAfterUnixSeconds == context.notAfterUnixSeconds,
             key.rotationPredecessorKeyID == nil,
@@ -763,7 +763,7 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             key.revocationReason == nil,
             !key.provenance.enrollmentID.isEmpty,
             UUID(uuidString: key.provenance.enrollmentID)?.uuidString
-                .lowercased() == key.provenance.enrollmentID,
+            .lowercased() == key.provenance.enrollmentID,
             material.privateKey.count == 32
         else {
             throw ProviderHandoffProviderKeyStoreError.invalidKey(key.purpose)
@@ -782,7 +782,7 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
             do {
                 let digest =
                     try ProviderHandoffProjections
-                    .enrollmentProofDigest(key)
+                        .enrollmentProofDigest(key)
                 try ProviderHandoffCrypto.verifyEd25519Message(
                     ProviderHandoffDigest.parseSHA256(digest),
                     signature: proof,

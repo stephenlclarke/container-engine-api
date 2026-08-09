@@ -49,7 +49,7 @@ public struct ProviderHandoffGatewayKeyEnrollmentContextV1:
                 .init(
                     "codeRequirementDigestSHA256",
                     .byteString(
-                        try ProviderHandoffDigest.parseSHA256(
+                        ProviderHandoffDigest.parseSHA256(
                             codeIdentity.designatedRequirementDigestSHA256
                         )
                     )
@@ -59,7 +59,7 @@ public struct ProviderHandoffGatewayKeyEnrollmentContextV1:
                     .textString(codeIdentity.signingIdentifier)
                 ),
                 .init("schemaVersion", .unsigned(1)),
-                .init("teamIdentifier", .optional(codeIdentity.teamIdentifier)),
+                .init("teamIdentifier", .optional(codeIdentity.teamIdentifier))
             ])
         )
     }
@@ -88,13 +88,13 @@ public enum ProviderHandoffGatewayKeyStoreError:
             "provider handoff gateway key enrollment context is invalid"
         case .invalidEncoding:
             "provider handoff gateway key Keychain value is invalid"
-        case .invalidKey(let purpose):
+        case let .invalidKey(purpose):
             "provider handoff gateway key for \(purpose.rawValue) is invalid"
-        case .keyNotFound(let purpose):
+        case let .keyNotFound(purpose):
             "provider handoff gateway key for \(purpose.rawValue) was not found"
         case .keySetTooLarge:
             "provider handoff gateway key set exceeds its 64 KiB bound"
-        case .keychain(let status):
+        case let .keychain(status):
             "provider handoff gateway key Keychain operation failed with status \(status)"
         case .notFound:
             "provider handoff gateway key set does not exist"
@@ -133,7 +133,7 @@ public struct ProviderHandoffGatewayIdentityV1: Sendable {
             keyID: bootstrapKey.keyID,
             rawPublicKey: bootstrapKey.rawPublicKey,
             codeRequirementDigestSHA256:
-                context.codeRequirementDigestSHA256
+            context.codeRequirementDigestSHA256
         )
     }
 
@@ -156,7 +156,7 @@ public struct ProviderHandoffGatewayIdentityV1: Sendable {
                 .coordinatorManifestSigning,
                 .lineageKeyEnvelopeSigning,
                 .coordinatorCommitSigning,
-                .coordinatorTerminalOutcomeSigning,
+                .coordinatorTerminalOutcomeSigning
             ].contains(purpose),
             let privateKey = privateKeysByPurpose[purpose]
         else {
@@ -258,7 +258,7 @@ public struct ProviderHandoffGatewayIdentityV1: Sendable {
         )
         registry.registryDigestSHA256 =
             try ProviderHandoffProjections
-            .trustRegistryDigest(registry)
+                .trustRegistryDigest(registry)
         registry.registrySignature = try ProviderHandoffCrypto.sign(
             projectionDigestSHA256: registry.registryDigestSHA256,
             purpose: .trustRegistrySigning,
@@ -374,7 +374,7 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: account,
-            kSecAttrSynchronizable: kCFBooleanFalse as Any,
+            kSecAttrSynchronizable: kCFBooleanFalse as Any
         ]
         if let accessGroup {
             query[kSecAttrAccessGroup] = accessGroup
@@ -391,8 +391,9 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
                 kSecClass: kSecClassGenericPassword,
                 kSecAttrService: service,
                 kSecAttrAccount: account,
-                kSecAttrSynchronizable: kCFBooleanFalse as Any,
-            ] as CFDictionary)
+                kSecAttrSynchronizable: kCFBooleanFalse as Any
+            ] as CFDictionary
+        )
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw ProviderHandoffGatewayKeyStoreError.keychain(status)
         }
@@ -414,7 +415,7 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
         .coordinatorManifestSigning,
         .lineageKeyEnvelopeSigning,
         .coordinatorCommitSigning,
-        .coordinatorTerminalOutcomeSigning,
+        .coordinatorTerminalOutcomeSigning
     ]
 
     private static func generate(
@@ -445,10 +446,10 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
                     enrollmentID: UUID().uuidString.lowercased(),
                     owningBundleIdentifier: context.owningBundleIdentifier,
                     codeRequirementDigestSHA256:
-                        context.codeRequirementDigestSHA256,
+                    context.codeRequirementDigestSHA256,
                     teamIdentifier: context.teamIdentifier,
                     providerRegistrationDigestSHA256:
-                        context.gatewayRegistrationDigestSHA256,
+                    context.gatewayRegistrationDigestSHA256,
                     enrolledAtUnixSeconds: context.enrolledAtUnixSeconds,
                     enrollmentProofSignature: nil
                 ),
@@ -461,10 +462,10 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
             if purpose != .trustRegistrySigning {
                 key.provenance.enrollmentProofSignature =
                     try ProviderHandoffTrustRegistryValidator
-                    .enrollmentProofSignature(
-                        for: key,
-                        privateKey: privateKey
-                    )
+                        .enrollmentProofSignature(
+                            for: key,
+                            privateKey: privateKey
+                        )
             }
             return StoredKeyMaterialV1(
                 trustKey: key,
@@ -492,7 +493,7 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
             value.materials.count == purposes.count,
             Set(value.materials.map(\.trustKey.purpose)) == Set(purposes),
             value.materials.map(\.trustKey.keyID)
-                == value.materials.map(\.trustKey.keyID).sorted()
+            == value.materials.map(\.trustKey.keyID).sorted()
         else {
             throw ProviderHandoffGatewayKeyStoreError.bindingMismatch
         }
@@ -512,12 +513,12 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
     ) -> Bool {
         stored.schemaVersion == expected.schemaVersion
             && stored.owningBundleIdentifier
-                == expected.owningBundleIdentifier
+            == expected.owningBundleIdentifier
             && stored.codeRequirementDigestSHA256
-                == expected.codeRequirementDigestSHA256
+            == expected.codeRequirementDigestSHA256
             && stored.teamIdentifier == expected.teamIdentifier
             && stored.gatewayRegistrationDigestSHA256
-                == expected.gatewayRegistrationDigestSHA256
+            == expected.gatewayRegistrationDigestSHA256
     }
 
     private static func validate(
@@ -528,8 +529,8 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
             !context.owningBundleIdentifier.isEmpty,
             context.owningBundleIdentifier.utf8.count <= 256,
             context.owningBundleIdentifier
-                .precomposedStringWithCanonicalMapping
-                == context.owningBundleIdentifier,
+            .precomposedStringWithCanonicalMapping
+            == context.owningBundleIdentifier,
             (try? ProviderHandoffDigest.parseSHA256(
                 context.codeRequirementDigestSHA256
             )) != nil,
@@ -557,14 +558,14 @@ public struct ProviderHandoffGatewayKeyStore: Sendable {
             key.providerFingerprint == nil,
             key.stateRootUUID == nil,
             key.provenance.owningBundleIdentifier
-                == context.owningBundleIdentifier,
+            == context.owningBundleIdentifier,
             key.provenance.codeRequirementDigestSHA256
-                == context.codeRequirementDigestSHA256,
+            == context.codeRequirementDigestSHA256,
             key.provenance.teamIdentifier == context.teamIdentifier,
             key.provenance.providerRegistrationDigestSHA256
-                == context.gatewayRegistrationDigestSHA256,
+            == context.gatewayRegistrationDigestSHA256,
             key.provenance.enrolledAtUnixSeconds
-                == context.enrolledAtUnixSeconds,
+            == context.enrolledAtUnixSeconds,
             key.notBeforeUnixSeconds == context.notBeforeUnixSeconds,
             key.notAfterUnixSeconds == context.notAfterUnixSeconds,
             key.rotationPredecessorKeyID == nil,

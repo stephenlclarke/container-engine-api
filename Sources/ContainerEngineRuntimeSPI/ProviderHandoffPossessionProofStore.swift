@@ -41,7 +41,7 @@ public enum ProviderHandoffPossessionProofStoreError:
             "provider handoff destination possession proof encoding is invalid"
         case .invalidMetadata:
             "provider handoff destination possession proof metadata is unsafe"
-        case .ioFailure(let operation, let code):
+        case let .ioFailure(operation, code):
             "provider handoff destination possession proof store \(operation.rawValue) failed with errno \(code)"
         case .notFound:
             "provider handoff destination possession proof was not found"
@@ -70,13 +70,13 @@ public struct ProviderHandoffPossessionProofStore: Sendable {
     ) throws -> String {
         let encoded =
             try ProviderHandoffProviderKeyControlCodec
-            .encodePossessionProof(proof)
+                .encodePossessionProof(proof)
         guard encoded.count <= Self.maximumProofBytes else {
             throw ProviderHandoffPossessionProofStoreError.proofTooLarge
         }
         let digest =
             try ProviderHandoffProjections
-            .destinationPossessionProofRecordDigest(proof)
+                .destinationPossessionProofRecordDigest(proof)
         return try withLock {
             for existingDigest in try proofDigestsUnlocked() {
                 let existing = try loadUnlocked(existingDigest)
@@ -84,7 +84,7 @@ public struct ProviderHandoffPossessionProofStore: Sendable {
                     existing.tokenID == proof.tokenID,
                     existing.manifestID == proof.manifestID,
                     existing.destinationKeyPurpose
-                        == proof.destinationKeyPurpose,
+                    == proof.destinationKeyPurpose,
                     existing.destinationKeyID == proof.destinationKeyID
                 else {
                     continue
@@ -133,7 +133,7 @@ public struct ProviderHandoffPossessionProofStore: Sendable {
                 ) == 0
             else {
                 if errno == EEXIST,
-                    try loadUnlocked(digest) == proof
+                   try loadUnlocked(digest) == proof
                 {
                     return digest
                 }
@@ -213,13 +213,13 @@ public struct ProviderHandoffPossessionProofStore: Sendable {
         do {
             proof =
                 try ProviderHandoffProviderKeyControlCodec
-                .decodePossessionProof(encoded)
+                    .decodePossessionProof(encoded)
         } catch {
             throw ProviderHandoffPossessionProofStoreError.invalidEncoding
         }
         guard
             try ProviderHandoffProjections
-                .destinationPossessionProofRecordDigest(proof) == digest
+            .destinationPossessionProofRecordDigest(proof) == digest
         else {
             throw ProviderHandoffPossessionProofStoreError.invalidEncoding
         }
@@ -303,7 +303,9 @@ public struct ProviderHandoffPossessionProofStore: Sendable {
                     buffer.baseAddress?.advanced(by: offset),
                     count - offset
                 )
-                if result < 0, errno == EINTR { continue }
+                if result < 0, errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw ProviderHandoffPossessionProofStoreError.ioFailure(
                         .read,
@@ -325,7 +327,9 @@ public struct ProviderHandoffPossessionProofStore: Sendable {
                     buffer.baseAddress?.advanced(by: offset),
                     data.count - offset
                 )
-                if result < 0, errno == EINTR { continue }
+                if result < 0, errno == EINTR {
+                    continue
+                }
                 guard result > 0 else {
                     throw ProviderHandoffPossessionProofStoreError.ioFailure(
                         .write,

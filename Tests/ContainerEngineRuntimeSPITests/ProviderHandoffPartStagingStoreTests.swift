@@ -14,17 +14,16 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
+@testable import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
-
-@testable import ContainerEngineRuntimeSPI
 
 struct ProviderHandoffPartStagingStoreTests {
     @Test
     func `declare replays an advanced record and rejects changed immutable identity`() throws {
         try withTemporaryDirectory { root in
             let store = ProviderHandoffPartStagingStore(root: root)
-            var record = try store.declare(try makeDeclared())
+            var record = try store.declare(makeDeclared())
             record = try store.update(
                 tokenID: record.tokenID,
                 manifestID: record.manifestID,
@@ -37,7 +36,7 @@ struct ProviderHandoffPartStagingStoreTests {
                 )
             }
 
-            #expect(try store.declare(try makeDeclared()) == record)
+            #expect(try store.declare(makeDeclared()) == record)
             let changed = try ProviderHandoffPartStagingStateMachine.declared(
                 tokenID: record.tokenID,
                 manifestID: record.manifestID,
@@ -45,7 +44,7 @@ struct ProviderHandoffPartStagingStoreTests {
                 partKind: record.partKind,
                 bundleObjectID: record.bundleObjectID,
                 payloadDescriptorDigestSHA256:
-                    record.payloadDescriptorDigestSHA256
+                record.payloadDescriptorDigestSHA256
             )
             #expect(
                 throws: ProviderHandoffPartStagingStoreError.duplicateRecord

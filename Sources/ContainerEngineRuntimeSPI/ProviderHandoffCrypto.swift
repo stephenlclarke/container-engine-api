@@ -141,7 +141,7 @@ public enum ProviderHandoffCrypto {
                 .init("purpose", .textString(purpose.rawValue)),
                 .init("rawPublicKey", .byteString(rawPublicKey)),
                 .init("role", .textString(role.rawValue)),
-                .init("stateRootUUID", .optional(stateRootUUID)),
+                .init("stateRootUUID", .optional(stateRootUUID))
             ])
         )
     }
@@ -340,11 +340,11 @@ public enum ProviderHandoffCrypto {
             throw ProviderHandoffCryptoError.invalidNonce
         }
         var state: [UInt32] = [
-            0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574,
+            0x6170_7865, 0x3320_646E, 0x7962_2D32, 0x6B20_6574
         ]
         state.append(contentsOf: words(from: key))
         state.append(contentsOf: words(from: nonce))
-        for _ in 0..<10 {
+        for _ in 0 ..< 10 {
             quarterRound(&state, 0, 4, 8, 12)
             quarterRound(&state, 1, 5, 9, 13)
             quarterRound(&state, 2, 6, 10, 14)
@@ -381,11 +381,11 @@ public enum ProviderHandoffCrypto {
             .init("signerKeyID", .textString(signerKeyID)),
             .init("signerRole", .textString(signerRole.rawValue)),
             .init("stateRootUUID", .optional(stateRootUUID)),
-            .init("trustRegistryRevision", .unsigned(trustRegistryRevision)),
+            .init("trustRegistryRevision", .unsigned(trustRegistryRevision))
         ])
         var message = Data("container-handoff-signature-v1".utf8)
         message.append(0)
-        message.append(try ProviderHandoffCanonicalCBOR.encode(projection))
+        try message.append(ProviderHandoffCanonicalCBOR.encode(projection))
         return message
     }
 
@@ -393,7 +393,7 @@ public enum ProviderHandoffCrypto {
         guard key.count == 32, key[31] & 0x80 == 0 else {
             throw ProviderHandoffCryptoError.invalidX25519Key
         }
-        let modulus = Data([0xed] + Array(repeating: 0xff, count: 30) + [0x7f])
+        let modulus = Data([0xED] + Array(repeating: 0xFF, count: 30) + [0x7F])
         var relation = 0
         for index in stride(from: 31, through: 0, by: -1) where relation == 0 {
             if key[index] < modulus[index] {
@@ -434,7 +434,7 @@ public enum ProviderHandoffCrypto {
         let sealed = try ChaChaPoly.seal(
             plaintext,
             using: SymmetricKey(data: subkey),
-            nonce: try ChaChaPoly.Nonce(data: ietfNonce),
+            nonce: ChaChaPoly.Nonce(data: ietfNonce),
             authenticating: associatedData
         )
         var transport = sealed.ciphertext
@@ -458,7 +458,7 @@ public enum ProviderHandoffCrypto {
         let ciphertext = transport.dropLast(16)
         let tag = transport.suffix(16)
         let sealed = try ChaChaPoly.SealedBox(
-            nonce: try ChaChaPoly.Nonce(data: ietfNonce),
+            nonce: ChaChaPoly.Nonce(data: ietfNonce),
             ciphertext: ciphertext,
             tag: tag
         )

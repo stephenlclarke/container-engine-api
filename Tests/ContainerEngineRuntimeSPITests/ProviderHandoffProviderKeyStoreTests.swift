@@ -3,15 +3,14 @@
 // Licensed under the Apache License, Version 2.0.
 //===----------------------------------------------------------------------===//
 
+@testable import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
 
-@testable import ContainerEngineRuntimeSPI
-
 @Suite("Provider handoff provider key store", .serialized)
 struct ProviderHandoffProviderKeyStoreTests {
-    @Test("Current executable exposes a stable validated code identity")
-    func currentCodeIdentity() throws {
+    @Test
+    func `Current executable exposes a stable validated code identity`() throws {
         let first = try ProviderHandoffCodeIdentity.current()
         let second = try ProviderHandoffCodeIdentity.current()
 
@@ -24,8 +23,8 @@ struct ProviderHandoffProviderKeyStoreTests {
         )
     }
 
-    @Test("Keychain identity is stable, purpose separated, and usable")
-    func stablePurposeSeparatedIdentity() throws {
+    @Test
+    func `Keychain identity is stable, purpose separated, and usable`() throws {
         let fixture = Fixture()
         defer { fixture.remove() }
 
@@ -49,8 +48,9 @@ struct ProviderHandoffProviderKeyStoreTests {
                     .lineageKeyEnvelopeSigning,
                     .destinationPossessionSigning,
                     .destinationPayloadEncryption,
-                    .destinationLineageKeyEncryption,
-                ]))
+                    .destinationLineageKeyEncryption
+                ])
+        )
         #expect(Set(first.trustKeys.map(\.keyID)).count == 5)
 
         for key in first.trustKeys {
@@ -72,7 +72,7 @@ struct ProviderHandoffProviderKeyStoreTests {
             tokenID: "token-1",
             manifestID: "manifest-1",
             destinationProviderFingerprint:
-                fixture.context.providerFingerprint,
+            fixture.context.providerFingerprint,
             destinationStateRootUUID: fixture.context.stateRootUUID,
             destinationKeyPurpose: .destinationPayloadEncryption,
             destinationKeyID: encryptionKey.keyID,
@@ -88,8 +88,8 @@ struct ProviderHandoffProviderKeyStoreTests {
         #expect(proof.destinationKeyID == encryptionKey.keyID)
         #expect(proof.destinationSignature.trustRegistryRevision == 9)
         #expect(
-            proof.destinationSignature.signerKeyID
-                == (try first.trustKey(
+            try proof.destinationSignature.signerKeyID
+                == (first.trustKey(
                     for: .destinationPossessionSigning
                 )).keyID
         )
@@ -98,11 +98,11 @@ struct ProviderHandoffProviderKeyStoreTests {
         let lineageKey = ProviderHandoffLineageKeyV1(
             sourceStateRootUUID: sourceRoot,
             authorityLineageUUID:
-                "30000000-0000-4000-8000-000000000003",
+            "30000000-0000-4000-8000-000000000003",
             keyVersion: 4,
             rawHMACSHA256Key: Data(repeating: 17, count: 32)
         )
-        let package = ProviderHandoffPayloadPackageV1(
+        let package = try ProviderHandoffPayloadPackageV1(
             partKind: .logging,
             entries: [
                 ProviderHandoffPayloadPackageEntryV1(
@@ -111,7 +111,7 @@ struct ProviderHandoffProviderKeyStoreTests {
                     recordKind: "logging.handoff.v1",
                     schemaVersion: 1,
                     canonicalRecordBytes:
-                        try ProviderHandoffCanonicalCBOR
+                    ProviderHandoffCanonicalCBOR
                         .encode(.map([.init("schemaVersion", .unsigned(1))]))
                 )
             ]
@@ -124,7 +124,7 @@ struct ProviderHandoffProviderKeyStoreTests {
             sourceOrder: [sourceRoot],
             lineageKeys: [lineageKey],
             destinationProviderFingerprint:
-                fixture.context.providerFingerprint,
+            fixture.context.providerFingerprint,
             destinationStateRootUUID: fixture.context.stateRootUUID,
             destinationKeyID: encryptionKey.keyID,
             destinationPublicKey: encryptionKey.rawPublicKey,
@@ -143,8 +143,8 @@ struct ProviderHandoffProviderKeyStoreTests {
         )
     }
 
-    @Test("A changed provider binding cannot adopt or replace existing keys")
-    func rejectsBindingChange() throws {
+    @Test
+    func `A changed provider binding cannot adopt or replace existing keys`() throws {
         let fixture = Fixture()
         defer { fixture.remove() }
 
@@ -174,7 +174,7 @@ struct ProviderHandoffProviderKeyStoreTests {
             providerRegistrationDigestSHA256: String(repeating: "d", count: 64),
             enrolledAtUnixSeconds: 100,
             notBeforeUnixSeconds: 100,
-            notAfterUnixSeconds: 10_000
+            notAfterUnixSeconds: 10000
         )
 
         var store: ProviderHandoffProviderKeyStore {

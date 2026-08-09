@@ -18,7 +18,6 @@ import ContainerEngineRuntimeSPI
 import Foundation
 import Testing
 
-@Suite
 struct ProviderHandoffSecurityTests {
     @Test
     func `signed registry rejects a key whose binding no longer matches its ID`() throws {
@@ -29,11 +28,12 @@ struct ProviderHandoffSecurityTests {
         let index = try #require(
             changed.keys.firstIndex(where: {
                 $0.keyID == fixture.sourceEnvelopeSigningKey.keyID
-            }))
+            })
+        )
         changed.keys[index].providerFingerprint = "sha256:other-source"
         changed.registryDigestSHA256 =
             try ProviderHandoffProjections
-            .trustRegistryDigest(changed)
+                .trustRegistryDigest(changed)
         changed.registrySignature = try ProviderHandoffCrypto.sign(
             projectionDigestSHA256: changed.registryDigestSHA256,
             purpose: .trustRegistrySigning,
@@ -66,8 +66,8 @@ struct ProviderHandoffSecurityTests {
             destinationKeyPurpose: .destinationLineageKeyEncryption,
             destinationKeyID: fixture.destinationLineageEncryptionKey.keyID,
             destinationPublicKey: fixture.destinationLineageEncryptionKey.rawPublicKey,
-            nonce: Data((0x00...0x17).map(UInt8.init)),
-            challengePlaintext: Data(repeating: 0xa5, count: 32),
+            nonce: Data((0x00 ... 0x17).map(UInt8.init)),
+            challengePlaintext: Data(repeating: 0xA5, count: 32),
             ephemeralPrivateKey: Data(repeating: 0x33, count: 32)
         )
         let proof = try ProviderHandoffPossessionProofCodec.respond(
@@ -86,7 +86,7 @@ struct ProviderHandoffSecurityTests {
 
         let proofRecordDigest =
             try ProviderHandoffProjections
-            .destinationPossessionProofRecordDigest(proof)
+                .destinationPossessionProofRecordDigest(proof)
         #expect(validated.proofRecordDigestSHA256 == proofRecordDigest)
         var changed = proof
         changed.responseDigestSHA256 = String(repeating: "0", count: 64)
@@ -108,7 +108,7 @@ struct ProviderHandoffSecurityTests {
             sourceStateRootUUID: fixture.sourceRoot,
             authorityLineageUUID: fixture.sourceLineage,
             keyVersion: 4,
-            rawHMACSHA256Key: Data(repeating: 0x5a, count: 32)
+            rawHMACSHA256Key: Data(repeating: 0x5A, count: 32)
         )
         let envelope = try ProviderHandoffLineageKeyEnvelopeCodec.prepare(
             lineage,
@@ -119,7 +119,7 @@ struct ProviderHandoffSecurityTests {
             destinationStateRootUUID: fixture.destinationRoot,
             destinationKeyID: fixture.destinationLineageEncryptionKey.keyID,
             destinationPublicKey: fixture.destinationLineageEncryptionKey.rawPublicKey,
-            nonce: Data((0x20...0x37).map(UInt8.init)),
+            nonce: Data((0x20 ... 0x37).map(UInt8.init)),
             signerKeyID: fixture.sourceEnvelopeSigningKey.keyID,
             signerRole: .sourceProvider,
             signerProviderFingerprint: fixture.sourceProvider,
@@ -175,8 +175,8 @@ struct ProviderHandoffSecurityTests {
             destinationKeyPurpose: .destinationLineageKeyEncryption,
             destinationKeyID: fixture.destinationLineageEncryptionKey.keyID,
             destinationPublicKey: fixture.destinationLineageEncryptionKey.rawPublicKey,
-            nonce: Data((0x40...0x57).map(UInt8.init)),
-            challengePlaintext: Data(repeating: 0x6c, count: 32),
+            nonce: Data((0x40 ... 0x57).map(UInt8.init)),
+            challengePlaintext: Data(repeating: 0x6C, count: 32),
             ephemeralPrivateKey: Data(repeating: 0x55, count: 32)
         )
         let proof = try ProviderHandoffPossessionProofCodec.respond(
@@ -197,7 +197,7 @@ struct ProviderHandoffSecurityTests {
                 sourceStateRootUUID: nil,
                 authorityLineageUUID: resultingLineage,
                 keyVersion: 2,
-                rawHMACSHA256Key: Data(repeating: 0x7d, count: 32)
+                rawHMACSHA256Key: Data(repeating: 0x7D, count: 32)
             ),
             envelopeID: "resulting-lineage-key",
             tokenID: tokenID,
@@ -206,7 +206,7 @@ struct ProviderHandoffSecurityTests {
             destinationStateRootUUID: fixture.destinationRoot,
             destinationKeyID: fixture.destinationLineageEncryptionKey.keyID,
             destinationPublicKey: fixture.destinationLineageEncryptionKey.rawPublicKey,
-            nonce: Data((0x60...0x77).map(UInt8.init)),
+            nonce: Data((0x60 ... 0x77).map(UInt8.init)),
             signerKeyID: fixture.coordinatorEnvelopeSigningKey.keyID,
             signerRole: .gatewayCoordinator,
             signerProviderFingerprint: nil,
@@ -247,7 +247,7 @@ struct ProviderHandoffSecurityTests {
                             sourceStateRootUUID: fixture.sourceRoot,
                             recordKind: "handoff-evidence",
                             schemaVersion: 1,
-                            canonicalRecordBytes: try ProviderHandoffCanonicalCBOR.encode(
+                            canonicalRecordBytes: ProviderHandoffCanonicalCBOR.encode(
                                 .map([.init("disposition", .textString("included"))])
                             )
                         )
@@ -387,23 +387,23 @@ struct ProviderHandoffSecurityTests {
         )
         preCommit.revisionVectorDigestSHA256 =
             try ProviderHandoffProjections
-            .revisionVectorDigest(preCommit)
+                .revisionVectorDigest(preCommit)
         var abortVector = preCommit
         abortVector.rootStoreRevision += 1
         abortVector.revisionVectorDigestSHA256 =
             try ProviderHandoffProjections
-            .revisionVectorDigest(abortVector)
-        return ProviderHandoffHeaderExpectationV1(
+                .revisionVectorDigest(abortVector)
+        return try ProviderHandoffHeaderExpectationV1(
             role: role,
             stateRootUUID: root,
             expectedHeader: expected,
             expectedHeaderDigestSHA256:
-                try ProviderHandoffProjections
+            ProviderHandoffProjections
                 .stateRootHeaderDigest(expected),
             preCommitRevisionVector: preCommit,
             abortHeader: abort,
             abortHeaderDigestSHA256:
-                try ProviderHandoffProjections
+            ProviderHandoffProjections
                 .stateRootHeaderDigest(abort),
             abortRevisionVector: abortVector
         )
@@ -560,7 +560,7 @@ private struct TrustFixture {
             sourceManifestSigningKey,
             sourceEnvelopeSigningKey,
             destinationPossessionSigningKey,
-            destinationLineageEncryptionKey,
+            destinationLineageEncryptionKey
         ].sorted {
             $0.keyID.utf8.lexicographicallyPrecedes($1.keyID.utf8)
         }
@@ -582,7 +582,7 @@ private struct TrustFixture {
         )
         value.registryDigestSHA256 =
             try ProviderHandoffProjections
-            .trustRegistryDigest(value)
+                .trustRegistryDigest(value)
         value.registrySignature = try ProviderHandoffCrypto.sign(
             projectionDigestSHA256: value.registryDigestSHA256,
             purpose: .trustRegistrySigning,
@@ -638,7 +638,7 @@ private struct TrustFixture {
         )
         key.provenance.enrollmentProofSignature =
             try ProviderHandoffTrustRegistryValidator
-            .enrollmentProofSignature(for: key, privateKey: privateKey)
+                .enrollmentProofSignature(for: key, privateKey: privateKey)
         return key
     }
 

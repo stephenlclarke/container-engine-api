@@ -233,7 +233,7 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartStageRequestV1.currentSchemaVersion,
+            == ProviderHandoffPartStageRequestV1.currentSchemaVersion,
             value.bootstrap.rawPublicKey.count == 32,
             (try? ProviderHandoffDigest.parseSHA256(
                 value.bootstrap.codeRequirementDigestSHA256
@@ -266,7 +266,7 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartStageReceiptV1.currentSchemaVersion,
+            == ProviderHandoffPartStageReceiptV1.currentSchemaVersion,
             value.commonRecord.state == .imported,
             value.commonRecord.stagedImportReceiptDigestSHA256 != nil
         else {
@@ -291,13 +291,13 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartPromoteRequestV1.currentSchemaVersion,
+            == ProviderHandoffPartPromoteRequestV1.currentSchemaVersion,
             validStage(value.stage),
             value.commitRecord.intent.tokenID == value.stage.manifest.tokenID,
             value.commitRecord.intent.manifestID
-                == value.stage.manifest.manifestID,
+            == value.stage.manifest.manifestID,
             value.commitRecord.intent.manifestDigest
-                == value.stage.manifest.manifestDigest
+            == value.stage.manifest.manifestDigest
         else {
             throw ProviderHandoffPartControlCodecError.invalidRequest
         }
@@ -319,15 +319,15 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartOpaqueControllerReceiptV1
-                .currentSchemaVersion,
+            == ProviderHandoffPartOpaqueControllerReceiptV1
+            .currentSchemaVersion,
             !value.mediaType.isEmpty,
             value.mediaType.utf8.count <= 256,
             !value.body.isEmpty,
             value.body.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes,
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes,
             ProviderHandoffDigest.sha256(value.body)
-                == value.bodyDigestSHA256
+            == value.bodyDigestSHA256
         else {
             throw ProviderHandoffPartControlCodecError.invalidResponse
         }
@@ -349,16 +349,16 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartActivateRequestV1.currentSchemaVersion,
+            == ProviderHandoffPartActivateRequestV1.currentSchemaVersion,
             validStage(value.stage),
             value.commitRecord.intent.tokenID == value.stage.manifest.tokenID,
             value.commitRecord.intent.manifestID
-                == value.stage.manifest.manifestID,
+            == value.stage.manifest.manifestID,
             value.terminalOutcome.tokenID == value.stage.manifest.tokenID,
             value.terminalOutcome.manifestID
-                == value.stage.manifest.manifestID,
+            == value.stage.manifest.manifestID,
             value.terminalOutcome.manifestDigest
-                == value.stage.manifest.manifestDigest,
+            == value.stage.manifest.manifestDigest,
             value.terminalOutcome.phase == .complete,
             value.promotionReceipt.partKind == value.stage.partKind,
             validPromotionReceipt(value.promotionReceipt)
@@ -383,14 +383,14 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartCompensateRequestV1.currentSchemaVersion,
+            == ProviderHandoffPartCompensateRequestV1.currentSchemaVersion,
             validStage(value.stage),
             value.terminalOutcome.phase == .aborted,
             value.terminalOutcome.tokenID == value.stage.manifest.tokenID,
             value.terminalOutcome.manifestID
-                == value.stage.manifest.manifestID,
+            == value.stage.manifest.manifestID,
             value.terminalOutcome.manifestDigest
-                == value.stage.manifest.manifestDigest
+            == value.stage.manifest.manifestDigest
         else {
             throw ProviderHandoffPartControlCodecError.invalidRequest
         }
@@ -412,7 +412,7 @@ public enum ProviderHandoffPartControlCodec {
     ) throws -> Data {
         guard
             value.schemaVersion
-                == ProviderHandoffPartOperationReceiptV1.currentSchemaVersion,
+            == ProviderHandoffPartOperationReceiptV1.currentSchemaVersion,
             !value.tokenID.isEmpty,
             !value.manifestID.isEmpty,
             (try? ProviderHandoffDigest.parseSHA256(
@@ -462,12 +462,12 @@ public enum ProviderHandoffPartControlCodec {
             && value.mediaType.utf8.count <= 256
             && !value.body.isEmpty
             && value.body.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
             && ProviderHandoffDigest.sha256(value.body)
-                == value.bodyDigestSHA256
+            == value.bodyDigestSHA256
     }
 
-    private static func encode<T: Encodable>(_ value: T) throws -> Data {
+    private static func encode(_ value: some Encodable) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data: Data
@@ -479,7 +479,7 @@ public enum ProviderHandoffPartControlCodec {
         guard
             !data.isEmpty,
             data.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffPartControlCodecError.boundsExceeded
         }
@@ -490,7 +490,7 @@ public enum ProviderHandoffPartControlCodec {
         guard
             !data.isEmpty,
             data.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffPartControlCodecError.boundsExceeded
         }

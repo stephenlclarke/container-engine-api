@@ -116,11 +116,11 @@ public struct ProviderHandoffPortableLoggingContainerSourceV2: Sendable {
         providerID: String,
         providerVersion: String,
         providerKind:
-            ProviderHandoffPortableLoggingContainerV1.ProviderKind = .native,
+        ProviderHandoffPortableLoggingContainerV1.ProviderKind = .native,
         providerGeneration: UInt64 = 1,
         terminalHistoryEpoch: UInt64 = 0,
         records:
-            AsyncThrowingStream<ProviderHandoffPortableLogRecordV1, any Error>
+        AsyncThrowingStream<ProviderHandoffPortableLogRecordV1, any Error>
     ) {
         self.containerID = containerID
         self.requestedDriver = requestedDriver
@@ -301,11 +301,11 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 bytes -> (id: String, value: ProviderHandoffCanonicalValue) in
                 let storeID =
                     segmentCount == 1
-                    ? historyStoreID
-                    : historyChunkStoreID(
-                        index: UInt64(index),
-                        count: segmentCount
-                    )
+                        ? historyStoreID
+                        : historyChunkStoreID(
+                            index: UInt64(index),
+                            count: segmentCount
+                        )
                 return try (
                     id: historyEntryID(
                         containerID: container.containerID,
@@ -517,11 +517,11 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             for (index, file) in historyFiles.enumerated() {
                 let storeID =
                     segmentCount == 1
-                    ? historyStoreID
-                    : historyChunkStoreID(
-                        index: UInt64(index),
-                        count: segmentCount
-                    )
+                        ? historyStoreID
+                        : historyChunkStoreID(
+                            index: UInt64(index),
+                            count: segmentCount
+                        )
                 let entryID = historyEntryID(
                     containerID: container.containerID,
                     storeID: storeID
@@ -557,7 +557,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                     HistoryEntryMetadata(
                         entryID: entryID,
                         retentionProjection:
-                            historyRetentionProjection(history)
+                        historyRetentionProjection(history)
                     )
                 )
             }
@@ -574,7 +574,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                     .init(
                         "stores",
                         .array(histories.map(\.retentionProjection))
-                    ),
+                    )
                 ])
             )
             let terminalCategoryDigest = try terminalCategoryDigest(
@@ -664,7 +664,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 try appendEncoded(
                     ProviderHandoffPortableLoggingPayloadCodec.encodeRecord(
                         record,
-                        data: record.data.subdata(in: lower..<upper)
+                        data: record.data.subdata(in: lower ..< upper)
                     )
                 )
                 lower = upper
@@ -698,8 +698,8 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         private func appendEncoded(_ encoded: Data) throws {
             guard
                 encoded.count
-                    <= ProviderHandoffPortableLoggingPayloadCodec
-                    .maximumEncodedRecordBytes,
+                <= ProviderHandoffPortableLoggingPayloadCodec
+                .maximumEncodedRecordBytes,
                 encoded.count <= maximumHistoryStoreBytes
             else {
                 throw ProviderHandoffPortableLoggingPayloadError.historyTooLarge(
@@ -707,7 +707,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 )
             }
             if currentByteLength > 0,
-                currentByteLength + encoded.count > maximumHistoryStoreBytes
+               currentByteLength + encoded.count > maximumHistoryStoreBytes
             {
                 try finishSegment()
                 try startSegment()
@@ -801,7 +801,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         guard
             !container.containerID.isEmpty,
             container.containerID.precomposedStringWithCanonicalMapping
-                == container.containerID,
+            == container.containerID,
             container.leaseGeneration > 0,
             container.providerGeneration > 0,
             !container.providerID.isEmpty,
@@ -829,7 +829,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                 .init("driver", .textString("json-file")),
                 .init("providerID", .textString(providerID)),
                 .init("providerVersion", .textString(providerVersion)),
-                .init("safeOptions", stringMap(safeOptions)),
+                .init("safeOptions", stringMap(safeOptions))
             ])
         )
     }
@@ -841,7 +841,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
             "container-handoff-logging-terminal-categories-v1",
             projection: .map([
                 .init("categories", .array([])),
-                .init("containerID", .textString(containerID)),
+                .init("containerID", .textString(containerID))
             ])
         )
     }
@@ -856,7 +856,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
         providerVersion: String,
         providerKind: ProviderHandoffPortableLoggingContainerV1.ProviderKind,
         providerGeneration: UInt64,
-        terminalHistoryEpoch: UInt64,
+        terminalHistoryEpoch _: UInt64,
         historyEntryIDs: [String],
         contractDigest: String,
         historyRetentionDigest: String,
@@ -875,7 +875,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                     .init("driver", .optional(requestedDriver)),
                     .init("protectedOptionNames", .array([])),
                     .init("safeOptions", stringMap(requestedSafeOptions)),
-                    .init("schemaVersion", .unsigned(1)),
+                    .init("schemaVersion", .unsigned(1))
                 ])
             ),
             .init("schemaVersion", .unsigned(1)),
@@ -890,7 +890,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                             .init("effectiveMode", .textString("blocking")),
                             .init("maxBufferSizeInBytes", .null),
                             .init("requestedMode", .null),
-                            .init("schemaVersion", .unsigned(1)),
+                            .init("schemaVersion", .unsigned(1))
                         ])
                     ),
                     .init("driver", .textString("json-file")),
@@ -907,7 +907,7 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                             .init("id", .textString(providerID)),
                             .init("kind", .textString(providerKind.rawValue)),
                             .init("schemaVersion", .unsigned(1)),
-                            .init("version", .textString(providerVersion)),
+                            .init("version", .textString(providerVersion))
                         ])
                     ),
                     .init(
@@ -915,11 +915,11 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                         .map([
                             .init("cache", .null),
                             .init("schemaVersion", .unsigned(1)),
-                            .init("source", .textString("direct")),
+                            .init("source", .textString("direct"))
                         ])
                     ),
                     .init("safeOptions", stringMap(resolvedSafeOptions)),
-                    .init("schemaVersion", .unsigned(1)),
+                    .init("schemaVersion", .unsigned(1))
                 ])
             ),
             .init(
@@ -936,9 +936,9 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                     ),
                     .init("terminalDetachedCleanupCount", .unsigned(0)),
                     .init("terminalReaderCount", .unsigned(0)),
-                    .init("terminalWriterCount", .unsigned(0)),
+                    .init("terminalWriterCount", .unsigned(0))
                 ])
-            ),
+            )
         ])
     }
 
@@ -1094,8 +1094,8 @@ public enum ProviderHandoffPortableLoggingPayloadCodec {
                     )
                 }
                 if let current = outputs.last,
-                    !current.isEmpty,
-                    current.count + encoded.count > maximumHistoryStoreBytes
+                   !current.isEmpty,
+                   current.count + encoded.count > maximumHistoryStoreBytes
                 {
                     outputs.append(Data())
                 }

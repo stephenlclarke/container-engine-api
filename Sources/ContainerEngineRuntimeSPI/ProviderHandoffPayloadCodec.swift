@@ -278,7 +278,7 @@ public enum ProviderHandoffPayloadCodec {
         )
         let ephemeralPrivateKey =
             suppliedEphemeralPrivateKey
-            ?? ProviderHandoffCrypto.generateX25519PrivateKey()
+                ?? ProviderHandoffCrypto.generateX25519PrivateKey()
         let ephemeralPublicKey = try ProviderHandoffCrypto.x25519PublicKey(
             for: ephemeralPrivateKey
         )
@@ -386,7 +386,7 @@ public enum ProviderHandoffPayloadCodec {
         )
         let ephemeralPrivateKey =
             suppliedEphemeralPrivateKey
-            ?? ProviderHandoffCrypto.generateX25519PrivateKey()
+                ?? ProviderHandoffCrypto.generateX25519PrivateKey()
         let ephemeralPublicKey = try ProviderHandoffCrypto.x25519PublicKey(
             for: ephemeralPrivateKey
         )
@@ -430,10 +430,10 @@ public enum ProviderHandoffPayloadCodec {
         }
         var transportHash = SHA256()
         var transportLength: UInt64 = 0
-        for frameIndex in 0..<frameCount {
+        for frameIndex in 0 ..< frameCount {
             let lower = Int(frameIndex) * maximumSealedFramePlaintextBytes
             let upper = min(canonical.count, lower + maximumSealedFramePlaintextBytes)
-            let plaintext = canonical.subdata(in: lower..<upper)
+            let plaintext = canonical.subdata(in: lower ..< upper)
             let frameAssociatedData = framedAssociatedData(
                 baseAssociatedData: associatedData,
                 frameIndex: frameIndex,
@@ -472,16 +472,16 @@ public enum ProviderHandoffPayloadCodec {
             canonicalContentDigest: contentDigest,
             transportDigestSHA256: transportDigest,
             protection:
-                .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2,
+            .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2,
             destinationEncryption: ProviderHandoffPayloadEncryptionV1(
                 encryptionAlgorithm:
-                    .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
+                .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
                 destinationKeyPurpose: .destinationPayloadEncryption,
                 destinationKeyID: destinationKeyID,
                 ephemeralPublicKey: ephemeralPublicKey,
                 nonce: nonce,
                 associatedDataDigestSHA256:
-                    ProviderHandoffDigest.hex(associatedData)
+                ProviderHandoffDigest.hex(associatedData)
             )
         )
         completed = true
@@ -618,15 +618,15 @@ public enum ProviderHandoffPayloadCodec {
             destinationStateRootUUID: destinationStateRootUUID,
             destinationPrivateKey: destinationPrivateKey
         )
-        return ProviderHandoffPayloadPackageV1(
+        return try ProviderHandoffPayloadPackageV1(
             partKind: source.partKind,
-            entries: try source.entries.map { entry in
-                ProviderHandoffPayloadPackageEntryV1(
+            entries: source.entries.map { entry in
+                try ProviderHandoffPayloadPackageEntryV1(
                     entryID: entry.entryID,
                     sourceStateRootUUID: entry.sourceStateRootUUID,
                     recordKind: entry.recordKind,
                     schemaVersion: entry.schemaVersion,
-                    canonicalRecordBytes: try mappedRecordData(
+                    canonicalRecordBytes: mappedRecordData(
                         entry.canonicalRecord
                     )
                 )
@@ -654,14 +654,14 @@ public enum ProviderHandoffPayloadCodec {
             descriptor.canonicalEncoding == .deterministicCBORV1,
             validMediaType(descriptor.mediaType),
             descriptor.bundleObjectID
-                == "sha256:\(descriptor.transportDigestSHA256)",
+            == "sha256:\(descriptor.transportDigestSHA256)",
             descriptor.protection
-                == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2,
+            == .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2,
             descriptor.schemaVersion
-                == ProviderHandoffPayloadPackageV1.currentSchemaVersion,
+            == ProviderHandoffPayloadPackageV1.currentSchemaVersion,
             let encryption = descriptor.destinationEncryption,
             encryption.encryptionAlgorithm
-                == .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
+            == .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
             encryption.destinationKeyPurpose == .destinationPayloadEncryption
         else {
             throw ProviderHandoffPayloadCodecError.invalidDescriptor
@@ -681,7 +681,7 @@ public enum ProviderHandoffPayloadCodec {
             mediaType: descriptor.mediaType,
             payloadSchemaVersion: descriptor.schemaVersion,
             canonicalPlaintextByteLength:
-                descriptor.canonicalPlaintextByteLength,
+            descriptor.canonicalPlaintextByteLength,
             canonicalContentDigest: descriptor.canonicalContentDigest,
             sourceStateRootUUID: nil,
             authorityLineageUUID: nil,
@@ -697,7 +697,7 @@ public enum ProviderHandoffPayloadCodec {
         let associatedData = try associatedDataDigest(associated)
         guard
             ProviderHandoffDigest.hex(associatedData)
-                == encryption.associatedDataDigestSHA256
+            == encryption.associatedDataDigestSHA256
         else {
             throw ProviderHandoffPayloadCodecError.invalidDescriptor
         }
@@ -705,12 +705,12 @@ public enum ProviderHandoffPayloadCodec {
         let info = hkdfInfo(associatedData)
         let frameCount = try sealedFrameCount(
             canonicalPlaintextByteLength:
-                descriptor.canonicalPlaintextByteLength
+            descriptor.canonicalPlaintextByteLength
         )
         guard
             try sealedTransportByteLength(
                 canonicalPlaintextByteLength:
-                    descriptor.canonicalPlaintextByteLength,
+                descriptor.canonicalPlaintextByteLength,
                 frameCount: frameCount
             ) == descriptor.transportByteLength
         else {
@@ -725,7 +725,7 @@ public enum ProviderHandoffPayloadCodec {
             }
         }
         var remainingPlaintext = descriptor.canonicalPlaintextByteLength
-        for frameIndex in 0..<frameCount {
+        for frameIndex in 0 ..< frameCount {
             let plaintextLength = min(
                 UInt64(maximumSealedFramePlaintextBytes),
                 remainingPlaintext
@@ -739,7 +739,7 @@ public enum ProviderHandoffPayloadCodec {
                 frameIndex: frameIndex,
                 frameCount: frameCount,
                 canonicalPlaintextByteLength:
-                    descriptor.canonicalPlaintextByteLength,
+                descriptor.canonicalPlaintextByteLength,
                 framePlaintextByteLength: plaintextLength
             )
             let plaintext = try ProviderHandoffCrypto.open(
@@ -832,11 +832,11 @@ public enum ProviderHandoffPayloadCodec {
         let descriptor = payload.descriptor
         guard
             descriptor.protection
-                == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1,
+            == .destinationSealedX25519HKDFSHA256XChaCha20Poly1305V1,
             descriptor.schemaVersion == ProviderHandoffPayloadPackageV1.currentSchemaVersion,
             let encryption = descriptor.destinationEncryption,
             encryption.encryptionAlgorithm
-                == .x25519HKDFSHA256XChaCha20Poly1305V1,
+            == .x25519HKDFSHA256XChaCha20Poly1305V1,
             encryption.destinationKeyPurpose == .destinationPayloadEncryption
         else {
             throw ProviderHandoffPayloadCodecError.invalidDescriptor
@@ -865,7 +865,7 @@ public enum ProviderHandoffPayloadCodec {
         let associatedData = try associatedDataDigest(associated)
         guard
             ProviderHandoffDigest.hex(associatedData)
-                == encryption.associatedDataDigestSHA256
+            == encryption.associatedDataDigestSHA256
         else {
             throw ProviderHandoffPayloadCodecError.invalidDescriptor
         }
@@ -944,7 +944,7 @@ public enum ProviderHandoffPayloadCodec {
                 .init("packageSchemaVersion", .unsigned(UInt64(package.schemaVersion))),
                 .init("partKind", .textString(package.partKind.rawValue)),
                 .init("sourceStateRootUUID", .textString(source)),
-                .init("tokenID", .textString(tokenID)),
+                .init("tokenID", .textString(tokenID))
             ])
             var input = Data("container-handoff-source-content-v1".utf8)
             input.append(0)
@@ -1059,7 +1059,7 @@ public enum ProviderHandoffPayloadCodec {
         }
         guard
             ProviderHandoffDigest.sha256(payload.transportBytes)
-                == descriptor.transportDigestSHA256
+            == descriptor.transportDigestSHA256
         else {
             throw ProviderHandoffPayloadCodecError.transportDigestMismatch
         }
@@ -1093,7 +1093,7 @@ public enum ProviderHandoffPayloadCodec {
         .map([
             .init("entries", .array(package.entries.map(entryProjection))),
             .init("partKind", .textString(package.partKind.rawValue)),
-            .init("schemaVersion", .unsigned(UInt64(package.schemaVersion))),
+            .init("schemaVersion", .unsigned(UInt64(package.schemaVersion)))
         ])
     }
 
@@ -1105,7 +1105,7 @@ public enum ProviderHandoffPayloadCodec {
             .init("entryID", .textString(entry.entryID)),
             .init("recordKind", .textString(entry.recordKind)),
             .init("schemaVersion", .unsigned(UInt64(entry.schemaVersion))),
-            .init("sourceStateRootUUID", .optional(entry.sourceStateRootUUID)),
+            .init("sourceStateRootUUID", .optional(entry.sourceStateRootUUID))
         ])
     }
 
@@ -1117,7 +1117,7 @@ public enum ProviderHandoffPayloadCodec {
             .init("lineageDigestKeyVersion", .unsigned(source.lineageDigestKeyVersion)),
             .init("orderedEntryIDs", .array(source.orderedEntryIDs.map(ProviderHandoffCanonicalValue.textString))),
             .init("sourceDigestHMACSHA256", .byteString(ProviderHandoffDigest.parseSHA256(source.sourceDigestHMACSHA256))),
-            .init("sourceStateRootUUID", .textString(source.sourceStateRootUUID)),
+            .init("sourceStateRootUUID", .textString(source.sourceStateRootUUID))
         ])
     }
 
@@ -1128,7 +1128,7 @@ public enum ProviderHandoffPayloadCodec {
             .init("algorithm", .textString(digest.algorithm.rawValue)),
             .init("digest", .byteString(ProviderHandoffDigest.parseSHA256(digest.digest))),
             .init("orderedSourceDigests", .array(digest.orderedSourceDigests.map(sourceDigestProjection))),
-            .init("scope", .textString(digest.scope.rawValue)),
+            .init("scope", .textString(digest.scope.rawValue))
         ])
     }
 
@@ -1154,7 +1154,7 @@ public enum ProviderHandoffPayloadCodec {
             .init("payloadSchemaVersion", .optional(value.payloadSchemaVersion.map { .unsigned(UInt64($0)) })),
             .init("schemaVersion", .unsigned(UInt64(value.schemaVersion))),
             .init("sourceStateRootUUID", .optional(value.sourceStateRootUUID)),
-            .init("tokenID", .textString(value.tokenID)),
+            .init("tokenID", .textString(value.tokenID))
         ])
     }
 
@@ -1171,7 +1171,7 @@ public enum ProviderHandoffPayloadCodec {
                 .init("manifestID", .textString(associated.manifestID)),
                 .init("objectKind", .textString(associated.objectKind.rawValue)),
                 .init("objectLocalID", .textString(associated.objectLocalID)),
-                .init("tokenID", .textString(associated.tokenID)),
+                .init("tokenID", .textString(associated.tokenID))
             ])
         )
     }
@@ -1193,7 +1193,7 @@ public enum ProviderHandoffPayloadCodec {
                 "entryID",
                 "recordKind",
                 "schemaVersion",
-                "sourceStateRootUUID",
+                "sourceStateRootUUID"
             ]
         )
         guard case let .byteString(canonicalRecordBytes)? = map["canonicalRecordBytes"] else {
@@ -1334,7 +1334,7 @@ public enum ProviderHandoffPayloadCodec {
         let (tagBytes, tagOverflow) = frameCount.multipliedReportingOverflow(by: 16)
         let (total, totalOverflow) =
             canonicalPlaintextByteLength
-            .addingReportingOverflow(tagBytes)
+                .addingReportingOverflow(tagBytes)
         guard !tagOverflow, !totalOverflow else {
             throw ProviderHandoffPayloadCodecError.invalidDescriptor
         }
@@ -1362,7 +1362,7 @@ public enum ProviderHandoffPayloadCodec {
         let canonicalLength = UInt64(canonical.count)
         let ephemeralPrivateKey =
             suppliedEphemeralPrivateKey
-            ?? ProviderHandoffCrypto.generateX25519PrivateKey()
+                ?? ProviderHandoffCrypto.generateX25519PrivateKey()
         let ephemeralPublicKey = try ProviderHandoffCrypto.x25519PublicKey(
             for: ephemeralPrivateKey
         )
@@ -1408,13 +1408,13 @@ public enum ProviderHandoffPayloadCodec {
         }
         var transportHash = SHA256()
         var transportLength: UInt64 = 0
-        for frameIndex in 0..<frameCount {
+        for frameIndex in 0 ..< frameCount {
             let lower = Int(frameIndex) * maximumSealedFramePlaintextBytes
             let upper = min(
                 canonical.count,
                 lower + maximumSealedFramePlaintextBytes
             )
-            let plaintext = canonical.subdata(in: lower..<upper)
+            let plaintext = canonical.subdata(in: lower ..< upper)
             let frameAssociatedData = framedAssociatedData(
                 baseAssociatedData: associatedData,
                 frameIndex: frameIndex,
@@ -1457,16 +1457,16 @@ public enum ProviderHandoffPayloadCodec {
                 canonicalContentDigest: contentDigest,
                 transportDigestSHA256: transportDigest,
                 protection:
-                    .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2,
+                .destinationSealedFramedX25519HKDFSHA256XChaCha20Poly1305V2,
                 destinationEncryption: ProviderHandoffPayloadEncryptionV1(
                     encryptionAlgorithm:
-                        .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
+                    .x25519HKDFSHA256XChaCha20Poly1305FramedV2,
                     destinationKeyPurpose: .destinationPayloadEncryption,
                     destinationKeyID: destinationKeyID,
                     ephemeralPublicKey: ephemeralPublicKey,
                     nonce: nonce,
                     associatedDataDigestSHA256:
-                        ProviderHandoffDigest.hex(associatedData)
+                    ProviderHandoffDigest.hex(associatedData)
                 )
             ),
             transportFileURL: transportFileURL
@@ -1479,7 +1479,7 @@ public enum ProviderHandoffPayloadCodec {
     ) throws {
         guard
             package.schemaVersion
-                == ProviderHandoffPayloadPackageV1.currentSchemaVersion,
+            == ProviderHandoffPayloadPackageV1.currentSchemaVersion,
             !package.entries.isEmpty
         else {
             throw package.entries.isEmpty
@@ -1497,9 +1497,9 @@ public enum ProviderHandoffPayloadCodec {
                 !entry.recordKind.isEmpty,
                 entry.schemaVersion > 0,
                 entry.entryID.precomposedStringWithCanonicalMapping
-                    == entry.entryID,
+                == entry.entryID,
                 entry.recordKind.precomposedStringWithCanonicalMapping
-                    == entry.recordKind
+                == entry.recordKind
             else {
                 throw ProviderHandoffPayloadCodecError.invalidEntry(entry.entryID)
             }
@@ -1520,10 +1520,10 @@ public enum ProviderHandoffPayloadCodec {
         let sorted = package.entries.sorted { lhs, rhs in
             let lhsIndex =
                 lhs.sourceStateRootUUID.flatMap { sourceIndexes[$0] }
-                ?? Int.max
+                    ?? Int.max
             let rhsIndex =
                 rhs.sourceStateRootUUID.flatMap { sourceIndexes[$0] }
-                ?? Int.max
+                    ?? Int.max
             if lhsIndex != rhsIndex {
                 return lhsIndex < rhsIndex
             }
@@ -1555,7 +1555,7 @@ public enum ProviderHandoffPayloadCodec {
                     {
                         try $0(cborMajor(0, value: UInt64(package.schemaVersion)))
                     }
-                ),
+                )
             ],
             to: sink
         )
@@ -1596,7 +1596,7 @@ public enum ProviderHandoffPayloadCodec {
                             try $0(Data([0xF6]))
                         }
                     }
-                ),
+                )
             ],
             to: sink
         )
@@ -1673,7 +1673,7 @@ public enum ProviderHandoffPayloadCodec {
                         }
                     ),
                     ("sourceStateRootUUID", { try $0(cborText(source)) }),
-                    ("tokenID", { try $0(cborText(tokenID)) }),
+                    ("tokenID", { try $0(cborText(tokenID)) })
                 ],
                 to: { authentication.update(data: $0) }
             )
@@ -1742,15 +1742,15 @@ public enum ProviderHandoffPayloadCodec {
         var output = Data()
         let prefix = major << 5
         switch value {
-        case 0..<24:
+        case 0 ..< 24:
             output.append(prefix | UInt8(value))
-        case 24...UInt64(UInt8.max):
+        case 24 ... UInt64(UInt8.max):
             output.append(prefix | 24)
             output.append(UInt8(value))
-        case 0...UInt64(UInt16.max):
+        case 0 ... UInt64(UInt16.max):
             output.append(prefix | 25)
             appendBigEndian(UInt16(value), to: &output)
-        case 0...UInt64(UInt32.max):
+        case 0 ... UInt64(UInt32.max):
             output.append(prefix | 26)
             appendBigEndian(UInt32(value), to: &output)
         default:
@@ -1877,7 +1877,7 @@ public enum ProviderHandoffPayloadCodec {
         var result = base
         var index = frameIndex.bigEndian
         withUnsafeBytes(of: &index) { bytes in
-            for offset in 0..<bytes.count {
+            for offset in 0 ..< bytes.count {
                 result[result.startIndex + 16 + offset] ^= bytes[offset]
             }
         }
@@ -1966,7 +1966,7 @@ public enum ProviderHandoffPayloadCodec {
             }
             guard
                 ProviderHandoffDigest.hex(Data(digest.finalize()))
-                    == expectedSHA256
+                == expectedSHA256
             else {
                 throw ProviderHandoffPayloadCodecError.transportDigestMismatch
             }
@@ -2001,6 +2001,6 @@ public enum ProviderHandoffPayloadCodec {
 
     private static func randomBytes(count: Int) -> Data {
         var generator = SystemRandomNumberGenerator()
-        return Data((0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        return Data((0 ..< count).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
     }
 }

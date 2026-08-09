@@ -138,7 +138,7 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
         let responseBody = try await Self.readBytes(
             on: socket,
             maximumBytes:
-                ContainerEngineProviderHandoffControlRequestV1.maximumBodyBytes
+            ContainerEngineProviderHandoffControlRequestV1.maximumBodyBytes
         )
         try response.validate(body: responseBody)
         return ContainerEngineProviderHandoffControlResultV1(
@@ -167,7 +167,7 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
                 "provider did not send an identity hello"
             )
         }
-        guard claimedCodeIdentity == (try socket.peerCodeIdentity()) else {
+        guard try claimedCodeIdentity == (socket.peerCodeIdentity()) else {
             throw ContainerEngineProviderSessionError.codeIdentityMismatch
         }
         if let expectedDigest, expectedDigest != fingerprint.digest {
@@ -235,7 +235,7 @@ public struct ContainerEngineProviderSessionClient: DockerHTTPResponder, Sendabl
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
             var frame = ProviderSessionFrame(kind: .requestBody)
-            frame.data = data.subdata(in: offset..<end)
+            frame.data = data.subdata(in: offset ..< end)
             try await socket.writeFrame(frame)
             offset = end
         }
@@ -382,7 +382,7 @@ private actor ProviderRemoteHijackCoordinator {
         var offset = 0
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
-            try await writeInputFrame(data.subdata(in: offset..<end))
+            try await writeInputFrame(data.subdata(in: offset ..< end))
             offset = end
         }
     }

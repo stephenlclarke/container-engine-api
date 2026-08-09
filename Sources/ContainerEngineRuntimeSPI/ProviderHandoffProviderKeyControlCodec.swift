@@ -115,7 +115,7 @@ public enum ProviderHandoffProviderKeyControlCodec {
             value.schemaVersion == 1,
             !value.trustKeys.isEmpty,
             value.trustKeys.map(\.keyID)
-                == value.trustKeys.map(\.keyID).sorted(),
+            == value.trustKeys.map(\.keyID).sorted(),
             value.trustKeys.allSatisfy({
                 $0.providerFingerprint == value.context.providerFingerprint
                     && $0.stateRootUUID == value.context.stateRootUUID
@@ -148,7 +148,7 @@ public enum ProviderHandoffProviderKeyControlCodec {
             validFingerprint(value.challenge.destinationProviderFingerprint),
             canonicalUUID(value.challenge.destinationStateRootUUID),
             [.destinationPayloadEncryption, .destinationLineageKeyEncryption]
-                .contains(value.challenge.destinationKeyPurpose),
+            .contains(value.challenge.destinationKeyPurpose),
             !value.challenge.destinationKeyID.isEmpty,
             value.challenge.challengeEphemeralPublicKey.count == 32,
             value.challenge.challengeNonce.count == 24,
@@ -185,7 +185,7 @@ public enum ProviderHandoffProviderKeyControlCodec {
             validFingerprint(value.destinationProviderFingerprint),
             canonicalUUID(value.destinationStateRootUUID),
             [.destinationPayloadEncryption, .destinationLineageKeyEncryption]
-                .contains(value.destinationKeyPurpose),
+            .contains(value.destinationKeyPurpose),
             !value.destinationKeyID.isEmpty,
             value.challengeEphemeralPublicKey.count == 32,
             value.challengeNonce.count == 24,
@@ -197,12 +197,12 @@ public enum ProviderHandoffProviderKeyControlCodec {
                 value.responseDigestSHA256
             )) != nil,
             value.destinationSignature.purpose
-                == .destinationPossessionSigning,
+            == .destinationPossessionSigning,
             value.destinationSignature.signerRole == .destinationProvider,
             value.destinationSignature.providerFingerprint
-                == value.destinationProviderFingerprint,
+            == value.destinationProviderFingerprint,
             value.destinationSignature.stateRootUUID
-                == value.destinationStateRootUUID,
+            == value.destinationStateRootUUID,
             value.destinationSignature.signature.count == 64
         else {
             throw ProviderHandoffProviderKeyControlCodecError.invalidRecord
@@ -235,15 +235,15 @@ public enum ProviderHandoffProviderKeyControlCodec {
         return uuid.uuidString.lowercased() == value
     }
 
-    private static func encode<T: Encodable>(_ value: T) throws -> Data {
+    private static func encode(_ value: some Encodable) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         do {
             let data = try encoder.encode(value)
             guard
                 data.count
-                    <= ContainerEngineProviderControlMetadataLimits
-                    .maximumBodyBytes
+                <= ContainerEngineProviderControlMetadataLimits
+                .maximumBodyBytes
             else {
                 throw ProviderHandoffProviderKeyControlCodecError.boundsExceeded
             }
@@ -259,7 +259,7 @@ public enum ProviderHandoffProviderKeyControlCodec {
         guard
             !data.isEmpty,
             data.count
-                <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
+            <= ContainerEngineProviderControlMetadataLimits.maximumBodyBytes
         else {
             throw ProviderHandoffProviderKeyControlCodecError.boundsExceeded
         }
@@ -286,19 +286,19 @@ public enum ProviderHandoffProviderKeySnapshotValidator {
             context.providerFingerprint == expectedProviderFingerprint,
             context.stateRootUUID == expectedStateRootUUID,
             context.owningBundleIdentifier
-                == peerCodeIdentity.signingIdentifier,
+            == peerCodeIdentity.signingIdentifier,
             context.codeRequirementDigestSHA256
-                == peerCodeIdentity.designatedRequirementDigestSHA256,
+            == peerCodeIdentity.designatedRequirementDigestSHA256,
             context.teamIdentifier == peerCodeIdentity.teamIdentifier,
             context.providerRegistrationDigestSHA256
-                == providerRegistrationDigestSHA256,
+            == providerRegistrationDigestSHA256,
             context.enrolledAtUnixSeconds >= context.notBeforeUnixSeconds,
             context.enrolledAtUnixSeconds <= context.notAfterUnixSeconds,
             atUnixSeconds >= context.notBeforeUnixSeconds,
             atUnixSeconds <= context.notAfterUnixSeconds,
             snapshot.trustKeys.count == 5,
             snapshot.trustKeys.map(\.keyID)
-                == snapshot.trustKeys.map(\.keyID).sorted()
+            == snapshot.trustKeys.map(\.keyID).sorted()
         else {
             throw ProviderHandoffProviderKeyControlCodecError.invalidRecord
         }
@@ -320,7 +320,7 @@ public enum ProviderHandoffProviderKeySnapshotValidator {
                 .destinationLineageKeyEncryption: (
                     .x25519V1,
                     .destinationProvider
-                ),
+                )
             ]
         guard Set(snapshot.trustKeys.map(\.purpose)) == Set(expected.keys) else {
             throw ProviderHandoffProviderKeyControlCodecError.invalidRecord
@@ -333,14 +333,14 @@ public enum ProviderHandoffProviderKeySnapshotValidator {
                 key.providerFingerprint == expectedProviderFingerprint,
                 key.stateRootUUID == expectedStateRootUUID,
                 key.provenance.owningBundleIdentifier
-                    == context.owningBundleIdentifier,
+                == context.owningBundleIdentifier,
                 key.provenance.codeRequirementDigestSHA256
-                    == context.codeRequirementDigestSHA256,
+                == context.codeRequirementDigestSHA256,
                 key.provenance.teamIdentifier == context.teamIdentifier,
                 key.provenance.providerRegistrationDigestSHA256
-                    == providerRegistrationDigestSHA256,
+                == providerRegistrationDigestSHA256,
                 key.provenance.enrolledAtUnixSeconds
-                    == context.enrolledAtUnixSeconds,
+                == context.enrolledAtUnixSeconds,
                 key.notBeforeUnixSeconds == context.notBeforeUnixSeconds,
                 key.notAfterUnixSeconds == context.notAfterUnixSeconds,
                 key.revokedAtUnixSeconds == nil,
