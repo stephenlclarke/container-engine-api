@@ -553,16 +553,14 @@ struct ContainerEngineProviderSessionTests {
                             transportDigestSHA256: digest
                         )
                     )
-            var try record =
-                try await ProviderHandoffBundleObjectControlCodec
-                    .decodeRecord(
-                        Self.control(
-                            client: client,
-                            requestID: "object-declare",
-                            operation: .objectDeclare,
-                            body: declareBody
-                        ).body
-                    )
+            let declareResponse = try await Self.control(
+                client: client,
+                requestID: "object-declare",
+                operation: .objectDeclare,
+                body: declareBody
+            )
+            var record = try ProviderHandoffBundleObjectControlCodec
+                .decodeRecord(declareResponse.body)
 
             var offset = 0
             while offset < bytes.count {
@@ -582,16 +580,14 @@ struct ContainerEngineProviderSessionTests {
                                 bytes: bytes.subdata(in: offset ..< upper)
                             )
                         )
-                try record =
-                    try await ProviderHandoffBundleObjectControlCodec
-                        .decodeRecord(
-                            Self.control(
-                                client: client,
-                                requestID: "object-append-\(offset)",
-                                operation: .objectAppend,
-                                body: appendBody
-                            ).body
-                        )
+                let appendResponse = try await Self.control(
+                    client: client,
+                    requestID: "object-append-\(offset)",
+                    operation: .objectAppend,
+                    body: appendBody
+                )
+                record = try ProviderHandoffBundleObjectControlCodec
+                    .decodeRecord(appendResponse.body)
                 offset = upper
             }
 
@@ -603,14 +599,14 @@ struct ContainerEngineProviderSessionTests {
                             expectedObjectRevision: record.objectRevision
                         )
                     )
-            record = try await ProviderHandoffBundleObjectControlCodec.decodeRecord(
-                Self.control(
-                    client: client,
-                    requestID: "object-verify",
-                    operation: .objectVerify,
-                    body: verifyBody
-                ).body
+            let verifyResponse = try await Self.control(
+                client: client,
+                requestID: "object-verify",
+                operation: .objectVerify,
+                body: verifyBody
             )
+            record = try ProviderHandoffBundleObjectControlCodec
+                .decodeRecord(verifyResponse.body)
             #expect(record.state == .verified)
 
             var reconstructed = Data()
@@ -628,16 +624,14 @@ struct ContainerEngineProviderSessionTests {
                                 )
                             )
                         )
-                let try chunk =
-                    try await ProviderHandoffBundleObjectControlCodec
-                        .decodeChunk(
-                            Self.control(
-                                client: client,
-                                requestID: "object-read-\(offset)",
-                                operation: .objectRead,
-                                body: readBody
-                            ).body
-                        )
+                let readResponse = try await Self.control(
+                    client: client,
+                    requestID: "object-read-\(offset)",
+                    operation: .objectRead,
+                    body: readBody
+                )
+                let chunk = try ProviderHandoffBundleObjectControlCodec
+                    .decodeChunk(readResponse.body)
                 #expect(chunk.offset == UInt64(offset))
                 reconstructed.append(chunk.bytes)
                 offset += chunk.bytes.count

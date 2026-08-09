@@ -313,7 +313,10 @@ struct ContainerEngineServiceTests {
                 #expect(
                     state.providerSelection.trustRegistryRevision == 1
                 )
-                let try gatewayContext =
+                let gatewayRegistrationDigest =
+                    try ProviderHandoffGatewayKeyEnrollmentContextV1
+                        .registrationDigest(codeIdentity: codeIdentity)
+                let gatewayContext =
                     ProviderHandoffGatewayKeyEnrollmentContextV1(
                         owningBundleIdentifier:
                         codeIdentity.signingIdentifier,
@@ -322,10 +325,7 @@ struct ContainerEngineServiceTests {
                             .designatedRequirementDigestSHA256,
                         teamIdentifier: codeIdentity.teamIdentifier,
                         gatewayRegistrationDigestSHA256:
-                        ProviderHandoffGatewayKeyEnrollmentContextV1
-                            .registrationDigest(
-                                codeIdentity: codeIdentity
-                            ),
+                        gatewayRegistrationDigest,
                         enrolledAtUnixSeconds: 100,
                         notBeforeUnixSeconds: 100,
                         notAfterUnixSeconds: UInt64.max
