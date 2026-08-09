@@ -44,6 +44,36 @@ func `public gateway owns Docker ping negotiation`() async throws {
 }
 
 @Test
+func `public gateway relays declared volume creation REST requests`() async throws {
+    try await withPublicGateway(
+        capabilityIdentifier: "engine.route.VolumeCreate",
+        capabilityStatus: .native
+    ) { publicSocket in
+        let client = try GatewayUnixSocketClient(path: publicSocket)
+        defer { client.close() }
+        let requestBody = Data(
+            #"{"Name":"fixture-volume","Driver":"local"}"#.utf8
+        )
+        try client.write(
+            "POST /v1.53/volumes/create HTTP/1.1\r\n"
+                + "Host: localhost\r\n"
+                + "Connection: close\r\n"
+                + "Content-Type: application/json\r\n"
+                + "Content-Length: \(requestBody.count)\r\n\r\n"
+        )
+        try client.write(requestBody)
+
+        let response = try client.readUntil(
+            Data(#""Scope":"local"}"#.utf8)
+        )
+        let responseText = String(decoding: response, as: UTF8.self)
+        #expect(responseText.contains("201 Created"))
+        #expect(responseText.contains(#""Name":"fixture-volume""#))
+        #expect(responseText.contains(#""Driver":"local""#))
+    }
+}
+
+@Test
 func `public gateway relays websocket bytes through its provider session`() async throws {
     try await withPublicGateway(
         capabilityIdentifier: "engine.route.ContainerAttachWebsocket",
@@ -203,6 +233,21 @@ private func withPublicGateway(
 
 private struct GatewayStreamingResponder: DockerHTTPResponder {
     func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
+        if
+            request.method == .post,
+            request.target == "/v1.53/volumes/create"
+        {
+            return DockerHTTPResponse(
+                status: 201,
+                headers: ["Content-Type": "application/json"],
+                body: .bytes(
+                    Data(
+                        #"{"Name":"fixture-volume","Driver":"local","Mountpoint":"/fixture","CreatedAt":"2026-08-08T00:00:00Z","Labels":{},"Options":{},"Scope":"local"}"#
+                            .utf8
+                    )
+                )
+            )
+        }
         if
             request.method == .get,
             request.target

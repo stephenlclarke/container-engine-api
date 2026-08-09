@@ -263,6 +263,7 @@ public protocol DockerTerminalResizeBackend: Sendable {
 public enum DockerLoggingBackendError: Error, Equatable, Sendable {
     case containerNotFound(String)
     case imageNotFound(String)
+    case volumeDriverNotFound(String)
     case conflict(String)
     case invalidParameter(String)
     case server(String)
@@ -274,6 +275,8 @@ public enum DockerLoggingBackendError: Error, Equatable, Sendable {
             "No such container: \(identifier)"
         case let .imageNotFound(identifier):
             "No such image: \(identifier)"
+        case let .volumeDriverNotFound(driver):
+            "plugin \"\(driver)\" not found"
         case let .conflict(message), let .invalidParameter(message), let .server(message):
             message
         case .unsupportedLogReader:
