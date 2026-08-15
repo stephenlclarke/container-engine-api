@@ -7,6 +7,8 @@ import Darwin
 import Foundation
 
 enum ProviderHandoffPayloadPackageFileDecoder {
+    static let maximumCanonicalRecordBytes = 64 * 1024 * 1024
+
     static func decode(
         canonicalFileURL: URL,
         recordDirectoryURL: URL,

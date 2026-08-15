@@ -49,6 +49,11 @@ public struct DockerContainerRestartPolicyRequest:
         case name = "Name"
         case maximumRetryCount = "MaximumRetryCount"
     }
+
+    public init(name: String? = nil, maximumRetryCount: UInt32? = nil) {
+        self.name = name
+        self.maximumRetryCount = maximumRetryCount
+    }
 }
 
 public struct DockerContainerPortBindingRequest:
@@ -172,12 +177,61 @@ public protocol DockerContainerLifecycleBackend: Sendable {
         requestedName: String?
     ) async throws -> DockerContainerCreateResult
     func startContainer(containerID: String) async throws
-    func stopContainer(containerID: String, timeoutSeconds: Int64?) async throws
+    func stopContainer(
+        containerID: String,
+        timeoutSeconds: Int64?,
+        signal: String?
+    ) async throws
     func deleteContainer(
         containerID: String,
         force: Bool,
         removeVolumes: Bool
     ) async throws
+}
+
+/// Docker lifecycle mutations that must be routed through the same selected
+/// authority as create/start/stop/delete. Keeping these operations on one
+/// capability prevents the HTTP controller from synthesizing multi-step state
+/// transitions or opening a second resource owner.
+public protocol DockerContainerActionBackend: Sendable {
+    func restartContainer(
+        containerID: String,
+        timeoutSeconds: Int64?,
+        signal: String?
+    ) async throws
+    func killContainer(containerID: String, signal: String) async throws
+    func pauseContainer(containerID: String) async throws
+    func unpauseContainer(containerID: String) async throws
+    func renameContainer(containerID: String, newName: String) async throws
+    func updateContainer(
+        containerID: String,
+        request: DockerContainerUpdateRequest
+    ) async throws -> [String]
+}
+
+/// Mutable Docker HostConfig fields supported by the lifecycle authority.
+/// Unknown fields remain forward compatible at the JSON boundary; represented
+/// fields are applied atomically or rejected without publishing a false update.
+public struct DockerContainerUpdateRequest: Decodable, Equatable, Sendable {
+    public var memoryBytes: Int64?
+    public var nanoCPUs: Int64?
+    public var restartPolicy: DockerContainerRestartPolicyRequest?
+
+    private enum CodingKeys: String, CodingKey {
+        case memoryBytes = "Memory"
+        case nanoCPUs = "NanoCpus"
+        case restartPolicy = "RestartPolicy"
+    }
+
+    public init(
+        memoryBytes: Int64? = nil,
+        nanoCPUs: Int64? = nil,
+        restartPolicy: DockerContainerRestartPolicyRequest? = nil
+    ) {
+        self.memoryBytes = memoryBytes
+        self.nanoCPUs = nanoCPUs
+        self.restartPolicy = restartPolicy
+    }
 }
 
 /// Docker Engine's supported container-wait conditions.

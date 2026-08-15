@@ -918,10 +918,51 @@ func `container lifecycle routes decode typed requests and call native authority
     let stop = await controller.respond(
         to: DockerHTTPRequest(
             method: .post,
-            target: "/containers/fixture-id/stop?t=9"
+            target: "/containers/fixture-id/stop?t=9&signal=SIGUSR1"
         )
     )
     #expect(stop.status == 204)
+
+    let restart = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/restart?t=7&signal=SIGUSR2"
+        )
+    )
+    #expect(restart.status == 204)
+
+    let kill = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/kill?signal=SIGUSR1"
+        )
+    )
+    #expect(kill.status == 204)
+
+    #expect(await controller.respond(to: DockerHTTPRequest(
+        method: .post,
+        target: "/containers/fixture-id/pause"
+    )).status == 204)
+    #expect(await controller.respond(to: DockerHTTPRequest(
+        method: .post,
+        target: "/containers/fixture-id/unpause"
+    )).status == 204)
+    #expect(await controller.respond(to: DockerHTTPRequest(
+        method: .post,
+        target: "/containers/fixture-id/rename?name=renamed-fixture"
+    )).status == 204)
+
+    let update = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .post,
+            target: "/containers/fixture-id/update",
+            body: Data(
+                #"{"Memory":1048576,"NanoCpus":500000000,"RestartPolicy":{"Name":"unless-stopped"}}"#.utf8
+            )
+        )
+    )
+    #expect(update.status == 200)
+    #expect(try responseJSONObject(update)["Warnings"] as? [String] == ["fixture warning"])
 
     let defaultWait = await controller.respond(
         to: DockerHTTPRequest(
@@ -987,7 +1028,13 @@ func `container lifecycle routes decode typed requests and call native authority
         backend.lifecycleCalls
             == [
                 "start:fixture-id",
-                "stop:fixture-id:9",
+                "stop:fixture-id:9:SIGUSR1",
+                "restart:fixture-id:7:SIGUSR2",
+                "kill:fixture-id:SIGUSR1",
+                "pause:fixture-id",
+                "unpause:fixture-id",
+                "rename:fixture-id:renamed-fixture",
+                "update:fixture-id:1048576:500000000:unless-stopped",
                 "wait:fixture-id:not-running",
                 "wait:fixture-id:not-running",
                 "wait:fixture-id:next-exit",
@@ -1389,6 +1436,7 @@ private struct PullStatusPayload: Codable, Equatable {
 private final class FakeLoggingBackend:
     DockerLoggingBackend,
     DockerContainerLifecycleBackend,
+    DockerContainerActionBackend,
     DockerContainerWaitBackend,
     DockerEngineDiscoveryBackend,
     DockerImageDiscoveryBackend,
@@ -1674,13 +1722,62 @@ private final class FakeLoggingBackend:
 
     func stopContainer(
         containerID: String,
-        timeoutSeconds: Int64?
+        timeoutSeconds: Int64?,
+        signal: String?
     ) async throws {
         lock.withLock {
             capturedLifecycleCalls.append(
-                "stop:\(containerID):\(timeoutSeconds.map(String.init) ?? "nil")"
+                "stop:\(containerID):\(timeoutSeconds.map(String.init) ?? "nil"):\(signal ?? "nil")"
             )
         }
+    }
+
+    func restartContainer(
+        containerID: String,
+        timeoutSeconds: Int64?,
+        signal: String?
+    ) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "restart:\(containerID):\(timeoutSeconds.map(String.init) ?? "nil"):\(signal ?? "nil")"
+            )
+        }
+    }
+
+    func killContainer(containerID: String, signal: String) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append("kill:\(containerID):\(signal)")
+        }
+    }
+
+    func pauseContainer(containerID: String) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append("pause:\(containerID)")
+        }
+    }
+
+    func unpauseContainer(containerID: String) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append("unpause:\(containerID)")
+        }
+    }
+
+    func renameContainer(containerID: String, newName: String) async throws {
+        lock.withLock {
+            capturedLifecycleCalls.append("rename:\(containerID):\(newName)")
+        }
+    }
+
+    func updateContainer(
+        containerID: String,
+        request: DockerContainerUpdateRequest
+    ) async throws -> [String] {
+        lock.withLock {
+            capturedLifecycleCalls.append(
+                "update:\(containerID):\(request.memoryBytes.map(String.init) ?? "nil"):\(request.nanoCPUs.map(String.init) ?? "nil"):\(request.restartPolicy?.name ?? "nil")"
+            )
+        }
+        return ["fixture warning"]
     }
 
     func deleteContainer(
@@ -1875,11 +1972,13 @@ private struct FakeLifecycleBackendWithoutWait:
 
     func stopContainer(
         containerID: String,
-        timeoutSeconds: Int64?
+        timeoutSeconds: Int64?,
+        signal: String?
     ) async throws {
         try await base.stopContainer(
             containerID: containerID,
-            timeoutSeconds: timeoutSeconds
+            timeoutSeconds: timeoutSeconds,
+            signal: signal
         )
     }
 
