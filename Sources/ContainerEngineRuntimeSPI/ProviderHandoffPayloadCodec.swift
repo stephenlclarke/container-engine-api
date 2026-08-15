@@ -775,7 +775,9 @@ public enum ProviderHandoffPayloadCodec {
             recordDirectoryURL: recordDirectoryURL,
             expectedPartKind: expectedPartKind,
             maximumCollectionEntries: 1_000_000,
-            maximumCanonicalRecordBytes: 64 * 1024 * 1024
+            maximumCanonicalRecordBytes:
+            ProviderHandoffPayloadPackageFileDecoder
+                .maximumCanonicalRecordBytes
         )
         let digest = try sealedContentDigest(
             package,

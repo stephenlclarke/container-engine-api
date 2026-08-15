@@ -30,6 +30,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
     private let imageMutationBackend: (any DockerImageMutationBackend)?
     private let volumeBackend: (any DockerVolumeBackend)?
     private let lifecycleBackend: (any DockerContainerLifecycleBackend)?
+    private let actionBackend: (any DockerContainerActionBackend)?
     private let waitBackend: (any DockerContainerWaitBackend)?
     private let sharedResponseBackend: (any DockerLoggingSharedResponseBackend)?
     private let terminalResizeBackend: (any DockerTerminalResizeBackend)?
@@ -42,6 +43,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         minimumAPIVersion = try DockerAPIVersion("1.44")
         maximumAPIVersion = try DockerAPIVersion("1.53")
         let lifecycleBackend = backend as? any DockerContainerLifecycleBackend
+        let actionBackend = backend as? any DockerContainerActionBackend
         let waitBackend = backend as? any DockerContainerWaitBackend
         let discoveryBackend = backend as? any DockerEngineDiscoveryBackend
         let imageDiscoveryBackend = backend as? any DockerImageDiscoveryBackend
@@ -51,6 +53,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             minimum: minimumAPIVersion,
             maximum: maximumAPIVersion,
             includesLifecycle: lifecycleBackend != nil,
+            includesActions: actionBackend != nil,
             includesWait: waitBackend != nil,
             includesDiscovery: discoveryBackend != nil,
             includesImageDiscovery: imageDiscoveryBackend != nil,
@@ -63,6 +66,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         self.imageMutationBackend = imageMutationBackend
         self.volumeBackend = volumeBackend
         self.lifecycleBackend = lifecycleBackend
+        self.actionBackend = actionBackend
         self.waitBackend = waitBackend
         self.sharedResponseBackend = sharedResponseBackend
         terminalResizeBackend = backend as? any DockerTerminalResizeBackend
@@ -176,6 +180,34 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             return await stopResponse(
                 containerID: match.parameters["id"] ?? "",
                 target: match.target
+            )
+        case RouteIdentifier.restart:
+            return await restartResponse(
+                containerID: match.parameters["id"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.kill:
+            return await killResponse(
+                containerID: match.parameters["id"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.pause:
+            return await pauseResponse(
+                containerID: match.parameters["id"] ?? ""
+            )
+        case RouteIdentifier.unpause:
+            return await unpauseResponse(
+                containerID: match.parameters["id"] ?? ""
+            )
+        case RouteIdentifier.rename:
+            return await renameResponse(
+                containerID: match.parameters["id"] ?? "",
+                target: match.target
+            )
+        case RouteIdentifier.update:
+            return await updateResponse(
+                request: request,
+                containerID: match.parameters["id"] ?? ""
             )
         case RouteIdentifier.wait:
             return await waitResponse(
@@ -460,12 +492,126 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         } else {
             timeout = nil
         }
+        let signal = target.first("signal")
         do {
             try await lifecycleBackend.stopContainer(
                 containerID: containerID,
-                timeoutSeconds: timeout
+                timeoutSeconds: timeout,
+                signal: signal
             )
             return .empty(status: 204)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func restartResponse(
+        containerID: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let actionBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        let rawTimeout = target.first("t") ?? target.first("timeout")
+        let timeout: Int64?
+        if let rawTimeout {
+            guard let value = Int64(rawTimeout), value >= -1 else {
+                return Self.errorResponse(status: 400, message: "invalid restart timeout")
+            }
+            timeout = value
+        } else {
+            timeout = nil
+        }
+        let signal = target.first("signal")
+        do {
+            try await actionBackend.restartContainer(
+                containerID: containerID,
+                timeoutSeconds: timeout,
+                signal: signal
+            )
+            return .empty(status: 204)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func killResponse(
+        containerID: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let actionBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        let signal = target.first("signal") ?? "SIGKILL"
+        do {
+            try await actionBackend.killContainer(containerID: containerID, signal: signal)
+            return .empty(status: 204)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func pauseResponse(containerID: String) async -> DockerHTTPResponse {
+        guard let actionBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            try await actionBackend.pauseContainer(containerID: containerID)
+            return .empty(status: 204)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func unpauseResponse(containerID: String) async -> DockerHTTPResponse {
+        guard let actionBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            try await actionBackend.unpauseContainer(containerID: containerID)
+            return .empty(status: 204)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func renameResponse(
+        containerID: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
+        guard let actionBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        guard let name = target.first("name"), !name.isEmpty else {
+            return Self.errorResponse(status: 400, message: "invalid container name")
+        }
+        do {
+            try await actionBackend.renameContainer(containerID: containerID, newName: name)
+            return .empty(status: 204)
+        } catch {
+            return Self.backendErrorResponse(error)
+        }
+    }
+
+    private func updateResponse(
+        request: DockerHTTPRequest,
+        containerID: String
+    ) async -> DockerHTTPResponse {
+        guard let actionBackend else {
+            return Self.errorResponse(status: 404, message: "page not found")
+        }
+        do {
+            let decoded = try DockerJSON.decoder.decode(
+                DockerContainerUpdateRequest.self,
+                from: request.body
+            )
+            let warnings = try await actionBackend.updateContainer(
+                containerID: containerID,
+                request: decoded
+            )
+            return Self.jsonLineResponse(UpdateResponse(warnings: warnings))
+        } catch is DecodingError {
+            return Self.errorResponse(status: 400, message: "invalid container update request")
         } catch {
             return Self.backendErrorResponse(error)
         }
@@ -1368,6 +1514,7 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         minimum: DockerAPIVersion,
         maximum: DockerAPIVersion,
         includesLifecycle: Bool,
+        includesActions: Bool,
         includesWait: Bool,
         includesDiscovery: Bool,
         includesImageDiscovery: Bool,
@@ -1472,6 +1619,58 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
                 )
             }
         }
+        if includesActions {
+            try routes.append(contentsOf: [
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.restart,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/restart"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.kill,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/kill"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.pause,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/pause"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.unpause,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/unpause"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.rename,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/rename"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                ),
+                DockerRouteMetadata(
+                    identifier: RouteIdentifier.update,
+                    method: .post,
+                    pattern: DockerRoutePattern("/containers/{id}/update"),
+                    introduced: minimum,
+                    responseMode: .bytes,
+                    disposition: .implemented
+                )
+            ])
+        }
         if includesDiscovery {
             try routes.append(contentsOf: [
                 DockerRouteMetadata(
@@ -1571,6 +1770,12 @@ private enum RouteIdentifier {
     static let create = "container.create"
     static let start = "container.start"
     static let stop = "container.stop"
+    static let restart = "container.restart"
+    static let kill = "container.kill"
+    static let pause = "container.pause"
+    static let unpause = "container.unpause"
+    static let rename = "container.rename"
+    static let update = "container.update"
     static let wait = "container.wait"
     static let delete = "container.delete"
     static let inspect = "container.inspect"
@@ -1584,6 +1789,14 @@ private enum RouteIdentifier {
     static let imageTag = "image.tag"
     static let imageDelete = "image.delete"
     static let volumeCreate = "volume.create"
+}
+
+private struct UpdateResponse: Encodable {
+    let warnings: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case warnings = "Warnings"
+    }
 }
 
 private struct ImagePullProgress: Encodable {
