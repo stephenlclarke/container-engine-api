@@ -1,19 +1,14 @@
 name: CodeQL
 
+# CodeQL performs a full Swift rebuild. Dispatch it from main only for a
+# published release so SARIF uploads retain a supported branch ref.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-  schedule:
-    - cron: "29 3 * * 1"
   workflow_dispatch:
+    inputs:
+      release_ref:
+        description: "Published semantic release tag to recover"
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -21,7 +16,7 @@ permissions:
   security-events: write
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: codeql-${{ github.workflow }}-${{ inputs.release_ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,10 +25,45 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     steps:
+      - name: Require a published semantic release on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.release_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            printf 'CodeQL recovery must be dispatched from main, got %s\n' "$GITHUB_REF" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_REF" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+            printf 'CodeQL recovery requires a bare semantic release tag: %s\n' "$RELEASE_REF" >&2
+            exit 1
+          fi
+          release_json="$(gh release view "$RELEASE_REF" --repo "$GITHUB_REPOSITORY" --json isDraft,publishedAt)"
+          if ! jq -e '.isDraft == false and .publishedAt != null' <<<"$release_json" >/dev/null; then
+            printf 'CodeQL recovery requires a published, non-draft release: %s\n' "$RELEASE_REF" >&2
+            exit 1
+          fi
+
       - name: Checkout container-engine-api
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: refs/tags/${{ inputs.release_ref }}
+
+      - name: Verify release checkout
+        id: release-checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$actual" refs/remotes/origin/main; then
+            printf 'Release commit is not reachable from origin/main: %s\n' "$actual" >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$actual" >> "$GITHUB_OUTPUT"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -48,3 +78,5 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:swift"
+          ref: refs/heads/main
+          sha: ${{ steps.release-checkout.outputs.sha }}

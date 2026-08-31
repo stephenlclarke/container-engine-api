@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -52,6 +54,8 @@ jobs:
 
   documentation:
     name: Build DocC documentation
+    if: github.event_name == 'release'
+    needs: test
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -80,4 +84,6 @@ jobs:
         env:
           DOCUMENTATION_RESULT: ${{ needs.documentation.result }}
           TEST_RESULT: ${{ needs.test.result }}
-        run: test "$TEST_RESULT" = success && test "$DOCUMENTATION_RESULT" = success
+        run: |
+          test "$TEST_RESULT" = success
+          test "$DOCUMENTATION_RESULT" = success || test "$DOCUMENTATION_RESULT" = skipped
