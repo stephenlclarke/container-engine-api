@@ -53,11 +53,16 @@ public enum ProviderHandoffCodeIdentityError:
 /// provider executable. The gateway independently resolves the peer's same
 /// values before accepting a public-key enrollment proposal.
 public enum ProviderHandoffCodeIdentity {
+    private static let currentIdentityCache =
+        ProviderHandoffCurrentCodeIdentityCache()
+
     public static func current() throws -> ProviderHandoffCodeIdentityV1 {
-        guard let executable = Bundle.main.executableURL else {
-            throw ProviderHandoffCodeIdentityError.unavailable
+        try currentIdentityCache.identity {
+            guard let executable = Bundle.main.executableURL else {
+                throw ProviderHandoffCodeIdentityError.unavailable
+            }
+            return try load(at: executable)
         }
-        return try load(at: executable)
     }
 
     public static func load(
@@ -137,5 +142,29 @@ public enum ProviderHandoffCodeIdentity {
                 Data(requirementText.utf8)
             )
         )
+    }
+}
+
+/// Retains the successfully verified identity of this process's executable.
+///
+/// A running process cannot change its executable image. Revalidating the same
+/// on-disk image for every provider handshake adds avoidable Security.framework
+/// work and can make a healthy gateway miss its bounded health deadline. The
+/// lock also coalesces concurrent first use, while failures remain retryable.
+final class ProviderHandoffCurrentCodeIdentityCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cached: ProviderHandoffCodeIdentityV1?
+
+    func identity(
+        load: () throws -> ProviderHandoffCodeIdentityV1
+    ) throws -> ProviderHandoffCodeIdentityV1 {
+        try lock.withLock {
+            if let cached {
+                return cached
+            }
+            let identity = try load()
+            cached = identity
+            return identity
+        }
     }
 }
