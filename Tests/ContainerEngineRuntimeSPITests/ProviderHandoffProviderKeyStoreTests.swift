@@ -10,6 +10,71 @@ import Testing
 @Suite("Provider handoff provider key store", .serialized)
 struct ProviderHandoffProviderKeyStoreTests {
     @Test
+    func `Current identity cache coalesces success and retries failure`() throws {
+        let cache = ProviderHandoffCurrentCodeIdentityCache()
+        let expected = ProviderHandoffCodeIdentityV1(
+            signingIdentifier: "gateway",
+            teamIdentifier: "TEAM",
+            designatedRequirementDigestSHA256: String(repeating: "a", count: 64)
+        )
+        var loadCount = 0
+
+        #expect(throws: ProviderHandoffCodeIdentityError.unavailable) {
+            _ = try cache.identity {
+                loadCount += 1
+                throw ProviderHandoffCodeIdentityError.unavailable
+            }
+        }
+        let first = try cache.identity {
+            loadCount += 1
+            return expected
+        }
+        let second = try cache.identity {
+            loadCount += 1
+            return ProviderHandoffCodeIdentityV1(
+                signingIdentifier: "unexpected",
+                teamIdentifier: nil,
+                designatedRequirementDigestSHA256: String(repeating: "b", count: 64)
+            )
+        }
+
+        #expect(first == expected)
+        #expect(second == expected)
+        #expect(loadCount == 2)
+    }
+
+    @Test
+    func `Concurrent current identity loads are coalesced`() async throws {
+        let cache = ProviderHandoffCurrentCodeIdentityCache()
+        let expected = ProviderHandoffCodeIdentityV1(
+            signingIdentifier: "gateway",
+            teamIdentifier: "TEAM",
+            designatedRequirementDigestSHA256: String(repeating: "a", count: 64)
+        )
+        let loads = LockedCounter()
+
+        let identities = try await withThrowingTaskGroup(
+            of: ProviderHandoffCodeIdentityV1.self,
+            returning: [ProviderHandoffCodeIdentityV1].self
+        ) { group in
+            for _ in 0 ..< 32 {
+                group.addTask {
+                    try cache.identity {
+                        loads.increment()
+                        Thread.sleep(forTimeInterval: 0.02)
+                        return expected
+                    }
+                }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+
+        #expect(identities.count == 32)
+        #expect(identities.allSatisfy { $0 == expected })
+        #expect(loads.value == 1)
+    }
+
+    @Test
     func `Current executable exposes a stable validated code identity`() throws {
         let first = try ProviderHandoffCodeIdentity.current()
         let second = try ProviderHandoffCodeIdentity.current()
@@ -190,5 +255,18 @@ struct ProviderHandoffProviderKeyStoreTests {
                 account: account
             )
         }
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
