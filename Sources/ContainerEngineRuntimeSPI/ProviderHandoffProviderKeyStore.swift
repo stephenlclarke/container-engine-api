@@ -14,38 +14,18 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Darwin
 import Foundation
 import LocalAuthentication
 import Security
 
 package enum ProviderHandoffKeychainQuery {
-    package static func disableProcessUserInteraction() -> OSStatus {
-        typealias SetUserInteractionAllowed =
-            @convention(c) (Bool) -> OSStatus
-        guard
-            let symbol = dlsym(
-                UnsafeMutableRawPointer(bitPattern: -2),
-                "SecKeychainSetUserInteractionAllowed"
-            )
-        else {
-            return errSecUnimplemented
-        }
-        let setUserInteractionAllowed = unsafeBitCast(
-            symbol,
-            to: SetUserInteractionAllowed.self
-        )
-        return setUserInteractionAllowed(false)
-    }
-
     package static func disableAuthenticationUI(
         in query: inout [CFString: Any]
-    ) -> OSStatus {
+    ) {
         let context = LAContext()
         context.interactionNotAllowed = true
         query[kSecUseAuthenticationContext] = context
         query["u_AuthUI" as CFString] = "u_AuthUIF" as CFString
-        return disableProcessUserInteraction()
     }
 }
 
@@ -482,13 +462,7 @@ public struct ProviderHandoffProviderKeyStore: Sendable {
         var query = baseQuery()
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
-        let interactionStatus =
-            ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)
-        guard interactionStatus == errSecSuccess else {
-            throw ProviderHandoffProviderKeyStoreError.keychain(
-                interactionStatus
-            )
-        }
+        ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         switch status {

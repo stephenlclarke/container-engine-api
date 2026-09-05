@@ -12,10 +12,7 @@ struct ProviderHandoffKeychainQueryTests {
     @Test
     func `Provider handoff Keychain access disables all authentication UI`() throws {
         var query: [CFString: Any] = [:]
-        #expect(
-            ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)
-                == errSecSuccess
-        )
+        ProviderHandoffKeychainQuery.disableAuthenticationUI(in: &query)
 
         let context = try #require(
             query[kSecUseAuthenticationContext] as? LAContext
