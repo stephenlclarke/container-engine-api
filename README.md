@@ -21,7 +21,7 @@
 
 `container-engine-api` is a runtime-neutral Swift package for Docker-compatible Engine HTTP transport. It contains no Dev Container policy, Compose policy, runtime state, or Apple Container imports.
 
-The package currently exposes eight libraries and one executable:
+The package currently exposes nine libraries and one executable:
 
 | Product | Responsibility |
 | --- | --- |
@@ -33,6 +33,7 @@ The package currently exposes eight libraries and one executable:
 | `ContainerEngineRuntimeSPI` | Runtime-neutral stock/enhanced provider declarations, versioned capabilities, immutable state-root identities, canonical fingerprints, and a private fail-closed provider-selection record that cannot be overwritten as an implicit handoff. |
 | `ContainerEngineService` | Reusable provider selection, public-listener lifecycle, argument parsing, and bounded gateway/provider health probes for provider-owned packaging and supervision. |
 | `ContainerUnixHTTPServer` | A user-owned Unix HTTP/1.1 server with strict `sockaddr_un` path validation, socket/lock ownership checks, same-user macOS peer enforcement, exact-inode cleanup, global connection and decoded-body budgets, read/idle deadlines, ordered pipelining, bounded graceful drain, chunked responses, pull-based managed response streams, bounded raw/WebSocket stdin, and RFC 6455 binary streaming. |
+| `ContainerUnixHTTPClient` | A small current-user Unix HTTP/1.1 client for native Engine consumers. It validates socket ownership and permissions, bounds headers and response bodies, supports fixed, chunked, and close-delimited responses, and performs blocking socket work away from Swift's cooperative executor. |
 | `container-engine` | The one runtime-neutral public Engine listener. It probes and binds one provider fingerprint before opening the public socket, then applies the route ledger and forwards only provider-advertised operations. |
 
 The checked-in route ledger contains all 107 method/path operations in Docker Engine 29.2.1 API 1.53. It is generated from ten checksum-pinned Moby Swagger specifications spanning API 1.44–1.53. Presence in that ledger is not an implementation claim: routes default to `unimplemented`, local Swarm routes are `platformUnavailable`, and `container-engine` forwards a route only when the selected provider advertises the exact `engine.route.<OperationId>` capability. The controller can retain its source-compatible logging-only `/info` and inspect fragments for unadvertised adapters, accept one `DockerLoggingSharedResponseBackend` from the same selected authority, and optionally expose complete `SystemVersion` and `ContainerList` responses through `DockerEngineDiscoveryBackend`. Complete responses reject missing Moby non-optional top-level fields. Container-list parsing supports Docker's `all`, `limit`, `size`, modern array filters, and legacy Boolean filter maps; malformed values fail before backend contact. A provider must advertise only the complete operations its selected authority supplies.
