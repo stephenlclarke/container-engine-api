@@ -31,6 +31,7 @@ let package = Package(
         .library(name: "ContainerEngineRuntimeSPI", targets: ["ContainerEngineRuntimeSPI"]),
         .library(name: "ContainerEngineService", targets: ["ContainerEngineService"]),
         .library(name: "ContainerUnixHTTPServer", targets: ["ContainerUnixHTTPServer"]),
+        .library(name: "ContainerUnixHTTPClient", targets: ["ContainerUnixHTTPClient"]),
         .executable(name: "container-engine", targets: ["ContainerEngineServiceExecutable"])
     ],
     dependencies: [
@@ -84,6 +85,10 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio")
             ]
+        ),
+        .target(
+            name: "ContainerUnixHTTPClient",
+            dependencies: ["ContainerEngineWire"]
         ),
         .target(
             name: "ContainerEngineService",
@@ -169,6 +174,15 @@ let package = Package(
             name: "ContainerUnixHTTPServerTests",
             dependencies: [
                 "ContainerEngineWire",
+                "ContainerUnixHTTPServer",
+                .product(name: "Logging", package: "swift-log")
+            ]
+        ),
+        .testTarget(
+            name: "ContainerUnixHTTPClientTests",
+            dependencies: [
+                "ContainerEngineWire",
+                "ContainerUnixHTTPClient",
                 "ContainerUnixHTTPServer",
                 .product(name: "Logging", package: "swift-log")
             ]
