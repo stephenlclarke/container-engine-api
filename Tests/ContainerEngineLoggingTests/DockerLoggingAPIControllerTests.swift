@@ -272,6 +272,15 @@ func `image list and inspect expose complete native discovery documents`() async
     #expect(normalizedInspect.status == 200)
     #expect(backend.lastImageInspectName == "docker.io/library/alpine:3.20")
 
+    let emptyPlatformInspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/alpine:3.20/json?platform="
+        )
+    )
+    #expect(emptyPlatformInspect.status == 200)
+    #expect(backend.lastImageInspectPlatform == nil)
+
     let missing = await controller.respond(
         to: DockerHTTPRequest(
             method: .get,

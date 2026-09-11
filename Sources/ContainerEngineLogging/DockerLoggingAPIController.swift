@@ -334,7 +334,9 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         do {
             let data = try await imageDiscoveryBackend.imageInspectJSON(
                 name: name,
-                platform: target.first("platform")
+                platform: target.first("platform").flatMap {
+                    $0.isEmpty ? nil : $0
+                }
             )
             let object = try Self.completeJSONObject(
                 data,
