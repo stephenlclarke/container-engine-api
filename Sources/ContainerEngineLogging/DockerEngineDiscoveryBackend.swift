@@ -61,4 +61,16 @@ public protocol DockerEngineDiscoveryBackend: Sendable {
 public protocol DockerImageDiscoveryBackend: Sendable {
     func imageListJSON(request: DockerImageListRequest) async throws -> Data
     func imageInspectJSON(name: String) async throws -> Data
+    func imageInspectJSON(name: String, platform: String?) async throws -> Data
+}
+
+public extension DockerImageDiscoveryBackend {
+    func imageInspectJSON(name: String, platform: String?) async throws -> Data {
+        guard platform == nil else {
+            throw DockerLoggingBackendError.invalidParameter(
+                "image platform selection is not supported by this backend"
+            )
+        }
+        return try await imageInspectJSON(name: name)
+    }
 }

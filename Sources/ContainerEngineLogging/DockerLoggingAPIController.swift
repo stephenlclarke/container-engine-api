@@ -154,7 +154,8 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
             return await imageListResponse(target: match.target)
         case RouteIdentifier.imageInspect:
             return await imageInspectResponse(
-                name: match.parameters["name"] ?? ""
+                name: match.parameters["name"] ?? "",
+                target: match.target
             )
         case RouteIdentifier.imagePull:
             return await imagePullResponse(request: request, target: match.target)
@@ -323,12 +324,18 @@ public struct DockerLoggingAPIController: DockerHTTPResponder, Sendable {
         }
     }
 
-    private func imageInspectResponse(name: String) async -> DockerHTTPResponse {
+    private func imageInspectResponse(
+        name: String,
+        target: DockerRequestTarget
+    ) async -> DockerHTTPResponse {
         guard let imageDiscoveryBackend else {
             return Self.errorResponse(status: 404, message: "page not found")
         }
         do {
-            let data = try await imageDiscoveryBackend.imageInspectJSON(name: name)
+            let data = try await imageDiscoveryBackend.imageInspectJSON(
+                name: name,
+                platform: target.first("platform")
+            )
             let object = try Self.completeJSONObject(
                 data,
                 route: "ImageInspect",
