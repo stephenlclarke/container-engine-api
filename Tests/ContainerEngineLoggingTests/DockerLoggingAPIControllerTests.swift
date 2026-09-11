@@ -254,13 +254,14 @@ func `image list and inspect expose complete native discovery documents`() async
     let inspect = await controller.respond(
         to: DockerHTTPRequest(
             method: .get,
-            target: "/images/alpine:3.20/json"
+            target: "/images/alpine:3.20/json?platform=linux/amd64/v3"
         )
     )
     #expect(inspect.status == 200)
     let inspectObject = try responseJSONObject(inspect)
     #expect(inspectObject["Id"] as? String == "sha256:image-index")
     #expect(backend.lastImageInspectName == "alpine:3.20")
+    #expect(backend.lastImageInspectPlatform == "linux/amd64/v3")
 
     let normalizedInspect = await controller.respond(
         to: DockerHTTPRequest(
@@ -271,6 +272,15 @@ func `image list and inspect expose complete native discovery documents`() async
     #expect(normalizedInspect.status == 200)
     #expect(backend.lastImageInspectName == "docker.io/library/alpine:3.20")
 
+    let emptyPlatformInspect = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/alpine:3.20/json?platform="
+        )
+    )
+    #expect(emptyPlatformInspect.status == 200)
+    #expect(backend.lastImageInspectPlatform == nil)
+
     let missing = await controller.respond(
         to: DockerHTTPRequest(
             method: .get,
@@ -279,6 +289,26 @@ func `image list and inspect expose complete native discovery documents`() async
     )
     #expect(missing.status == 404)
     #expect(try errorMessage(missing) == "No such image: missing:latest")
+}
+
+@Test
+func `image inspect fails closed when a legacy backend cannot select a platform`() async throws {
+    let controller = try DockerLoggingAPIController(
+        backend: LegacyImageDiscoveryBackend()
+    )
+
+    let response = await controller.respond(
+        to: DockerHTTPRequest(
+            method: .get,
+            target: "/images/alpine:3.20/json?platform=linux/amd64"
+        )
+    )
+
+    #expect(response.status == 400)
+    #expect(
+        try errorMessage(response)
+            == "image platform selection is not supported by this backend"
+    )
 }
 
 @Test
@@ -1461,6 +1491,7 @@ private final class FakeLoggingBackend:
     private var capturedListRequest: DockerContainerListRequest?
     private var capturedImageListRequest: DockerImageListRequest?
     private var capturedImageInspectName: String?
+    private var capturedImageInspectPlatform: String?
     private var capturedImagePullRequest: DockerImagePullRequest?
     private var capturedImageTagName: String?
     private var capturedImageTagRequest: DockerImageTagRequest?
@@ -1518,6 +1549,10 @@ private final class FakeLoggingBackend:
 
     var lastImageInspectName: String? {
         lock.withLock { capturedImageInspectName }
+    }
+
+    var lastImageInspectPlatform: String? {
+        lock.withLock { capturedImageInspectPlatform }
     }
 
     var lastImagePullRequest: DockerImagePullRequest? {
@@ -1614,8 +1649,13 @@ private final class FakeLoggingBackend:
     }
 
     func imageInspectJSON(name: String) async throws -> Data {
+        try await imageInspectJSON(name: name, platform: nil)
+    }
+
+    func imageInspectJSON(name: String, platform: String?) async throws -> Data {
         lock.withLock {
             capturedImageInspectName = name
+            capturedImageInspectPlatform = platform
         }
         guard name != "missing:latest" else {
             throw DockerLoggingBackendError.imageNotFound(name)
@@ -1887,6 +1927,43 @@ private final class FakeLoggingBackend:
         lock.withLock {
             capturedResize = DockerResizeCapture(height: height, width: width)
         }
+    }
+}
+
+private struct LegacyImageDiscoveryBackend:
+    DockerLoggingBackend,
+    DockerImageDiscoveryBackend
+{
+    func loggingSystemInfo() async throws -> DockerLoggingSystemInfo {
+        DockerLoggingSystemInfo(defaultDriver: "json-file", registeredDrivers: ["json-file"])
+    }
+
+    func inspectContainerLogging(
+        containerID _: String
+    ) async throws -> DockerContainerLoggingInspection {
+        throw DockerLoggingBackendError.containerNotFound("legacy")
+    }
+
+    func openContainerLogs(
+        containerID _: String,
+        request _: DockerLogReadRequest
+    ) async throws -> any DockerLogReadSession {
+        throw DockerLoggingBackendError.containerNotFound("legacy")
+    }
+
+    func attachContainer(
+        containerID _: String,
+        request _: DockerAttachRequest
+    ) async throws -> DockerAttachConnection {
+        throw DockerLoggingBackendError.containerNotFound("legacy")
+    }
+
+    func imageListJSON(request _: DockerImageListRequest) async throws -> Data {
+        Data("[]".utf8)
+    }
+
+    func imageInspectJSON(name _: String) async throws -> Data {
+        Data("{}".utf8)
     }
 }
 
