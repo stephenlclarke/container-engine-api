@@ -21,8 +21,8 @@ SWIFT ?= swift
 PYTHON ?= python3
 COVERAGE_MIN ?= 80
 SONAR_QUALITYGATE_WAIT ?= true
-SWIFT_LLVM_COV ?= $(shell xcrun --find llvm-cov 2>/dev/null || command -v llvm-cov 2>/dev/null || true)
-SWIFT_LLVM_PROFDATA ?= $(shell xcrun --find llvm-profdata 2>/dev/null || command -v llvm-profdata 2>/dev/null || true)
+SWIFT_LLVM_COV ?=
+SWIFT_LLVM_PROFDATA ?=
 
 .PHONY: test coverage coverage-tools-test sonar-scan clean
 
@@ -33,18 +33,24 @@ coverage-tools-test:
 	$(PYTHON) -m unittest discover Tools/coverage
 
 coverage: coverage-tools-test
-	@test -n "$(SWIFT_LLVM_COV)" || { printf 'llvm-cov is required\n' >&2; exit 2; }
-	@test -n "$(SWIFT_LLVM_PROFDATA)" || { printf 'llvm-profdata is required\n' >&2; exit 2; }
 	@mkdir -p .build/codecov
 	@rm -f .build/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
 	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
 	swift_path="$$(command -v "$(SWIFT)")"; \
 	if [[ "$$swift_path" == /usr/bin/swift ]]; then \
 		swiftc_path="$$(xcrun --find swiftc)"; \
+		default_llvm_cov="$$(xcrun --find llvm-cov)"; \
+		default_llvm_profdata="$$(xcrun --find llvm-profdata)"; \
 	else \
 		swiftc_path="$${swift_path%/swift}/swiftc"; \
+		default_llvm_cov="$${swift_path%/swift}/llvm-cov"; \
+		default_llvm_profdata="$${swift_path%/swift}/llvm-profdata"; \
 	fi; \
+	llvm_cov="$${SWIFT_LLVM_COV:-$$default_llvm_cov}"; \
+	llvm_profdata="$${SWIFT_LLVM_PROFDATA:-$$default_llvm_profdata}"; \
 	test -x "$$swiftc_path"; \
+	test -x "$$llvm_cov"; \
+	test -x "$$llvm_profdata"; \
 	test_bin_path="$$($(SWIFT) build --disable-automatic-resolution --show-bin-path)"; \
 	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
 	service_binary="$$test_bin_path/container-engine"; \
@@ -52,8 +58,8 @@ coverage: coverage-tools-test
 	LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw" \
 		SWIFT_TEST_SWIFTC="$$swiftc_path" \
 		Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
-	find .build/codecov -name '*.profraw' -type f -print0 | xargs -0 "$(SWIFT_LLVM_PROFDATA)" merge -sparse -o .build/codecov/container-engine-api.profdata; \
-	"$(SWIFT_LLVM_COV)" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" -object "$$service_binary" --sources Sources > coverage.lcov
+	find .build/codecov -name '*.profraw' -type f -print0 | xargs -0 "$$llvm_profdata" merge -sparse -o .build/codecov/container-engine-api.profdata; \
+	"$$llvm_cov" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" -object "$$service_binary" --sources Sources > coverage.lcov
 	$(PYTHON) Tools/coverage/coverage.py coverage.lcov coverage.xml --minimum "$(COVERAGE_MIN)"
 
 sonar-scan:

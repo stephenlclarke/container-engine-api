@@ -104,6 +104,9 @@ class CoverageTests(unittest.TestCase):
         source = makefile.read_text(encoding="utf-8")
         self.assertIn('swift_path="$$(command -v "$(SWIFT)")"', source)
         self.assertIn('swiftc_path="$$(xcrun --find swiftc)"', source)
+        self.assertIn('default_llvm_cov="$$(xcrun --find llvm-cov)"', source)
+        self.assertIn('default_llvm_cov="$${swift_path%/swift}/llvm-cov"', source)
+        self.assertIn('llvm_cov="$${SWIFT_LLVM_COV:-$$default_llvm_cov}"', source)
         self.assertIn('SWIFT_TEST_SWIFTC="$$swiftc_path"', source)
 
 
