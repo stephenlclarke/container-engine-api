@@ -55,6 +55,23 @@ class CoverageTests(unittest.TestCase):
                 {"Sources/API.swift": {1: True, 2: False}},
             )
 
+    def test_parse_lcov_excludes_generated_swift_sources(self) -> None:
+        """The local floor and Sonar use the same maintained-source scope."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "coverage.lcov"
+            report.write_text(
+                "SF:Sources/API.swift\nDA:1,1\nend_of_record\n"
+                "SF:Sources/Routes.generated.swift\nDA:1,1\nend_of_record\n"
+                "SF:Sources/Protocol.pb.swift\nDA:1,1\nend_of_record\n"
+                "SF:Sources/Protocol.grpc.swift\nDA:1,1\nend_of_record\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                coverage.parse_lcov(report, root),
+                {"Sources/API.swift": {1: True}},
+            )
+
     def test_write_xml_reports_line_totals(self) -> None:
         """The generic report and threshold use the same line totals."""
         with tempfile.TemporaryDirectory() as directory:

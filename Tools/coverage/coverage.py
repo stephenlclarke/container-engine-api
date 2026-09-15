@@ -22,6 +22,13 @@ import posixpath
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+GENERATED_SOURCE_SUFFIXES = (".generated.swift", ".pb.swift", ".grpc.swift")
+
+
+def is_generated_source(path: str) -> bool:
+    """Match the generated Swift exclusions used by SonarQube."""
+    return path.endswith(GENERATED_SOURCE_SUFFIXES)
+
 
 def clean_relative_path(path: str) -> str | None:
     """Normalize and reject coverage paths that escape the project."""
@@ -50,8 +57,10 @@ def parse_lcov(path: Path, root: Path) -> dict[str, dict[int, bool]]:
         line = raw_line.strip()
         if line.startswith("SF:"):
             current = relative_path(line[3:], root)
-            if current is not None:
+            if current is not None and not is_generated_source(current):
                 files.setdefault(current, {})
+            else:
+                current = None
         elif line.startswith("DA:") and current is not None:
             number, count, *_ = line[3:].split(",")
             files[current][int(number)] = int(count) > 0
