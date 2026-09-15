@@ -1,0 +1,29 @@
+# Pull request: make container-engine-api SonarQube authoritative
+
+## Summary
+
+- Generate LLVM coverage from the complete Swift package test bundle and convert it to SonarQube generic coverage XML.
+- Enforce a 90% line-coverage floor and retain both LCOV and XML evidence.
+- Validate the project-level previous-version policy, identify every analysis by its exact commit SHA, and wait for the quality gate.
+- Analyze pull requests as pull requests and reject unresolved new issues or any security hotspot.
+- Document the RFC 6455 WebSocket accept-key SHA-1 transform as one narrow protocol exception.
+
+See [issue 43](https://github.com/stephenlclarke/container-engine-api/issues/43) and its [repository handoff](ISSUE-43.md).
+
+## Validation
+
+- [x] Coverage converter unit tests and Python compilation
+- [x] GitHub Actions workflow validation
+- [x] Markdown validation
+- [x] Makefile dry-run validation
+- [ ] Xcode 26.6 instrumented package tests and 90% coverage gate
+- [ ] Exact-head SonarQube pull-request analysis
+- [ ] Exact merged-main SonarQube analysis
+
+Local execution of the Apple toolchain remains unavailable until the host's Xcode 27 licence is explicitly accepted. The authoritative workflow uses the repository's pinned Xcode 26.6 hosted runner and must supply the remaining test and coverage evidence before merge.
+
+## Compatibility and risk
+
+No Engine API behavior changes. The security disposition is limited to `swift:S4790` in the single WebSocket-server source file because RFC 6455 fixes the accept-key transform to SHA-1; every other cryptographic finding remains enabled.
+
+Closes [#43](https://github.com/stephenlclarke/container-engine-api/issues/43).
