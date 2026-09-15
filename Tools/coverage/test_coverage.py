@@ -67,6 +67,13 @@ class CoverageTests(unittest.TestCase):
         """An empty report cannot pass as complete coverage."""
         self.assertEqual(coverage.percentage(0, 0), 0.0)
 
+    def test_direct_test_bundle_writes_profiles_to_merge_directory(self) -> None:
+        """The direct runner and profile merge must share one explicit path."""
+        makefile = Path(__file__).parents[2] / "Makefile"
+        source = makefile.read_text(encoding="utf-8")
+        self.assertIn('LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw"', source)
+        self.assertIn("find .build/codecov -name '*.profraw'", source)
+
 
 if __name__ == "__main__":
     unittest.main()

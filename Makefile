@@ -35,13 +35,13 @@ coverage-tools-test:
 coverage: coverage-tools-test
 	@test -n "$(SWIFT_LLVM_COV)" || { printf 'llvm-cov is required\n' >&2; exit 2; }
 	@test -n "$(SWIFT_LLVM_PROFDATA)" || { printf 'llvm-profdata is required\n' >&2; exit 2; }
-	@rm -f .build/*/debug/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
+	@mkdir -p .build/codecov
+	@rm -f .build/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
 	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
 	test_bin_path="$$(swift build --disable-automatic-resolution --show-bin-path)"; \
 	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
-	Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
-	mkdir -p .build/codecov; \
-	find .build -name '*.profraw' -type f -print0 | xargs -0 "$(SWIFT_LLVM_PROFDATA)" merge -sparse -o .build/codecov/container-engine-api.profdata; \
+	LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw" Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
+	find .build/codecov -name '*.profraw' -type f -print0 | xargs -0 "$(SWIFT_LLVM_PROFDATA)" merge -sparse -o .build/codecov/container-engine-api.profdata; \
 	"$(SWIFT_LLVM_COV)" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" --sources Sources > coverage.lcov
 	$(PYTHON) Tools/coverage/coverage.py coverage.lcov coverage.xml --minimum "$(COVERAGE_MIN)"
 
