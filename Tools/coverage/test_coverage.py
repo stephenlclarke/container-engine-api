@@ -103,6 +103,7 @@ class CoverageTests(unittest.TestCase):
         makefile = Path(__file__).parents[2] / "Makefile"
         source = makefile.read_text(encoding="utf-8")
         self.assertIn('swift_path="$$(command -v "$(SWIFT)")"', source)
+        self.assertIn('swiftc_path="$$(xcrun --find swiftc)"', source)
         self.assertIn('SWIFT_TEST_SWIFTC="$$swiftc_path"', source)
 
 

@@ -39,7 +39,11 @@ coverage: coverage-tools-test
 	@rm -f .build/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
 	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
 	swift_path="$$(command -v "$(SWIFT)")"; \
-	swiftc_path="$${swift_path%/swift}/swiftc"; \
+	if [[ "$$swift_path" == /usr/bin/swift ]]; then \
+		swiftc_path="$$(xcrun --find swiftc)"; \
+	else \
+		swiftc_path="$${swift_path%/swift}/swiftc"; \
+	fi; \
 	test -x "$$swiftc_path"; \
 	test_bin_path="$$($(SWIFT) build --disable-automatic-resolution --show-bin-path)"; \
 	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
