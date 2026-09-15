@@ -40,9 +40,11 @@ coverage: coverage-tools-test
 	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
 	test_bin_path="$$(swift build --disable-automatic-resolution --show-bin-path)"; \
 	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
+	service_binary="$$test_bin_path/container-engine"; \
+	test -x "$$service_binary"; \
 	LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw" Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
 	find .build/codecov -name '*.profraw' -type f -print0 | xargs -0 "$(SWIFT_LLVM_PROFDATA)" merge -sparse -o .build/codecov/container-engine-api.profdata; \
-	"$(SWIFT_LLVM_COV)" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" --sources Sources > coverage.lcov
+	"$(SWIFT_LLVM_COV)" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" -object "$$service_binary" --sources Sources > coverage.lcov
 	$(PYTHON) Tools/coverage/coverage.py coverage.lcov coverage.xml --minimum "$(COVERAGE_MIN)"
 
 sonar-scan:

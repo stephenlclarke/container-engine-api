@@ -74,6 +74,13 @@ class CoverageTests(unittest.TestCase):
         self.assertIn('LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw"', source)
         self.assertIn("find .build/codecov -name '*.profraw'", source)
 
+    def test_coverage_includes_service_executable(self) -> None:
+        """Untested executable entry-point lines remain in the denominator."""
+        makefile = Path(__file__).parents[2] / "Makefile"
+        source = makefile.read_text(encoding="utf-8")
+        self.assertIn('service_binary="$$test_bin_path/container-engine"', source)
+        self.assertIn('-object "$$service_binary" --sources Sources', source)
+
 
 if __name__ == "__main__":
     unittest.main()
