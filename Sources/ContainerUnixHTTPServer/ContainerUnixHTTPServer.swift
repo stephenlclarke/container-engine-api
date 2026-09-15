@@ -15,7 +15,6 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerEngineWire
-import CryptoKit
 import Darwin
 import DequeModule
 import Foundation
@@ -1435,13 +1434,9 @@ private final class DockerHTTPHandler:
         guard head.headers["Sec-WebSocket-Version"].first == "13" else {
             return .failure(.badVersion)
         }
-        let source = Data(
-            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8
-        )
         return .success(
             WebSocketHandshake(
-                accept: Data(Insecure.SHA1.hash(data: source))
-                    .base64EncodedString()
+                accept: WebSocketAcceptDigest.response(for: key)
             )
         )
     }

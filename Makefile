@@ -38,7 +38,7 @@ coverage: coverage-tools-test
 	@mkdir -p .build/codecov
 	@rm -f .build/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
 	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
-	test_bin_path="$$(swift build --disable-automatic-resolution --show-bin-path)"; \
+	test_bin_path="$$($(SWIFT) build --disable-automatic-resolution --show-bin-path)"; \
 	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
 	service_binary="$$test_bin_path/container-engine"; \
 	test -x "$$service_binary"; \
