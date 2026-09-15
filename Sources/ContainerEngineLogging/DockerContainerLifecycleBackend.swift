@@ -288,7 +288,9 @@ public extension DockerContainerWaitBackend {
         try await waitForContainer(
             containerID: containerID,
             condition: condition,
-            onRegistered: {}
+            onRegistered: {
+                // Callers of this convenience overload do not need acknowledgement.
+            }
         )
     }
 }

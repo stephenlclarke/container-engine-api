@@ -191,7 +191,9 @@ public struct ContainerEngineProviderSessionHandoffTransport:
     ProviderHandoffGatewayControlTransport,
     Sendable
 {
-    public init() {}
+    public init() {
+        // The transport is stateless; the explicit initializer exposes it across modules.
+    }
 
     public func perform(
         _ request: ContainerEngineProviderHandoffControlRequestV1,
