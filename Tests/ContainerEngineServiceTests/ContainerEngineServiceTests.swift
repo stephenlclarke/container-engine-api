@@ -239,10 +239,15 @@ struct ContainerEngineServiceTests {
             defer { Darwin.close(client) }
             var request = [UInt8](repeating: 0, count: 1024)
             _ = Darwin.read(client, &request, request.count)
-            let response = Data(
-                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nOK".utf8
+            let headers = Data(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".utf8
             )
-            response.withUnsafeBytes { bytes in
+            headers.withUnsafeBytes { bytes in
+                _ = Darwin.write(client, bytes.baseAddress, bytes.count)
+            }
+            usleep(50000)
+            let body = Data("OK".utf8)
+            body.withUnsafeBytes { bytes in
                 _ = Darwin.write(client, bytes.baseAddress, bytes.count)
             }
         }
