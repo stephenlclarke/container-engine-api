@@ -1,0 +1,73 @@
+#===----------------------------------------------------------------------===#
+# Copyright 2026 container-engine-api project authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#===----------------------------------------------------------------------===#
+
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+SWIFT ?= swift
+PYTHON ?= python3
+COVERAGE_MIN ?= 80
+SONAR_QUALITYGATE_WAIT ?= true
+SWIFT_LLVM_COV ?=
+SWIFT_LLVM_PROFDATA ?=
+
+.PHONY: test coverage coverage-tools-test sonar-scan clean
+
+test:
+	$(SWIFT) test --disable-automatic-resolution
+
+coverage-tools-test:
+	$(PYTHON) -m unittest discover Tools/coverage
+
+coverage: coverage-tools-test
+	@mkdir -p .build/codecov
+	@rm -f .build/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
+	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
+	swift_path="$$(command -v "$(SWIFT)")"; \
+	if [[ "$$swift_path" == /usr/bin/swift ]]; then \
+		swiftc_path="$$(xcrun --find swiftc)"; \
+		default_llvm_cov="$$(xcrun --find llvm-cov)"; \
+		default_llvm_profdata="$$(xcrun --find llvm-profdata)"; \
+	else \
+		swiftc_path="$${swift_path%/swift}/swiftc"; \
+		default_llvm_cov="$${swift_path%/swift}/llvm-cov"; \
+		default_llvm_profdata="$${swift_path%/swift}/llvm-profdata"; \
+	fi; \
+	llvm_cov="$${SWIFT_LLVM_COV:-$$default_llvm_cov}"; \
+	llvm_profdata="$${SWIFT_LLVM_PROFDATA:-$$default_llvm_profdata}"; \
+	test -x "$$swiftc_path"; \
+	test -x "$$llvm_cov"; \
+	test -x "$$llvm_profdata"; \
+	test_bin_path="$$($(SWIFT) build --disable-automatic-resolution --show-bin-path)"; \
+	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
+	service_binary="$$test_bin_path/container-engine"; \
+	test -x "$$service_binary"; \
+	LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw" \
+		SWIFT_TEST_SWIFTC="$$swiftc_path" \
+		Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
+	find .build/codecov -name '*.profraw' -type f -print0 | xargs -0 "$$llvm_profdata" merge -sparse -o .build/codecov/container-engine-api.profdata; \
+	"$$llvm_cov" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" -object "$$service_binary" --sources Sources > coverage.lcov
+	$(PYTHON) Tools/coverage/coverage.py coverage.lcov coverage.xml --minimum "$(COVERAGE_MIN)"
+
+sonar-scan:
+	@test -s coverage.xml || { printf 'coverage.xml is missing; run make coverage first\n' >&2; exit 2; }
+	@sonar_project_version="$${SONAR_PROJECT_VERSION:-$$(git rev-parse HEAD)}"; \
+	printf '%s\n' "$$sonar_project_version" | grep -Eq '^[0-9a-f]{40}$$' || { printf 'SONAR_PROJECT_VERSION must be an exact lowercase commit SHA\n' >&2; exit 2; }; \
+	sonar-scanner -Dsonar.projectVersion="$$sonar_project_version" -Dsonar.qualitygate.wait="$(SONAR_QUALITYGATE_WAIT)"
+
+clean:
+	rm -f coverage.lcov coverage.xml
+	rm -rf .scannerwork

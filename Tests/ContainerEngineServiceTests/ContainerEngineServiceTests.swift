@@ -7,6 +7,7 @@ import ContainerEngineProviderSession
 @testable import ContainerEngineRuntimeSPI
 @testable import ContainerEngineService
 import ContainerEngineWire
+import Darwin
 import Foundation
 import Testing
 
@@ -196,6 +197,62 @@ struct ContainerEngineServiceTests {
                 remaining: .zero
             ) == 1
         )
+    }
+
+    @Test func `health probe accepts a close-delimited response`() async throws {
+        let socketPath = "/tmp/health-\(UUID().uuidString.prefix(8)).sock"
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        #expect(listener >= 0)
+        defer {
+            Darwin.close(listener)
+            unlink(socketPath)
+        }
+
+        var address = sockaddr_un()
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { bytes in
+            socketPath.withCString { value in
+                bytes.copyMemory(
+                    from: UnsafeRawBufferPointer(
+                        start: value,
+                        count: socketPath.utf8.count + 1
+                    )
+                )
+            }
+        }
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(
+                    listener,
+                    $0,
+                    socklen_t(MemoryLayout<sockaddr_un>.size)
+                )
+            }
+        }
+        #expect(bound == 0)
+        #expect(Darwin.listen(listener, 1) == 0)
+
+        let server = Task.detached {
+            let client = Darwin.accept(listener, nil, nil)
+            guard client >= 0 else { return }
+            defer { Darwin.close(client) }
+            var request = [UInt8](repeating: 0, count: 1024)
+            _ = Darwin.read(client, &request, request.count)
+            let headers = Data(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".utf8
+            )
+            headers.withUnsafeBytes { bytes in
+                _ = Darwin.write(client, bytes.baseAddress, bytes.count)
+            }
+            usleep(50000)
+            let body = Data("OK".utf8)
+            body.withUnsafeBytes { bytes in
+                _ = Darwin.write(client, bytes.baseAddress, bytes.count)
+            }
+        }
+        try ContainerEngineHealthProbe.ping(socketPath: socketPath)
+        await server.value
     }
 
     @Test func `attested provider enrollment installs trust before serving`() async throws {

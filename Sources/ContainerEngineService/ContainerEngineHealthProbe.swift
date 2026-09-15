@@ -339,7 +339,9 @@ private final class UnixSocketClient {
                 body: response.subdata(in: headerRange.upperBound ..< requiredCount)
             )
         }
-        while try readChunk(into: &response) {}
+        while try readChunk(into: &response) {
+            // Continue until the peer closes a response without a content length.
+        }
         return HTTPProbeResponse(
             status: status,
             body: response.subdata(in: headerRange.upperBound ..< response.endIndex)

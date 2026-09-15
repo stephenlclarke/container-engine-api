@@ -359,7 +359,9 @@ private struct SocketReader {
                 throw ContainerUnixHTTPClientError.invalidResponse("invalid chunk size")
             }
             if size == 0 {
-                while try !readLine().isEmpty {}
+                while try !readLine().isEmpty {
+                    // Consume protocol trailers until the terminating empty line.
+                }
                 return
             }
             try readExactly(size, handler: handler)

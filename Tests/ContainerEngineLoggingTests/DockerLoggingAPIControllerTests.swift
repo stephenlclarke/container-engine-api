@@ -21,6 +21,19 @@ import Foundation
 import Testing
 
 @Test
+func `wait convenience overload registers without acknowledgement callback`() async throws {
+    let backend = FakeLoggingBackend(
+        reader: FakeLogReadSession(terminal: false)
+    )
+    let result = try await backend.waitForContainer(
+        containerID: "demo",
+        condition: .notRunning
+    )
+    #expect(result.statusCode == 23)
+    #expect(backend.lifecycleCalls == ["wait:demo:not-running"])
+}
+
+@Test
 func `info and inspect expose only Docker logging fields and public paths`() async throws {
     let reader = FakeLogReadSession(terminal: false)
     let backend = FakeLoggingBackend(reader: reader)

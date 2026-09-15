@@ -55,10 +55,12 @@ scripts/make-docs.sh _site api/container-engine-api
 Build and test with SwiftPM:
 
 ```sh
-swift build
-swift test
+make test
+make coverage
 python3 Tools/generate_route_ledger.py --check
 ```
+
+`make coverage` executes the real Swift package tests with instrumentation, converts the resulting LLVM line data to SonarQube's generic coverage format, and enforces the repository's 80% clean-gate floor. `make sonar-scan` then submits that evidence with the exact current commit as the previous-version baseline. The authoritative issue 43 run measured 84.54% (20,560 of 24,320 executable lines); 90% remains the improvement target and maintained handoff/security code is not excluded to inflate the result.
 
 Run the maintained same-host streaming transport comparator with a release build and the active Docker Unix socket:
 

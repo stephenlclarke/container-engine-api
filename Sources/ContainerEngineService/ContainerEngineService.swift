@@ -34,7 +34,9 @@ public enum ContainerEngineServiceRunner {
             _ = try await group.next()
             try await runtime.shutdown()
             group.cancelAll()
-            while try await group.next() != nil {}
+            while try await group.next() != nil {
+                // Drain cancelled child tasks before leaving the structured task group.
+            }
         }
     }
 
