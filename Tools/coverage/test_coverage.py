@@ -98,6 +98,13 @@ class CoverageTests(unittest.TestCase):
         self.assertIn('service_binary="$$test_bin_path/container-engine"', source)
         self.assertIn('-object "$$service_binary" --sources Sources', source)
 
+    def test_coverage_uses_the_selected_swift_toolchain_helper(self) -> None:
+        """The prebuilt bundle runner must match the compiler that built it."""
+        makefile = Path(__file__).parents[2] / "Makefile"
+        source = makefile.read_text(encoding="utf-8")
+        self.assertIn('swift_path="$$(command -v "$(SWIFT)")"', source)
+        self.assertIn('SWIFT_TEST_SWIFTC="$$swiftc_path"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

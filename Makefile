@@ -38,11 +38,16 @@ coverage: coverage-tools-test
 	@mkdir -p .build/codecov
 	@rm -f .build/codecov/*.profraw .build/codecov/container-engine-api.profdata coverage.lcov coverage.xml
 	$(SWIFT) build --disable-automatic-resolution --build-tests --enable-code-coverage
+	swift_path="$$(command -v "$(SWIFT)")"; \
+	swiftc_path="$${swift_path%/swift}/swiftc"; \
+	test -x "$$swiftc_path"; \
 	test_bin_path="$$($(SWIFT) build --disable-automatic-resolution --show-bin-path)"; \
 	test_binary="$$test_bin_path/container-engine-apiPackageTests.xctest/Contents/MacOS/container-engine-apiPackageTests"; \
 	service_binary="$$test_bin_path/container-engine"; \
 	test -x "$$service_binary"; \
-	LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw" Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
+	LLVM_PROFILE_FILE=".build/codecov/%p-%m.profraw" \
+		SWIFT_TEST_SWIFTC="$$swiftc_path" \
+		Tools/ci/run-swift-testing-bundle.sh "$$test_binary" --no-parallel; \
 	find .build/codecov -name '*.profraw' -type f -print0 | xargs -0 "$(SWIFT_LLVM_PROFDATA)" merge -sparse -o .build/codecov/container-engine-api.profdata; \
 	"$(SWIFT_LLVM_COV)" export -format=lcov -instr-profile=.build/codecov/container-engine-api.profdata "$$test_binary" -object "$$service_binary" --sources Sources > coverage.lcov
 	$(PYTHON) Tools/coverage/coverage.py coverage.lcov coverage.xml --minimum "$(COVERAGE_MIN)"
