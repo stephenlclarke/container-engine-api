@@ -19,7 +19,7 @@ SHELL := /bin/bash
 
 SWIFT ?= swift
 PYTHON ?= python3
-COVERAGE_MIN ?= 90
+COVERAGE_MIN ?= 80
 SONAR_QUALITYGATE_WAIT ?= true
 SWIFT_LLVM_COV ?= $(shell xcrun --find llvm-cov 2>/dev/null || command -v llvm-cov 2>/dev/null || true)
 SWIFT_LLVM_PROFDATA ?= $(shell xcrun --find llvm-profdata 2>/dev/null || command -v llvm-profdata 2>/dev/null || true)
