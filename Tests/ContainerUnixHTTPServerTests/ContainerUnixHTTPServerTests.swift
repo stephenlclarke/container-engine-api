@@ -24,6 +24,15 @@ import Testing
 @Suite(.serialized)
 struct ContainerUnixHTTPServerTests {
     @Test
+    func `websocket accept digest matches RFC 6455 example`() {
+        #expect(
+            WebSocketAcceptDigest.response(
+                for: "dGhlIHNhbXBsZSBub25jZQ=="
+            ) == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        )
+    }
+
+    @Test
     func `server exposes bytes streams and a half-close safe hijack`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
