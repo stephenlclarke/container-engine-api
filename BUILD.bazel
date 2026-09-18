@@ -1,0 +1,32 @@
+# Copyright 2026 container-engine-api project authors. SPDX-License-Identifier: Apache-2.0
+load("@build_bazel_rules_swift//swift:swift_library.bzl", "swift_library")
+load("@build_bazel_rules_swift//swift:swift_test.bzl", "swift_test")
+
+package(default_visibility = ["//visibility:public"])
+SWIFT_COPTS = ["-swift-version", "6", "-warnings-as-errors"]
+
+swift_library(
+    name = "ContainerEngineWire", module_name = "ContainerEngineWire",
+    srcs = glob(["Sources/ContainerEngineWire/*.swift"]), copts = SWIFT_COPTS,
+)
+swift_library(
+    name = "ContainerUnixHTTPClient", module_name = "ContainerUnixHTTPClient",
+    srcs = glob(["Sources/ContainerUnixHTTPClient/*.swift"]), copts = SWIFT_COPTS,
+    deps = [":ContainerEngineWire"],
+)
+swift_library(
+    name = "ContainerUnixHTTPServer", module_name = "ContainerUnixHTTPServer",
+    srcs = glob(["Sources/ContainerUnixHTTPServer/*.swift"]), copts = SWIFT_COPTS,
+    deps = [
+        ":ContainerEngineWire", "@swiftpkg_swift_collections//:DequeModule",
+        "@swiftpkg_swift_log//:Logging", "@swiftpkg_swift_nio//:NIOCore",
+        "@swiftpkg_swift_nio//:NIOFoundationCompat", "@swiftpkg_swift_nio//:NIOHTTP1",
+        "@swiftpkg_swift_nio//:NIOPosix", "@swiftpkg_swift_nio//:NIOWebSocket",
+    ],
+)
+swift_test(
+    name = "ContainerUnixHTTPClientTests", module_name = "ContainerUnixHTTPClientTests",
+    timeout = "short",
+    srcs = glob(["Tests/ContainerUnixHTTPClientTests/*.swift"]), copts = SWIFT_COPTS,
+    deps = [":ContainerUnixHTTPClient", ":ContainerEngineWire", ":ContainerUnixHTTPServer", "@swiftpkg_swift_log//:Logging"],
+)
