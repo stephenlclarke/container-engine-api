@@ -1,0 +1,58 @@
+// Copyright 2026 container-engine-api project authors. SPDX-License-Identifier: Apache-2.0
+
+import Darwin
+import Foundation
+
+/// Interrupt with shutdown, never close from another thread: the blocking worker
+/// alone closes its descriptor, so cancellation cannot act on a reused fd.
+final class ClientRequestLifetime: @unchecked Sendable {
+    enum Interruption { case cancelled, deadlineExceeded }
+
+    private let lock = NSLock()
+    private let deadline: ContinuousClock.Instant
+    private var descriptor: Int32?
+    private var interruption: Interruption?
+
+    init(timeoutSeconds: Int) {
+        deadline = .now.advanced(by: .seconds(timeoutSeconds))
+    }
+
+    func register(_ descriptor: Int32) throws {
+        try lock.withLock {
+            self.descriptor = descriptor
+            try checkLocked()
+        }
+    }
+
+    func check() throws {
+        try lock.withLock { try checkLocked() }
+    }
+
+    func interrupt(_ reason: Interruption) {
+        lock.withLock {
+            guard interruption == nil else { return }
+            interruption = reason
+            if let descriptor {
+                _ = Darwin.shutdown(descriptor, SHUT_RDWR)
+            }
+        }
+    }
+
+    func close(_ descriptor: Int32) {
+        lock.withLock {
+            self.descriptor = nil
+            Darwin.close(descriptor)
+        }
+    }
+
+    private func checkLocked() throws {
+        if interruption == nil, ContinuousClock.now >= deadline {
+            interruption = .deadlineExceeded
+        }
+        switch interruption {
+        case .cancelled: throw CancellationError()
+        case .deadlineExceeded: throw ContainerUnixHTTPClientError.deadlineExceeded
+        case nil: break
+        }
+    }
+}

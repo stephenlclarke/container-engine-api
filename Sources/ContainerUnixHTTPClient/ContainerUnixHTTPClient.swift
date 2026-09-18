@@ -36,6 +36,7 @@ public enum ContainerUnixHTTPClientError: Error, Equatable, CustomStringConverti
     case invalidResponse(String)
     case responseTooLarge(Int)
     case server(status: Int, message: String)
+    case deadlineExceeded
 
     public var description: String {
         switch self {
@@ -44,13 +45,14 @@ public enum ContainerUnixHTTPClientError: Error, Equatable, CustomStringConverti
         case let .invalidResponse(message): "invalid Engine response: \(message)"
         case let .responseTooLarge(limit): "Engine response exceeded \(limit) bytes"
         case let .server(status, message): "Engine returned HTTP \(status): \(message)"
+        case .deadlineExceeded: "Engine request exceeded its absolute deadline"
         }
     }
 }
 
 /// A current-user, Unix-domain HTTP/1.1 client for the shared Container Engine gateway.
 ///
-/// Each request owns one connection. Socket work runs on a detached blocking task so it
+/// Each request owns one connection. Socket work runs on a blocking dispatch worker so it
 /// never occupies the cooperative Swift executor. Response chunks are delivered in
 /// order and are bounded before the caller callback is invoked.
 public final class ContainerUnixHTTPClient: @unchecked Sendable {
@@ -66,8 +68,8 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         guard socketPath.hasPrefix("/"), !socketPath.contains("\0"), socketPath.utf8.count < capacity else {
             throw ContainerUnixHTTPClientError.invalidSocketPath(socketPath)
         }
-        guard timeoutSeconds > 0 else {
-            throw ContainerUnixHTTPClientError.invalidResponse("timeout must be positive")
+        guard timeoutSeconds > 0, timeoutSeconds <= Int(Int64.max / 1_000_000_000) else {
+            throw ContainerUnixHTTPClientError.invalidResponse("timeout must be a positive representable duration")
         }
         self.socketPath = socketPath
         self.timeoutSeconds = timeoutSeconds
@@ -93,21 +95,47 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         maximumBodyBytes: Int? = nil,
         onBody: @escaping BodyHandler
     ) async throws -> ContainerUnixHTTPClientResponse {
-        try await Task.detached(priority: nil) { [self] in
-            try sendBlocking(request, maximumBodyBytes: maximumBodyBytes, onBody: onBody)
-        }.value
+        try Task.checkCancellation()
+        guard maximumBodyBytes.map({ $0 >= 0 }) ?? true else {
+            throw ContainerUnixHTTPClientError.invalidResponse("body limit must not be negative")
+        }
+        let lifetime = ClientRequestLifetime(timeoutSeconds: timeoutSeconds)
+        let timer = DispatchSource.makeTimerSource(queue: .global())
+        timer.schedule(deadline: .now() + .seconds(timeoutSeconds))
+        timer.setEventHandler { lifetime.interrupt(.deadlineExceeded) }
+        timer.resume()
+        defer { timer.cancel() }
+        return try await withTaskCancellationHandler {
+            do {
+                let response: ContainerUnixHTTPClientResponse = try await withCheckedThrowingContinuation { continuation in
+                    DispatchQueue.global(qos: .userInitiated).async { [self] in
+                        continuation.resume(with: Result {
+                            try sendBlocking(request, lifetime: lifetime, maximumBodyBytes: maximumBodyBytes, onBody: onBody)
+                        })
+                    }
+                }
+                try lifetime.check()
+                return response
+            } catch {
+                try lifetime.check()
+                throw error
+            }
+        } onCancel: {
+            lifetime.interrupt(.cancelled)
+        }
     }
 
     private func sendBlocking(
         _ request: DockerHTTPRequest,
+        lifetime: ClientRequestLifetime,
         maximumBodyBytes: Int?,
         onBody: @escaping BodyHandler
     ) throws -> ContainerUnixHTTPClientResponse {
-        let descriptor = try connect()
-        defer { Darwin.close(descriptor) }
-        try write(Self.serialized(request), to: descriptor)
+        let descriptor = try connect(lifetime: lifetime)
+        defer { lifetime.close(descriptor) }
+        try write(Self.serialized(request), to: descriptor, lifetime: lifetime)
 
-        var reader = SocketReader(descriptor: descriptor)
+        var reader = SocketReader(descriptor: descriptor, lifetime: lifetime)
         let head = try reader.readHead(maximumBytes: Self.maximumHeaderBytes)
         let responseHead = try Self.parseHead(head)
         let collector = BodyCollector(maximumBytes: maximumBodyBytes, handler: onBody)
@@ -138,11 +166,13 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         (100 ... 199).contains(status) || status == 204 || status == 304
     }
 
-    private func connect() throws -> Int32 {
+    private func connect(lifetime: ClientRequestLifetime) throws -> Int32 {
+        try lifetime.check()
         try validateSocket()
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw Self.posixError() }
         do {
+            try lifetime.register(descriptor)
             var noSignal: Int32 = 1
             guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout.size(ofValue: noSignal))) == 0 else {
                 throw Self.posixError()
@@ -161,16 +191,43 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
                     bytes.copyMemory(from: UnsafeRawBufferPointer(start: value, count: socketPath.utf8.count + 1))
                 }
             }
+            // A full accept backlog must remain cancellable before the socket is connected.
+            let flags = fcntl(descriptor, F_GETFL)
+            guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw Self.posixError()
+            }
             let result = withUnsafePointer(to: &address) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
                 }
             }
-            guard result == 0 else { throw Self.posixError() }
+            if result != 0 {
+                guard errno == EINPROGRESS else { throw Self.posixError() }
+                try waitForConnection(descriptor, lifetime: lifetime)
+            }
+            try lifetime.check()
+            guard fcntl(descriptor, F_SETFL, flags) == 0 else { throw Self.posixError() }
             return descriptor
         } catch {
-            Darwin.close(descriptor)
+            lifetime.close(descriptor)
             throw error
+        }
+    }
+
+    private func waitForConnection(_ descriptor: Int32, lifetime: ClientRequestLifetime) throws {
+        while true {
+            try lifetime.check()
+            var item = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+            let result = poll(&item, 1, 100)
+            if result == 0 || (result < 0 && errno == EINTR) {
+                continue
+            }
+            guard result > 0 else { throw Self.posixError() }
+            var error: Int32 = 0
+            var length = socklen_t(MemoryLayout.size(ofValue: error))
+            guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else { throw Self.posixError() }
+            guard error == 0 else { throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO) }
+            return
         }
     }
 
@@ -237,11 +294,12 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         return (status, headers)
     }
 
-    private func write(_ data: Data, to descriptor: Int32) throws {
+    private func write(_ data: Data, to descriptor: Int32, lifetime: ClientRequestLifetime) throws {
         try data.withUnsafeBytes { bytes in
             guard let base = bytes.baseAddress else { return }
             var offset = 0
             while offset < bytes.count {
+                try lifetime.check()
                 let count = Darwin.write(descriptor, base.advanced(by: offset), bytes.count - offset)
                 if count < 0, errno == EINTR {
                     continue
@@ -305,10 +363,12 @@ private final class BodyCollector: @unchecked Sendable {
 
 private struct SocketReader {
     let descriptor: Int32
+    let lifetime: ClientRequestLifetime
     private var buffer = Data()
 
-    init(descriptor: Int32) {
+    init(descriptor: Int32, lifetime: ClientRequestLifetime) {
         self.descriptor = descriptor
+        self.lifetime = lifetime
     }
 
     mutating func readHead(maximumBytes: Int) throws -> Data {
@@ -322,6 +382,9 @@ private struct SocketReader {
         guard let range = buffer.range(of: marker) else {
             throw ContainerUnixHTTPClientError.invalidResponse("missing header terminator")
         }
+        guard buffer.distance(from: buffer.startIndex, to: range.upperBound) <= maximumBytes else {
+            throw ContainerUnixHTTPClientError.responseTooLarge(maximumBytes)
+        }
         let head = Data(buffer[..<range.lowerBound])
         buffer.removeSubrange(..<range.upperBound)
         return head
@@ -330,6 +393,7 @@ private struct SocketReader {
     mutating func readExactly(_ count: Int, handler: (Data) throws -> Void) throws {
         var remaining = count
         while remaining > 0 {
+            try lifetime.check()
             if buffer.isEmpty {
                 try readMore()
             }
@@ -355,12 +419,23 @@ private struct SocketReader {
     mutating func readChunked(_ handler: (Data) throws -> Void) throws {
         while true {
             let line = try readLine()
-            guard let size = Int(line.split(separator: ";", maxSplits: 1)[0], radix: 16) else {
+            let token = line.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            guard !token.isEmpty, token.utf8.allSatisfy({ byte in
+                (48 ... 57).contains(byte) || (65 ... 70).contains(byte) || (97 ... 102).contains(byte)
+            }), let size = Int(token, radix: 16) else {
                 throw ContainerUnixHTTPClientError.invalidResponse("invalid chunk size")
             }
             if size == 0 {
-                while try !readLine().isEmpty {
-                    // Consume protocol trailers until the terminating empty line.
+                var trailerBytes = 0
+                while true {
+                    let trailer = try readLine()
+                    trailerBytes += trailer.utf8.count + 2
+                    guard trailerBytes <= 64 * 1024 else {
+                        throw ContainerUnixHTTPClientError.responseTooLarge(64 * 1024)
+                    }
+                    if trailer.isEmpty {
+                        break
+                    }
                 }
                 return
             }
@@ -372,12 +447,19 @@ private struct SocketReader {
     }
 
     private mutating func readLine() throws -> String {
+        let maximumBytes = 8192
         let marker = Data("\r\n".utf8)
         while buffer.range(of: marker) == nil {
+            guard buffer.count < maximumBytes else {
+                throw ContainerUnixHTTPClientError.responseTooLarge(maximumBytes)
+            }
             try readMore()
         }
         guard let range = buffer.range(of: marker) else {
             throw ContainerUnixHTTPClientError.invalidResponse("missing line terminator")
+        }
+        guard buffer.distance(from: buffer.startIndex, to: range.upperBound) <= maximumBytes else {
+            throw ContainerUnixHTTPClientError.responseTooLarge(maximumBytes)
         }
         let data = Data(buffer[..<range.lowerBound])
         buffer.removeSubrange(..<range.upperBound)
@@ -398,7 +480,9 @@ private struct SocketReader {
     private func readChunk() throws -> Data {
         var bytes = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
+            try lifetime.check()
             let count = Darwin.read(descriptor, &bytes, bytes.count)
+            try lifetime.check()
             if count == 0 {
                 return Data()
             }

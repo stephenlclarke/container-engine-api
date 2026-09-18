@@ -1,0 +1,25 @@
+# Bound Unix client requests and preserve executor progress
+
+## Summary
+
+- Add a monotonic request lifetime and cancellation/deadline shutdown while retaining descriptor close ownership in the blocking worker.
+- Use nonblocking connect and bounded polling; execute blocking reads/writes on dispatch workers through a checked continuation instead of `Task.detached` on Swift's cooperative executor.
+- Bound complete response heads, chunk framing lines and aggregate trailers; reject empty, signed, non-hexadecimal and overflowing chunk sizes.
+- Add real-socket cancellation, trickle, malformed-input, path, response-mode and parallel-progress regressions.
+- Add a focused native Bazel graph and Makefile target, reusing the checksum-locked family launcher and SSD test wrapper. This is not a whole-package Bazel migration.
+- Defer hosted CI/Sonar while a PR is a draft and trigger both on `ready_for_review`; non-draft, main, release/manual authorities and Sonar trust checks remain unchanged. No hosted build is required to preserve this local development checkpoint.
+
+See [problem and acceptance criteria](ISSUE-unix-client-request-bounds.md).
+
+## Validation
+
+- Native Bazel focused coverage invocation `f39a02cc-cab6-4646-b259-47f4fdaffbed`: 15 test functions pass, including parameterized negative cases and more-than-worker-count simultaneous connections.
+- Client source coverage: `ContainerUnixHTTPClient.swift` 359/398 lines; `ClientRequestLifetime.swift` 36/38 lines; combined 395/436 (90.60%). This is focused, editable-source development evidence, not a full-package or release quality result.
+- The preceding `59daf4db-00e4-4976-89d8-97b12601c0e4` run hung on cooperative-worker starvation and was stopped after a stack sample proved every worker was blocked in the owned client's socket read. The failed run and private stack trace remain retained. They are not rewritten as a passing result.
+- SwiftFormat, Actionlint, Markdown lint, shell syntax and ShellCheck pass for the changed surface. Independent final source/test/workflow review found no actionable issue.
+
+## Compatibility and remaining risk
+
+`timeoutSeconds` now bounds the entire request rather than only idle system calls. Consumers with intentionally long-lived streams must choose a suitable larger finite deadline. Synchronous response callbacks must cooperate and must not block indefinitely. No HTTP route, wire model or provider identity contract changes. Rare OS error paths and connect-poll branches are not all instrumented by the focused tests; they remain visible in the coverage denominator.
+
+Package-wide tests, exact-head Sonar/sanitizers and runtime consumer qualification remain required at the coherent integration checkpoint. The devcontainer facade's interactive execution path is still being implemented. Do not merge or release this draft as a substitute for those checks. Close the topic branch and remove its isolated worktree after reviewed integration; retain its test evidence and any failed diagnostic trace.

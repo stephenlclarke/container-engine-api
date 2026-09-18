@@ -18,6 +18,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
 SWIFT ?= swift
+FAMILY_BAZEL ?= ../devcontainer-bazel-workflow/Tools/bazel/run.sh
 PYTHON ?= python3
 COVERAGE_MIN ?= 80
 SONAR_QUALITYGATE_WAIT ?= true
@@ -25,6 +26,11 @@ SWIFT_LLVM_COV ?=
 SWIFT_LLVM_PROFDATA ?=
 
 .PHONY: test coverage coverage-tools-test sonar-scan clean
+.PHONY: bazel-client-test
+
+# The native client boundary uses the same enrolled SSD/cache/evidence launcher.
+bazel-client-test:
+	"$(FAMILY_BAZEL)" --workspace "$(CURDIR)" test //:ContainerUnixHTTPClientTests
 
 test:
 	$(SWIFT) test --disable-automatic-resolution

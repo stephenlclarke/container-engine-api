@@ -87,7 +87,8 @@ private struct ClientServerFixture {
     let socketPath: String
 
     init() throws {
-        root = URL(fileURLWithPath: "/private/tmp")
+        root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEST_TMPDIR"]
+            ?? FileManager.default.temporaryDirectory.path)
             .appendingPathComponent("eci-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(
             at: root,
