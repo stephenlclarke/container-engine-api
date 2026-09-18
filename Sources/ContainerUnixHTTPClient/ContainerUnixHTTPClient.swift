@@ -202,10 +202,20 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         var reader = SocketReader(descriptor: descriptor, lifetime: lifetime)
         let head = try reader.readHead(maximumBytes: Self.maximumHeaderBytes)
         let responseHead = try Self.parseHead(head)
-        let collector = BodyCollector(maximumBytes: maximumBodyBytes, handler: onBody)
+        let success = (200 ... 299).contains(responseHead.status)
+        // An error document is diagnostic data, never part of a successful
+        // event/log stream. Bound it even when the successful stream is unbounded.
+        let collector = BodyCollector(
+            maximumBytes: success ? maximumBodyBytes : min(maximumBodyBytes ?? 65536, 65536),
+            handler: { data in
+                if success {
+                    try onBody(data)
+                }
+            }
+        )
         try readBody(request: request, head: responseHead, reader: &reader, collector: collector)
 
-        guard (200 ... 299).contains(responseHead.status) else {
+        guard success else {
             throw ContainerUnixHTTPClientError.server(
                 status: responseHead.status,
                 message: collector.errorMessage

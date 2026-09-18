@@ -6,6 +6,8 @@ The native Engine client at `276a7cfdba91fef60c232177a44c054e5de9ae8f` uses per-
 
 ## Acceptance criteria
 
+- Never forward an HTTP error document into a successful event/log body callback; bound diagnostic bodies even when successful streams have no aggregate limit.
+
 - Add full-duplex Engine upgrade transport for interactive frontend execution without Docker, retaining stdin half-close, raw framing, bounded reads and race-safe explicit closure.
 - Prove that synchronous deadline detection shuts down the opposite blocked direction even when timer delivery is delayed.
 - Apply one monotonic absolute deadline across connect, request write, response head and body.

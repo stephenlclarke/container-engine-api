@@ -25,6 +25,26 @@ import Testing
 @Suite(.serialized)
 struct ContainerUnixHTTPClientTests {
     @Test
+    func `HTTP failures never enter the successful streaming body callback`() async throws {
+        let fixture = try ClientServerFixture()
+        defer { fixture.cleanup() }
+        let server = fixture.server()
+        try await server.start()
+        do {
+            let client = try ContainerUnixHTTPClient(socketPath: fixture.socketPath)
+            let chunks = LockedChunks()
+            await #expect(throws: ContainerUnixHTTPClientError.server(status: 418, message: "teapot")) {
+                try await client.stream(.init(method: .get, target: "/error")) { chunks.append($0) }
+            }
+            #expect(chunks.data.isEmpty)
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+        try await server.shutdown()
+    }
+
+    @Test
     func `duplex upgrades through the shared server and preserves multiplex frames`() async throws {
         let fixture = try ClientServerFixture()
         defer { fixture.cleanup() }
