@@ -29,13 +29,7 @@ final class ClientRequestLifetime: @unchecked Sendable {
     }
 
     func interrupt(_ reason: Interruption) {
-        lock.withLock {
-            guard interruption == nil else { return }
-            interruption = reason
-            if let descriptor {
-                _ = Darwin.shutdown(descriptor, SHUT_RDWR)
-            }
-        }
+        lock.withLock { interruptLocked(reason) }
     }
 
     func close(_ descriptor: Int32) {
@@ -45,14 +39,43 @@ final class ClientRequestLifetime: @unchecked Sendable {
         }
     }
 
+    /// Duplicate under the ownership lock, so close cannot recycle the fd before
+    /// an asynchronous duplex operation acquires its own reference to the socket.
+    func duplicateDescriptor() throws -> Int32 {
+        try lock.withLock {
+            try checkLocked()
+            guard let descriptor else { throw ContainerUnixHTTPClientError.invalidResponse("connection is closed") }
+            let duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
+            guard duplicate >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            return duplicate
+        }
+    }
+
+    func closeConnection() {
+        lock.withLock {
+            guard let descriptor else { return }
+            _ = Darwin.shutdown(descriptor, SHUT_RDWR)
+            Darwin.close(descriptor)
+            self.descriptor = nil
+        }
+    }
+
     private func checkLocked() throws {
         if interruption == nil, ContinuousClock.now >= deadline {
-            interruption = .deadlineExceeded
+            interruptLocked(.deadlineExceeded)
         }
         switch interruption {
         case .cancelled: throw CancellationError()
         case .deadlineExceeded: throw ContainerUnixHTTPClientError.deadlineExceeded
         case nil: break
+        }
+    }
+
+    private func interruptLocked(_ reason: Interruption) {
+        guard interruption == nil else { return }
+        interruption = reason
+        if let descriptor {
+            _ = Darwin.shutdown(descriptor, SHUT_RDWR)
         }
     }
 }

@@ -54,6 +54,8 @@ scripts/make-docs.sh _site api/container-engine-api
 
 The focused native client boundary can also be tested with `make bazel-client-test FAMILY_BAZEL=/absolute/path/to/devcontainer/Tools/bazel/run.sh`. This reuses the digest-pinned Container-family launcher, enrolled SSD scratch/cache and internal retained evidence; it does not wrap `swift test`. The initial Bazel graph covers the client, its wire/server dependencies and client tests only, not the whole package. The consumer tooling lock must match the reviewed launcher bytes. `timeoutSeconds` is now the maximum duration of one complete client request, including connect, write, headers and body; choose an appropriately larger finite value for long-lived streams. Response callbacks run synchronously and must not block indefinitely.
 
+`ContainerUnixHTTPClient.openDuplex(_:)` adds the Engine's `Connection: Upgrade` / `Upgrade: tcp` headers and requires a valid HTTP 101 reply. The returned connection preserves raw bytes, including Docker multiplex framing, and supports simultaneous `read()` and `write(_:)`. Reads are bounded to 64 KiB; `finishInput()` delivers stdin EOF while retaining output, and `close()` is idempotent and safe during I/O. Callers must close the connection when finished and decode its framing themselves. Cancellation of an active operation interrupts both directions. The original absolute deadline includes the handshake and the entire upgraded session; expiry interrupts I/O, while explicit close or deinitialization releases the owned connection. No Docker executable or VM is used by this transport.
+
 Build and test the complete package with SwiftPM:
 
 ```sh

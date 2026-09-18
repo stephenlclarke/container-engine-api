@@ -100,20 +100,23 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
             throw ContainerUnixHTTPClientError.invalidResponse("body limit must not be negative")
         }
         let lifetime = ClientRequestLifetime(timeoutSeconds: timeoutSeconds)
-        let timer = DispatchSource.makeTimerSource(queue: .global())
-        timer.schedule(deadline: .now() + .seconds(timeoutSeconds))
-        timer.setEventHandler { lifetime.interrupt(.deadlineExceeded) }
-        timer.resume()
+        let timer = ClientRequestDeadline(lifetime: lifetime, timeoutSeconds: timeoutSeconds)
         defer { timer.cancel() }
         return try await withTaskCancellationHandler {
             do {
-                let response: ContainerUnixHTTPClientResponse = try await withCheckedThrowingContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async { [self] in
-                        continuation.resume(with: Result {
-                            try sendBlocking(request, lifetime: lifetime, maximumBodyBytes: maximumBodyBytes, onBody: onBody)
-                        })
+                let response: ContainerUnixHTTPClientResponse =
+                    try await withCheckedThrowingContinuation { continuation in
+                        DispatchQueue.global(qos: .userInitiated).async { [self] in
+                            continuation.resume(with: Result {
+                                try sendBlocking(
+                                    request,
+                                    lifetime: lifetime,
+                                    maximumBodyBytes: maximumBodyBytes,
+                                    onBody: onBody
+                                )
+                            })
+                        }
                     }
-                }
                 try lifetime.check()
                 return response
             } catch {
@@ -123,6 +126,67 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         } onCancel: {
             lifetime.interrupt(.cancelled)
         }
+    }
+
+    /// Opens a Docker TCP-style HTTP upgrade over the same protected Unix socket.
+    /// The deadline covers the handshake and the entire returned connection.
+    public func openDuplex(_ request: DockerHTTPRequest) async throws -> ContainerUnixHTTPConnection {
+        try Task.checkCancellation()
+        var upgraded = request
+        guard request.headers.values(for: "Connection").isEmpty,
+              request.headers.values(for: "Upgrade").isEmpty
+        else {
+            throw ContainerUnixHTTPClientError.invalidResponse("upgrade headers are owned by openDuplex")
+        }
+        upgraded.headers.append(name: "Connection", value: "Upgrade")
+        upgraded.headers.append(name: "Upgrade", value: "tcp")
+        let upgradeRequest = upgraded
+        let lifetime = ClientRequestLifetime(timeoutSeconds: timeoutSeconds)
+        let timer = ClientRequestDeadline(lifetime: lifetime, timeoutSeconds: timeoutSeconds)
+        return try await withTaskCancellationHandler {
+            do {
+                let connection: ContainerUnixHTTPConnection =
+                    try await withCheckedThrowingContinuation { continuation in
+                        DispatchQueue.global(qos: .userInitiated).async { [self] in
+                            continuation.resume(with: Result {
+                                try openDuplexBlocking(upgradeRequest, lifetime: lifetime, timer: timer)
+                            })
+                        }
+                    }
+                try lifetime.check()
+                return connection
+            } catch {
+                timer.cancel()
+                lifetime.closeConnection()
+                try lifetime.check()
+                throw error
+            }
+        } onCancel: {
+            lifetime.interrupt(.cancelled)
+        }
+    }
+
+    private func openDuplexBlocking(
+        _ request: DockerHTTPRequest, lifetime: ClientRequestLifetime, timer: ClientRequestDeadline
+    ) throws -> ContainerUnixHTTPConnection {
+        let descriptor = try connect(lifetime: lifetime)
+        try write(Self.serialized(request), to: descriptor, lifetime: lifetime)
+        var reader = SocketReader(descriptor: descriptor, lifetime: lifetime)
+        let head = try Self.parseHead(reader.readHead(maximumBytes: Self.maximumHeaderBytes))
+        guard head.status == 101 else {
+            let collector = BodyCollector(maximumBytes: 64 * 1024, handler: { _ in /* Retain error only. */ })
+            try readBody(request: request, head: head, reader: &reader, collector: collector)
+            throw ContainerUnixHTTPClientError.server(status: head.status, message: collector.errorMessage)
+        }
+        let connectionTokens = head.headers["connection"]?.lowercased().split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        } ?? []
+        guard connectionTokens.contains("upgrade"), head.headers["upgrade"]?.lowercased() == "tcp",
+              head.headers["transfer-encoding"] == nil, head.headers["content-length"] == nil
+        else {
+            throw ContainerUnixHTTPClientError.invalidResponse("invalid Engine upgrade response")
+        }
+        return ContainerUnixHTTPConnection(lifetime: lifetime, timer: timer, buffered: reader.takeBuffered())
     }
 
     private func sendBlocking(
@@ -139,15 +203,7 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         let head = try reader.readHead(maximumBytes: Self.maximumHeaderBytes)
         let responseHead = try Self.parseHead(head)
         let collector = BodyCollector(maximumBytes: maximumBodyBytes, handler: onBody)
-        if request.method == .head || Self.statusHasNoBody(responseHead.status) {
-            // RFC 9110 responses with no content may keep the connection open.
-        } else if responseHead.headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
-            try reader.readChunked(collector.accept)
-        } else if let value = responseHead.headers["content-length"], let length = Int(value), length >= 0 {
-            try reader.readExactly(length, handler: collector.accept)
-        } else {
-            try reader.readUntilEOF(collector.accept)
-        }
+        try readBody(request: request, head: responseHead, reader: &reader, collector: collector)
 
         guard (200 ... 299).contains(responseHead.status) else {
             throw ContainerUnixHTTPClientError.server(
@@ -162,6 +218,21 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         )
     }
 
+    private func readBody(
+        request: DockerHTTPRequest, head: (status: Int, headers: [String: String]),
+        reader: inout SocketReader, collector: BodyCollector
+    ) throws {
+        if request.method == .head || Self.statusHasNoBody(head.status) {
+            // RFC 9110 responses with no content may keep the connection open.
+        } else if head.headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
+            try reader.readChunked(collector.accept)
+        } else if let value = head.headers["content-length"], let length = Int(value), length >= 0 {
+            try reader.readExactly(length, handler: collector.accept)
+        } else {
+            try reader.readUntilEOF(collector.accept)
+        }
+    }
+
     private static func statusHasNoBody(_ status: Int) -> Bool {
         (100 ... 199).contains(status) || status == 204 || status == 304
     }
@@ -173,16 +244,7 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         guard descriptor >= 0 else { throw Self.posixError() }
         do {
             try lifetime.register(descriptor)
-            var noSignal: Int32 = 1
-            guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout.size(ofValue: noSignal))) == 0 else {
-                throw Self.posixError()
-            }
-            var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
-            guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0,
-                  setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0
-            else {
-                throw Self.posixError()
-            }
+            try configureSocket(descriptor)
             var address = sockaddr_un()
             address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
             address.sun_family = sa_family_t(AF_UNIX)
@@ -211,6 +273,21 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         } catch {
             lifetime.close(descriptor)
             throw error
+        }
+    }
+
+    private func configureSocket(_ descriptor: Int32) throws {
+        var noSignal: Int32 = 1
+        let signalSize = socklen_t(MemoryLayout.size(ofValue: noSignal))
+        guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, signalSize) == 0 else {
+            throw Self.posixError()
+        }
+        var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
+        let timeoutSize = socklen_t(MemoryLayout.size(ofValue: timeout))
+        guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutSize) == 0,
+              setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutSize) == 0
+        else {
+            throw Self.posixError()
         }
     }
 
@@ -369,6 +446,11 @@ private struct SocketReader {
     init(descriptor: Int32, lifetime: ClientRequestLifetime) {
         self.descriptor = descriptor
         self.lifetime = lifetime
+    }
+
+    mutating func takeBuffered() -> Data {
+        defer { buffer.removeAll() }
+        return buffer
     }
 
     mutating func readHead(maximumBytes: Int) throws -> Data {

@@ -25,6 +25,36 @@ import Testing
 @Suite(.serialized)
 struct ContainerUnixHTTPClientTests {
     @Test
+    func `duplex upgrades through the shared server and preserves multiplex frames`() async throws {
+        let fixture = try ClientServerFixture()
+        defer { fixture.cleanup() }
+        let server = fixture.server()
+        try await server.start()
+        do {
+            let client = try ContainerUnixHTTPClient(socketPath: fixture.socketPath, timeoutSeconds: 5)
+            let connection = try await client.openDuplex(.init(method: .post, target: "/duplex"))
+            defer { connection.close() }
+            let payload = Data("shell command\n".utf8)
+            try await connection.write(payload)
+            try await connection.finishInput()
+            var received = Data()
+            while let bytes = try await connection.read() {
+                received.append(bytes)
+            }
+            let expected = try DockerStreamFraming.encode(
+                .init(channel: .standardOutput, data: payload),
+                terminal: false
+            )
+                + DockerStreamFraming.encode(.init(channel: .standardError, data: Data("stderr".utf8)), terminal: false)
+            #expect(received == expected)
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+        try await server.shutdown()
+    }
+
+    @Test
     func `reads fixed and chunked responses from the real Unix server`() async throws {
         let fixture = try ClientServerFixture()
         defer { fixture.cleanup() }
@@ -114,6 +144,16 @@ private struct ClientServerFixture {
 private struct ClientFixtureResponder: DockerHTTPResponder {
     func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
         switch request.target {
+        case "/duplex":
+            DockerHTTPResponse(
+                status: 200,
+                headers: [
+                    "Connection": "Upgrade",
+                    "Upgrade": "tcp",
+                    "Content-Type": "application/vnd.docker.multiplexed-stream"
+                ],
+                body: .hijack(ClientEchoSession(), terminal: false)
+            )
         case "/fixed":
             .text("fixed-body")
         case "/stream":
@@ -128,6 +168,34 @@ private struct ClientFixtureResponder: DockerHTTPResponder {
         default:
             .empty(status: 404)
         }
+    }
+}
+
+private actor ClientEchoSession: DockerHijackSession {
+    nonisolated let frames: AsyncThrowingStream<DockerStreamFrame, any Error>
+    private let continuation: AsyncThrowingStream<DockerStreamFrame, any Error>.Continuation
+    private var input = Data()
+
+    init() {
+        (frames, continuation) = AsyncThrowingStream.makeStream()
+    }
+
+    func write(_ data: Data) {
+        input.append(data)
+    }
+
+    func closeStandardInput() {
+        continuation.yield(.init(channel: .standardOutput, data: input))
+        continuation.yield(.init(channel: .standardError, data: Data("stderr".utf8)))
+        continuation.finish()
+    }
+
+    func wait() -> Int32 {
+        0
+    }
+
+    func cancel() {
+        continuation.finish()
     }
 }
 

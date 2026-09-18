@@ -6,6 +6,8 @@ The native Engine client at `276a7cfdba91fef60c232177a44c054e5de9ae8f` uses per-
 
 ## Acceptance criteria
 
+- Add full-duplex Engine upgrade transport for interactive frontend execution without Docker, retaining stdin half-close, raw framing, bounded reads and race-safe explicit closure.
+- Prove that synchronous deadline detection shuts down the opposite blocked direction even when timer delivery is delayed.
 - Apply one monotonic absolute deadline across connect, request write, response head and body.
 - Forward task cancellation to the owned socket and await worker cleanup before returning; never close a descriptor from a competing thread.
 - Keep blocking socket work off Swift's cooperative executor and prove more simultaneous requests than worker threads complete.

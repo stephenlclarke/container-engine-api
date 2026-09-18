@@ -15,7 +15,8 @@ struct ClientBoundaryTests {
             }
         }
         let path = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEST_TMPDIR"]
-            ?? FileManager.default.temporaryDirectory.path).appendingPathComponent("absent-\(UUID().uuidString.prefix(8))").path
+            ?? FileManager.default.temporaryDirectory.path)
+            .appendingPathComponent("absent-\(UUID().uuidString.prefix(8))").path
         let client = try ContainerUnixHTTPClient(socketPath: path)
         await #expect(throws: POSIXError.self) { try await client.send(DockerHTTPRequest(method: .get, target: "/")) }
         #expect(!FileManager.default.fileExists(atPath: path))
