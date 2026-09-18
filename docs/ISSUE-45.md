@@ -1,4 +1,4 @@
-# Bound native Unix client requests
+# Issue context for PR 45: bound native Unix client requests
 
 ## Problem
 
@@ -14,3 +14,5 @@ The native Engine client at `276a7cfdba91fef60c232177a44c054e5de9ae8f` uses per-
 - Exercise real private sockets through native Bazel, retaining failed and successful evidence on the established SSD/internal-storage workflow.
 
 Owner: Container-family D01 implementation stream. This is a prerequisite fix, not completion of D01, the package-wide Bazel migration, runtime parity or a release. No Docker runtime or Apple service is needed by these tests.
+
+Pull request: [#45](https://github.com/stephenlclarke/container-engine-api/pull/45).
