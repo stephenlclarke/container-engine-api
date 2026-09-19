@@ -57,6 +57,7 @@ public enum ContainerUnixHTTPClientError: Error, Equatable, CustomStringConverti
 /// order and are bounded before the caller callback is invoked.
 public final class ContainerUnixHTTPClient: @unchecked Sendable {
     public typealias BodyHandler = @Sendable (Data) throws -> Void
+    public typealias ResponseHeadHandler = @Sendable (ContainerUnixHTTPClientResponse) throws -> Void
 
     private static let readSize = 64 * 1024
     private static let maximumHeaderBytes = 64 * 1024
@@ -77,10 +78,11 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
 
     public func send(
         _ request: DockerHTTPRequest,
-        maximumBodyBytes: Int = 16 * 1024 * 1024
+        maximumBodyBytes: Int = 16 * 1024 * 1024,
+        onResponseHead: ResponseHeadHandler? = nil
     ) async throws -> ContainerUnixHTTPClientResponse {
         let body = DataAccumulator()
-        let response = try await stream(request, maximumBodyBytes: maximumBodyBytes) {
+        let response = try await stream(request, maximumBodyBytes: maximumBodyBytes, onResponseHead: onResponseHead) {
             body.append($0)
         }
         return ContainerUnixHTTPClientResponse(
@@ -90,9 +92,14 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         )
     }
 
+    /// The optional callback acknowledges a parsed successful response head
+    /// exactly once, before any body bytes. Its body is empty. Throwing aborts
+    /// the request; an HTTP failure never invokes this callback. A successful
+    /// head does not guarantee that the later response body will complete.
     public func stream(
         _ request: DockerHTTPRequest,
         maximumBodyBytes: Int? = nil,
+        onResponseHead: ResponseHeadHandler? = nil,
         onBody: @escaping BodyHandler
     ) async throws -> ContainerUnixHTTPClientResponse {
         try Task.checkCancellation()
@@ -112,6 +119,7 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
                                     request,
                                     lifetime: lifetime,
                                     maximumBodyBytes: maximumBodyBytes,
+                                    onResponseHead: onResponseHead,
                                     onBody: onBody
                                 )
                             })
@@ -193,6 +201,7 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         _ request: DockerHTTPRequest,
         lifetime: ClientRequestLifetime,
         maximumBodyBytes: Int?,
+        onResponseHead: ResponseHeadHandler?,
         onBody: @escaping BodyHandler
     ) throws -> ContainerUnixHTTPClientResponse {
         let descriptor = try connect(lifetime: lifetime)
@@ -203,6 +212,11 @@ public final class ContainerUnixHTTPClient: @unchecked Sendable {
         let head = try reader.readHead(maximumBytes: Self.maximumHeaderBytes)
         let responseHead = try Self.parseHead(head)
         let success = (200 ... 299).contains(responseHead.status)
+        if success {
+            try lifetime.check()
+            try onResponseHead?(.init(status: responseHead.status, headers: responseHead.headers, body: Data()))
+            try lifetime.check()
+        }
         // An error document is diagnostic data, never part of a successful
         // event/log stream. Bound it even when the successful stream is unbounded.
         let collector = BodyCollector(

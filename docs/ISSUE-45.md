@@ -2,6 +2,8 @@
 
 ## Problem
 
+Native foreground startup also needs an acknowledged streaming response before it starts the process. Waiting for the complete `/wait` response cannot establish readiness; starting a request concurrently without header acknowledgement still races automatic removal. The shared client therefore needs an optional successful-head callback, while the provider must separately register the incarnation-bound exit waiter before sending those headers.
+
 The native Engine client at `276a7cfdba91fef60c232177a44c054e5de9ae8f` uses per-system-call inactivity timeouts and an uncancelled detached Swift task. A trickling peer can keep a request alive indefinitely. Concurrent blocking reads can exhaust Swift's cooperative executor, preventing asynchronous peers and cancellation work from progressing. Chunk-size and trailer lines are unbounded, and an empty chunk-size line can trap. These defects block adoption by the Docker-free devcontainer command frontend.
 
 ## Acceptance criteria

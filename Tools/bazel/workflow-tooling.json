@@ -5,15 +5,15 @@
   },
   "candidate_archive.py": {
     "mode": 420,
-    "sha256": "412f8bf87af1c61671c9761b7819a84c389049390ae00d5028b67eafc825712d"
+    "sha256": "b9bd5640f320246b763c49ec0683818a0c277f4843549330eef9dc9a47a012aa"
   },
   "check_evidence.py": {
     "mode": 420,
-    "sha256": "498647f4d9c65e968364c7b1b1a01e357e05569bc80dbae63c0098c1130ff145"
+    "sha256": "e9c4d17bce10c6f6e263a77da0a9d3ed43e223d001c18e6b0be81dba03eb132f"
   },
   "coverage_report.py": {
     "mode": 420,
-    "sha256": "d9639063f24fc3c7d7432cd87d0e25d5ac1de628d4a28ab2691e375ef3053692"
+    "sha256": "b5b8db908bf43d390e8051e2ee693a4798606e947a3b3381d4f842d1b371427e"
   },
   "hygiene.py": {
     "mode": 420,
@@ -29,7 +29,7 @@
   },
   "prepare_candidate.py": {
     "mode": 420,
-    "sha256": "9584aba572ba66faf7222512643ef5657dbb73e2555aca1b4a835d4fb89461c8"
+    "sha256": "c5bb3c0fd71a8a6dd06e57ca9b5503fbde175d564c782c47dd965b4db5be4dbc"
   },
   "prepare_devcontainers_cli.py": {
     "mode": 420,
@@ -41,11 +41,11 @@
   },
   "prepare_guest_images.py": {
     "mode": 420,
-    "sha256": "abac7804eaedb91af275f6e8e63ee5e26f8f122965a2c24eb54e360acee12d52"
+    "sha256": "104c28c5f98a56e725e942a75a8dd413ae41d925dde03e558939b8973a516e98"
   },
   "prepare_releases.py": {
     "mode": 420,
-    "sha256": "2f51d662d68a14b3a0f2053631e7fd2a1a63ef87c27ad11ed219f7c240aa3036"
+    "sha256": "6446b14c9cf866474a951a955b8004bacb5f4f3676fba2266477dfc58eb9fc14"
   },
   "release_inputs.py": {
     "mode": 420,
@@ -57,7 +57,7 @@
   },
   "run.sh": {
     "mode": 493,
-    "sha256": "ad8312a2ed637e7576ac82bf50724eb4d5d917f2d4c8f1fcf40f0eaba6a1741b"
+    "sha256": "e1e560f169c22a4d824a4b4d5fc2f9a0407907a210811e1b0b0dd2250331a343"
   },
   "ssd-test-runner.sh": {
     "mode": 493,
@@ -69,15 +69,15 @@
   },
   "test_candidate_archive.py": {
     "mode": 420,
-    "sha256": "60d2b2bb6b9a5c0fb799e67c193fc48a5c6dde9fff928560a9817faaf86816aa"
+    "sha256": "61067fdbe6570c37fc2a591aab186df1e8c138966d5ff82a5df9200664705d26"
   },
   "test_coverage_report.py": {
     "mode": 420,
-    "sha256": "8b35a0696e419cec470f1c73335b10ab7fa27d23221b4aad0f585d6d43cb8706"
+    "sha256": "bc670ef0f0b09e5cbd017359272977dde6ab5867c36f9902ee76eb406ab2e8f4"
   },
   "test_evidence.py": {
     "mode": 420,
-    "sha256": "b595e431b898e02e0af614dbe3a6650e5f58c526a9561d03e256b25ef8f85a88"
+    "sha256": "1be27de6d33ebd0e9ff94a851188c0f01851f9d03a527a77e7c05232baa1f1b6"
   },
   "test_hygiene.py": {
     "mode": 420,
@@ -93,7 +93,7 @@
   },
   "test_prepare_candidate.py": {
     "mode": 420,
-    "sha256": "0e2c224ddce95518e2bb4aed38f95b767193652f85a692dcc9801f6c79849c0c"
+    "sha256": "25a7cb22c1c0f45e9b7c6e6acf1d013dff377fa85807f6981bd9aa8b012064fc"
   },
   "test_prepare_devcontainers_cli.py": {
     "mode": 420,
@@ -105,7 +105,7 @@
   },
   "test_prepare_guest_images.py": {
     "mode": 420,
-    "sha256": "6572343072636227612fd44b8b3f5e1ce831089f70003fe1efe7be2c900d9bb0"
+    "sha256": "d42879cd914729393c55557fa236b6da598406de676f58fed5c401e83719c41a"
   },
   "test_prepare_releases.py": {
     "mode": 420,

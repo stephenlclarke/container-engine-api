@@ -58,6 +58,8 @@ The focused native client boundary can also be tested with `make bazel-client-te
 
 Streaming callbacks receive successful response bodies only. HTTP error documents are captured separately, capped at 64 KiB (or a tighter caller limit), and reported as errors without contaminating event or log output.
 
+The optional `onResponseHead` callback on `send` and `stream` receives a parsed successful response head exactly once, with an empty body, before body delivery begins. This lets a client wait for a server's registration acknowledgement before starting another operation. The server must establish that registration before emitting headers; this transport callback does not create that guarantee. HTTP failures do not invoke it; throwing aborts the request. Callbacks remain synchronous and must not block indefinitely, and a successful head does not guarantee completion of the later body.
+
 Build and test the complete package with SwiftPM:
 
 ```sh

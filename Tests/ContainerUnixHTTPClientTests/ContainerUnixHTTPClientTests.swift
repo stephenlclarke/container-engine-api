@@ -34,7 +34,54 @@ struct ContainerUnixHTTPClientTests {
             let client = try ContainerUnixHTTPClient(socketPath: fixture.socketPath)
             let chunks = LockedChunks()
             await #expect(throws: ContainerUnixHTTPClientError.server(status: 418, message: "teapot")) {
-                try await client.stream(.init(method: .get, target: "/error")) { chunks.append($0) }
+                try await client.stream(.init(method: .get, target: "/error"), onResponseHead: { _ in
+                    chunks.append(Data("unexpected head".utf8))
+                }, onBody: { chunks.append($0) })
+            }
+            #expect(chunks.data.isEmpty)
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+        try await server.shutdown()
+    }
+
+    @Test(arguments: ["/fixed", "/stream"])
+    func `successful head is acknowledged once before body`(_ path: String) async throws {
+        let fixture = try ClientServerFixture()
+        defer { fixture.cleanup() }
+        let server = fixture.server()
+        try await server.start()
+        do {
+            let client = try ContainerUnixHTTPClient(socketPath: fixture.socketPath)
+            let chunks = LockedChunks()
+            _ = try await client.stream(.init(method: .get, target: path), onResponseHead: { head in
+                #expect(head.status == 200)
+                #expect(head.body.isEmpty)
+                #expect(chunks.data.isEmpty)
+                chunks.append(Data("head:".utf8))
+            }, onBody: { chunks.append($0) })
+            #expect(chunks.data == Data((path == "/fixed" ? "head:fixed-body" : "head:first-second").utf8))
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+        try await server.shutdown()
+    }
+
+    @Test
+    func `head callback failure prevents body delivery`() async throws {
+        let fixture = try ClientServerFixture()
+        defer { fixture.cleanup() }
+        let server = fixture.server()
+        try await server.start()
+        do {
+            let client = try ContainerUnixHTTPClient(socketPath: fixture.socketPath)
+            let chunks = LockedChunks()
+            await #expect(throws: CancellationError.self) {
+                try await client.stream(.init(method: .get, target: "/stream"), onResponseHead: { _ in
+                    throw CancellationError()
+                }, onBody: { chunks.append($0) })
             }
             #expect(chunks.data.isEmpty)
         } catch {
