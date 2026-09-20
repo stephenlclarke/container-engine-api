@@ -13,7 +13,7 @@
   },
   "coverage_report.py": {
     "mode": 420,
-    "sha256": "b5b8db908bf43d390e8051e2ee693a4798606e947a3b3381d4f842d1b371427e"
+    "sha256": "c08d6bf357265a982aa248d4f6f49d7cdfe2d466758b994ccc8a6814521f8887"
   },
   "hygiene.py": {
     "mode": 420,
@@ -61,7 +61,7 @@
   },
   "ssd-test-runner.sh": {
     "mode": 493,
-    "sha256": "0a0587d48b85eb5d4d090b2ac8155fa5cfd3ef8eb13eef549688da0a80618789"
+    "sha256": "1aa681204b518f4f3c91d576121064979a9d6bb4b8cf9e832429627184a0db6a"
   },
   "test_build_timing.py": {
     "mode": 420,
@@ -73,11 +73,11 @@
   },
   "test_coverage_report.py": {
     "mode": 420,
-    "sha256": "bc670ef0f0b09e5cbd017359272977dde6ab5867c36f9902ee76eb406ab2e8f4"
+    "sha256": "919766792e70a0b149742f78753ce3d620eb81d965b807530716b8530e7fbceb"
   },
   "test_evidence.py": {
     "mode": 420,
-    "sha256": "1be27de6d33ebd0e9ff94a851188c0f01851f9d03a527a77e7c05232baa1f1b6"
+    "sha256": "f12017dbbf166ea93b70cdb7f43be7d2585dfdc87076109ed0e3d64e9cfceee1"
   },
   "test_hygiene.py": {
     "mode": 420,
@@ -89,7 +89,7 @@
   },
   "test_launcher.py": {
     "mode": 420,
-    "sha256": "6bf52ac16efbda0836f82e69ccb5a4bba592fe9be921ce7e141bc2546d41fe3e"
+    "sha256": "15a76dcd537b0f98c2c48b7fffee2b182ab7a3fde02d3fc445bb75292df1c0be"
   },
   "test_prepare_candidate.py": {
     "mode": 420,

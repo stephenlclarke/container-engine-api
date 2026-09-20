@@ -60,6 +60,8 @@ Streaming callbacks receive successful response bodies only. HTTP error document
 
 The optional `onResponseHead` callback on `send` and `stream` receives a parsed successful response head exactly once, with an empty body, before body delivery begins. This lets a client wait for a server's registration acknowledgement before starting another operation. The server must establish that registration before emitting headers; this transport callback does not create that guarantee. HTTP failures do not invoke it; throwing aborts the request. Callbacks remain synchronous and must not block indefinitely, and a successful head does not guarantee completion of the later body.
 
+Native recovery control is separately opt-in: a selected provider advertising `engine.control.recovery` version 1 as native or emulated exposes only `GET` and `POST /_container-family/recovery`, optionally prefixed by a supported Engine API version. These are Container-family controls, not Docker API conformance routes. Requests retain the normal private-session fingerprint and code-identity checks; the provider owns epoch validation, freeze/quiescence and cleanup policy. Missing, unavailable or unsupported capability versions expose no recovery route, and unknown paths/methods are never forwarded. `make bazel-gateway-test` exercises the public/private socket boundary with SSD scratch and the same retained-evidence launcher as the client target. The additive native graph now covers gateway dependencies and tests, not the complete package.
+
 Build and test the complete package with SwiftPM:
 
 ```sh

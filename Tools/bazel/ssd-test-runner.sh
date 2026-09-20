@@ -3,6 +3,8 @@
 # USAGE: ssd-test-runner.sh TEST_EXECUTABLE [ARGS...]
 # Give tools a writable per-test TMPDIR. Foundation on Darwin can still prefer
 # its system directory, so Swift fixtures must explicitly honour TEST_TMPDIR.
+# DEVCONTAINER_TEST_STANDALONE=1 uses a temporary exact copy for peer-identity
+# tests; the default is 0 and does not relocate the test executable.
 set -euo pipefail
 
 [[ "${TEST_TMPDIR:-}" == /Volumes/SSD/cf/bazel/* && -d "$TEST_TMPDIR" && -w "$TEST_TMPDIR" ]] || {
@@ -18,6 +20,24 @@ export TEST_TMPDIR
 export BAZEL_TEST=1
 export TMPDIR="$TEST_TMPDIR" TMP="$TEST_TMPDIR" TEMP="$TEST_TMPDIR"
 export DEVCONTAINER_TEST_SCRATCH_ROOT=/Volumes/SSD/cf/bazel/
+case "${DEVCONTAINER_TEST_STANDALONE:-0}" in
+    0) : ;;
+    1)
+        [[ $# -gt 0 && -f "$1" && -x "$1" ]] || exit 2
+        standalone_executable="$(/usr/bin/mktemp "$TEST_TMPDIR/provider-test.XXXXXX")"
+        trap '/bin/rm -f -- "$standalone_executable"' EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        # Reuse the family workaround for incomplete rules_swift test bundles;
+        # keep strict peer identity checks and never re-sign cached binaries.
+        /bin/cp "$1" "$standalone_executable"
+        /bin/chmod 700 "$standalone_executable"
+        /usr/bin/codesign --verify --strict "$standalone_executable"
+        set -- "$standalone_executable" "${@:2}"
+        ;;
+    *) printf 'Standalone test mode must be 0 or 1.\n' >&2; exit 2 ;;
+esac
 if "$@"; then
     status=0
 else
