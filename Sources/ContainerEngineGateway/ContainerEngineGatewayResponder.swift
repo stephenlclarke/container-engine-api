@@ -11,6 +11,10 @@ import Foundation
 
 /// Owns Engine route advertisement and dispatch for exactly one selected provider.
 public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
+    /// Opt-in native control protocol, distinct from the generated Docker API.
+    public static let recoveryCapabilityIdentifier = "engine.control.recovery"
+    public static let recoveryCapabilityVersion: UInt32 = 1
+
     private static let gatewayRouteIdentifiers: Set<String> = [
         "SystemPing",
         "SystemPingHead"
@@ -37,8 +41,31 @@ public struct ContainerEngineGatewayResponder: DockerHTTPResponder, Sendable {
             }
         )
         let implemented = providerRoutes.union(Self.gatewayRouteIdentifiers)
-        ledger = try DockerEngineAPIRouteLedger.make(
+        let dockerLedger = try DockerEngineAPIRouteLedger.make(
             implementedRouteIdentifiers: implemented
+        )
+        let recoveryAvailable = fingerprint.declaration.capabilities.contains {
+            $0.identifier == Self.recoveryCapabilityIdentifier
+                && $0.version == Self.recoveryCapabilityVersion
+                && $0.status != .unavailable
+        }
+        let recoveryRoutes: [DockerRouteMetadata] = try recoveryAvailable ? [
+            (.get, "ContainerFamilyRecoveryInspect"),
+            (.post, "ContainerFamilyRecoveryFreeze")
+        ].map { method, identifier in
+            try DockerRouteMetadata(
+                identifier: identifier, method: method,
+                pattern: DockerRoutePattern("/_container-family/recovery"),
+                introduced: dockerLedger.minimumAPIVersion,
+                responseMode: .bytes, disposition: .implemented
+            )
+        } : []
+        // Retain normal method/version validation and the authenticated provider
+        // session. Unknown control paths never become generic forwarding routes.
+        ledger = try DockerRouteLedger(
+            minimumAPIVersion: dockerLedger.minimumAPIVersion,
+            maximumAPIVersion: dockerLedger.maximumAPIVersion,
+            routes: dockerLedger.routes + recoveryRoutes
         )
         provider = ContainerEngineProviderSessionClient(
             socketPath: providerSocketPath,
