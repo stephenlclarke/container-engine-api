@@ -1262,7 +1262,7 @@ private final class DockerHTTPHandler:
                     let context = sendableContext.value
                     switch removal {
                     case .success:
-                        handler.start(channel: context.channel)
+                        handler.start(context: context)
                         if self.closeAfterResponse || self.upgradeState.inputClosed {
                             handler.closeInput()
                         }
@@ -1684,6 +1684,7 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
     private let terminal: Bool
     private let logger: Logger
     private let inputPump: OrderedDockerInputPump
+    private let inputReadController: RawDockerInputReadController
     private let cancellation: DockerHijackCancellation
     private var outputTask: Task<Void, Never>?
     private let stateLock = NSLock()
@@ -1699,13 +1700,25 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
         self.logger = logger
         let cancellation = DockerHijackCancellation(session: session)
         self.cancellation = cancellation
+        let inputReadController = RawDockerInputReadController()
+        self.inputReadController = inputReadController
         inputPump = OrderedDockerInputPump(
             session: session,
             cancellation: cancellation
         )
     }
 
-    func start(channel: any Channel) {
+    func start(context: ChannelHandlerContext) {
+        let channel = context.channel
+        inputPump.setQueueDrainedHandler { [weak self] in
+            guard let self else {
+                return
+            }
+            inputReadController.queueDrained { [weak self] in
+                self?.inputPump.isDrained ?? false
+            }
+        }
+        inputReadController.start(channel: channel)
         outputTask = Task {
             do {
                 for try await frame in session.frames {
@@ -1752,13 +1765,20 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
         guard !bytes.isEmpty else {
             return
         }
+        inputReadController.inputReceived()
         guard writeInput(Data(bytes)) else {
             context.close(promise: nil)
             return
         }
     }
 
+    func channelReadComplete(context: ChannelHandlerContext) {
+        inputReadController.inputReadCompleted()
+        context.fireChannelReadComplete()
+    }
+
     func closeInput() {
+        inputReadController.closeInput()
         inputPump.close()
     }
 
@@ -1770,6 +1790,7 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        inputReadController.stop()
         let shouldCancel = stateLock.withLock {
             !finishedNormally
         }
@@ -2221,6 +2242,7 @@ final class OrderedDockerInputPump: @unchecked Sendable {
     private let worker: Task<Void, Never>
     private let cancellation: DockerHijackCancellation
     private let queue: OrderedDockerInputQueue
+    private let drainSignal: DockerInputQueueDrainSignal
     private let stateLock = NSLock()
     private var finished = false
 
@@ -2248,15 +2270,20 @@ final class OrderedDockerInputPump: @unchecked Sendable {
         self.continuation = continuation
         self.cancellation = cancellation
         self.queue = queue
+        let drainSignal = DockerInputQueueDrainSignal()
+        self.drainSignal = drainSignal
         worker = Task {
             do {
                 for await _ in signals {
                     while let data = queue.popFirst() {
+                        defer { queue.complete(data.count) }
                         try Task.checkCancellation()
                         try await session.write(data)
                     }
+                    drainSignal.notify()
                 }
                 while let data = queue.popFirst() {
+                    defer { queue.complete(data.count) }
                     try Task.checkCancellation()
                     try await session.write(data)
                 }
@@ -2265,6 +2292,7 @@ final class OrderedDockerInputPump: @unchecked Sendable {
                     try await session.closeStandardInput()
                 }
             } catch {
+                queue.cancel()
                 cancellation.cancel()
             }
         }
@@ -2337,6 +2365,116 @@ final class OrderedDockerInputPump: @unchecked Sendable {
     func wait() async {
         await worker.value
     }
+
+    var isDrained: Bool {
+        queue.isDrained
+    }
+
+    func setQueueDrainedHandler(_ handler: @escaping @Sendable () -> Void) {
+        drainSignal.setHandler(handler)
+    }
+}
+
+private final class DockerInputQueueDrainSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable () -> Void)?
+
+    func setHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            self.handler = handler
+        }
+    }
+
+    func notify() {
+        let handler = lock.withLock { self.handler }
+        handler?()
+    }
+}
+
+private final class RawDockerInputReadController: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var channel: (any Channel)?
+    private var active = false
+    private var readBatchComplete = false
+    private var isQueueDrained = true
+    private var inputClosed = false
+
+    func start(channel: any Channel) {
+        lock.withLock {
+            self.channel = channel
+        }
+        channel.setOption(ChannelOptions.autoRead, value: false).whenComplete { [weak self] result in
+            guard case .success = result else {
+                channel.close(promise: nil)
+                return
+            }
+            channel.eventLoop.execute {
+                guard let self else {
+                    return
+                }
+                self.lock.withLock {
+                    self.active = true
+                    self.readBatchComplete = true
+                }
+                self.readIfReady()
+            }
+        }
+    }
+
+    func inputReceived() {
+        lock.withLock {
+            isQueueDrained = false
+        }
+    }
+
+    func inputReadCompleted() {
+        lock.withLock {
+            readBatchComplete = true
+        }
+        readIfReady()
+    }
+
+    func queueDrained(isDrained: @escaping @Sendable () -> Bool) {
+        guard let channel = lock.withLock({ self.channel }) else {
+            return
+        }
+        channel.eventLoop.execute { [weak self] in
+            guard let self else {
+                return
+            }
+            guard isDrained() else {
+                return
+            }
+            lock.withLock {
+                self.isQueueDrained = true
+            }
+            readIfReady()
+        }
+    }
+
+    func closeInput() {
+        lock.withLock {
+            inputClosed = true
+        }
+    }
+
+    func stop() {
+        lock.withLock {
+            active = false
+            channel = nil
+        }
+    }
+
+    private func readIfReady() {
+        let channelToRead = lock.withLock { () -> (any Channel)? in
+            guard active, readBatchComplete, isQueueDrained, !inputClosed else {
+                return nil
+            }
+            readBatchComplete = false
+            return channel
+        }
+        channelToRead?.read()
+    }
 }
 
 private final class OrderedDockerInputQueue: @unchecked Sendable {
@@ -2351,6 +2489,7 @@ private final class OrderedDockerInputQueue: @unchecked Sendable {
     private let maximumChunkBytes: Int
     private var pending = Deque<Data>()
     private var pendingBytes = 0
+    private var inFlightBytes = 0
     private var finished = false
     private var shouldCloseInput = false
 
@@ -2398,9 +2537,21 @@ private final class OrderedDockerInputQueue: @unchecked Sendable {
             guard let data = pending.popFirst() else {
                 return nil
             }
-            pendingBytes -= data.count
+            inFlightBytes += data.count
             return data
         }
+    }
+
+    func complete(_ bytes: Int) {
+        lock.withLock {
+            precondition(bytes <= inFlightBytes)
+            inFlightBytes -= bytes
+            pendingBytes -= bytes
+        }
+    }
+
+    var isDrained: Bool {
+        lock.withLock { pending.isEmpty && pendingBytes == 0 }
     }
 
     func finish(closeInput: Bool) {
@@ -2418,7 +2569,7 @@ private final class OrderedDockerInputQueue: @unchecked Sendable {
             finished = true
             shouldCloseInput = false
             pending.removeAll(keepingCapacity: false)
-            pendingBytes = 0
+            pendingBytes = inFlightBytes
         }
     }
 }
