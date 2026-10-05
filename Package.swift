@@ -175,7 +175,9 @@ let package = Package(
             dependencies: [
                 "ContainerEngineWire",
                 "ContainerUnixHTTPServer",
-                .product(name: "Logging", package: "swift-log")
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOEmbedded", package: "swift-nio")
             ]
         ),
         .testTarget(

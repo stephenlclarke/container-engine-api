@@ -74,4 +74,4 @@ On Xcode 26.6 hosted runners, CI builds tests once with `swift build --build-tes
 
 See [`docs/LOGGING_API.md`](docs/LOGGING_API.md) for the logging adapter contract and [`docs/EXTRACTION.md`](docs/EXTRACTION.md) for source provenance, extraction mechanics, exclusions, and remaining gaps.
 
-Raw upgraded exec streams pause socket reads while queued stdin is being written to a slow session, then resume after the queue drains. The 16 MiB pending-input limit includes the in-flight write and remains enforced.
+Raw upgraded exec streams pause socket reads while queued stdin is being written to a slow session, then resume after the queue drains. Startup also reconciles early input drained before the read callback is installed. The 16 MiB pending-input limit includes the in-flight write and remains enforced.

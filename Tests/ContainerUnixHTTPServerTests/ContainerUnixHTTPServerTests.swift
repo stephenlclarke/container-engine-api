@@ -134,6 +134,47 @@ struct ContainerUnixHTTPServerTests {
     }
 
     @Test
+    func `raw upgrade resumes later input after an early prefix drains`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = EchoHijackSession()
+        let server = fixture.server(responder: FixtureResponder(session: session))
+        try await server.start()
+
+        do {
+            let client = try UnixSocketClient(path: fixture.socketPath)
+            defer { client.close() }
+            var earlyRequest = Data(
+                (
+                    "POST /hijack HTTP/1.1\r\n"
+                        + "Host: localhost\r\n"
+                        + "Connection: Upgrade\r\n"
+                        + "Upgrade: tcp\r\n"
+                        + "Content-Length: 0\r\n\r\n"
+                ).utf8
+            )
+            let earlyPrefix = Data([0x11, 0x22, 0x33])
+            earlyRequest.append(earlyPrefix)
+            try client.write(earlyRequest)
+
+            let response = try client.readUntil(Data("\r\n\r\n".utf8))
+            #expect(String(decoding: response, as: UTF8.self).contains("101 Switching Protocols"))
+            try await session.waitForInput(earlyPrefix)
+
+            let laterBytes = Data([0x44, 0x55, 0x66])
+            try client.write(laterBytes)
+            try await session.waitForInput(earlyPrefix + laterBytes)
+            try client.closeWrite()
+            try await session.waitForInputClose()
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+
+        try await server.shutdown()
+    }
+
+    @Test
     func `server performs a binary websocket handshake and forwards unframed bytes`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
@@ -1688,6 +1729,26 @@ private final class EchoHijackSession: DockerHijackSession, @unchecked Sendable 
 
     func wait() async -> Int32 {
         await completionTask.value
+    }
+
+    func waitForInput(_ expected: Data) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while input != expected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard input == expected else {
+            throw FixtureError("session did not receive the expected input bytes")
+        }
+    }
+
+    func waitForInputClose() async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !inputClosed, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard inputClosed else {
+            throw FixtureError("session did not observe input EOF")
+        }
     }
 
     func cancel() {

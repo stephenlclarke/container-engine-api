@@ -1723,7 +1723,9 @@ private final class DockerRawStreamHandler: ChannelInboundHandler, @unchecked Se
                 self?.inputPump.isDrained ?? false
             }
         }
-        inputReadController.start(channel: channel)
+        inputReadController.start(channel: channel) { [weak self] in
+            self?.inputPump.isDrained ?? false
+        }
         outputTask = Task {
             do {
                 for try await frame in session.frames {
@@ -2396,7 +2398,7 @@ private final class DockerInputQueueDrainSignal: @unchecked Sendable {
     }
 }
 
-private final class RawDockerInputReadController: @unchecked Sendable {
+final class RawDockerInputReadController: @unchecked Sendable {
     private let lock = NSLock()
     private weak var channel: (any Channel)?
     private var active = false
@@ -2404,7 +2406,10 @@ private final class RawDockerInputReadController: @unchecked Sendable {
     private var isQueueDrained = true
     private var inputClosed = false
 
-    func start(channel: any Channel) {
+    func start(
+        channel: any Channel,
+        isDrained: @escaping @Sendable () -> Bool
+    ) {
         lock.withLock {
             self.channel = channel
         }
@@ -2413,13 +2418,18 @@ private final class RawDockerInputReadController: @unchecked Sendable {
                 channel.close(promise: nil)
                 return
             }
-            channel.eventLoop.execute {
+            channel.eventLoop.execute { [weak self] in
                 guard let self else {
                     return
                 }
                 self.lock.withLock {
                     self.active = true
                     self.readBatchComplete = true
+                }
+                if isDrained() {
+                    self.lock.withLock {
+                        self.isQueueDrained = true
+                    }
                 }
                 self.readIfReady()
             }
