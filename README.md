@@ -56,7 +56,7 @@ The focused native client boundary can also be tested with `make bazel-client-te
 
 `ContainerUnixHTTPClient.openDuplex(_:)` adds the Engine's `Connection: Upgrade` / `Upgrade: tcp` headers and requires a valid HTTP 101 reply. The returned connection preserves raw bytes, including Docker multiplex framing, and supports simultaneous `read()` and `write(_:)`. Reads are bounded to 64 KiB; `finishInput()` delivers stdin EOF while retaining output, and `close()` is idempotent and safe during I/O. Callers must close the connection when finished and decode its framing themselves. Cancellation of an active operation interrupts both directions. The original absolute deadline includes the handshake and the entire upgraded session; expiry interrupts I/O, while explicit close or deinitialization releases the owned connection. No Docker executable or VM is used by this transport.
 
-The raw upgraded server pauses socket reads while queued stdin is being written to a slow session, then resumes after the bounded queue drains. The 16 MiB pending-input limit remains enforced.
+The raw upgraded server pauses socket reads while queued stdin is being written to a slow session, then resumes after the bounded queue drains. It also reconciles the queue state when raw-stream setup completes, so an early input prefix cannot strand later stdin. The 16 MiB pending-input limit remains enforced.
 
 Streaming callbacks receive successful response bodies only. HTTP error documents are captured separately, capped at 64 KiB (or a tighter caller limit), and reported as errors without contaminating event or log output.
 

@@ -7,6 +7,7 @@ The raw upgraded Engine stream continued reading stdin while the runtime session
 ## Acceptance criteria
 
 - Pause raw socket reads until the session has consumed the current bounded input batch, then resume reading.
+- Reconcile queue state when takeover finishes so input received before callback/channel setup cannot strand later input.
 - Preserve input byte order, stdin half-close ordering, cancellation behavior and the existing 16 MiB pending-input limit.
 - Exercise an upload larger than 16 MiB against a deliberately slow session through the actual Unix HTTP server.
 

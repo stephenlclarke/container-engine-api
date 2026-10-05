@@ -17,6 +17,8 @@
 import ContainerEngineWire
 @testable import ContainerUnixHTTPServer
 import Foundation
+import NIOCore
+import NIOEmbedded
 import Testing
 
 @Test
@@ -72,6 +74,38 @@ func `Docker input pump cancels instead of dropping bytes past its bound`() asyn
     #expect(session.cancelled)
     pump.cancel()
     await pump.wait()
+}
+
+@Test
+func `raw input controller reconciles early input before requesting later reads`() throws {
+    let channel = EmbeddedChannel()
+    let readCounter = ReadRequestCountingHandler()
+    try channel.pipeline.addHandler(readCounter).wait()
+    let controller = RawDockerInputReadController()
+
+    controller.inputReceived()
+    controller.inputReadCompleted()
+    controller.queueDrained(isDrained: { true })
+    controller.start(channel: channel, isDrained: { true })
+    channel.embeddedEventLoop.run()
+    #expect(readCounter.readRequests == 1)
+
+    controller.inputReceived()
+    controller.inputReadCompleted()
+    controller.queueDrained(isDrained: { false })
+    channel.embeddedEventLoop.run()
+    #expect(readCounter.readRequests == 1)
+
+    controller.queueDrained(isDrained: { true })
+    channel.embeddedEventLoop.run()
+    #expect(readCounter.readRequests == 2)
+
+    controller.closeInput()
+    controller.inputReceived()
+    controller.inputReadCompleted()
+    #expect(readCounter.readRequests == 2)
+
+    _ = try channel.finish()
 }
 
 private final class RecordingHijackSession: DockerHijackSession, @unchecked Sendable {
@@ -155,5 +189,16 @@ private final class BlockingHijackSession: DockerHijackSession, @unchecked Senda
             didCancel = true
         }
         gateContinuation.finish()
+    }
+}
+
+private final class ReadRequestCountingHandler: ChannelOutboundHandler, @unchecked Sendable {
+    typealias OutboundIn = NIOAny
+
+    private(set) var readRequests = 0
+
+    func read(context: ChannelHandlerContext) {
+        readRequests += 1
+        context.read()
     }
 }
