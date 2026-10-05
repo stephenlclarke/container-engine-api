@@ -2413,7 +2413,7 @@ final class RawDockerInputReadController: @unchecked Sendable {
                 channel.close(promise: nil)
                 return
             }
-            channel.eventLoop.execute {
+            channel.eventLoop.execute { [weak self] in
                 guard let self else {
                     return
                 }
