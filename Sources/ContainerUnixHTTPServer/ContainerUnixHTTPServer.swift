@@ -2417,16 +2417,16 @@ final class RawDockerInputReadController: @unchecked Sendable {
                 guard let self else {
                     return
                 }
-                self.lock.withLock {
+                lock.withLock {
                     self.active = true
                     self.readBatchComplete = true
                 }
                 if isDrained() {
-                    self.lock.withLock {
+                    lock.withLock {
                         self.isQueueDrained = true
                     }
                 }
-                self.readIfReady()
+                readIfReady()
             }
         }
     }
