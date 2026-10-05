@@ -4,7 +4,7 @@ Route Docker-compatible Engine HTTP requests to one explicitly selected runtime 
 
 ## Overview
 
-The container Engine package separates wire transport, route matching, provider identity, provider sessions, logging projections, and Unix HTTP serving into independent Swift libraries. `ContainerEngineGateway` is the fail-closed dispatch boundary: it accepts only routes declared by the generated Engine API ledger and advertised by the selected provider.
+The container Engine package separates wire transport, route matching, provider identity, provider sessions, logging projections, and Unix HTTP serving into independent Swift libraries. `ContainerEngineGateway` is the fail-closed dispatch boundary: Docker routes require the generated Engine API ledger and advertisement by the selected provider. The separate native `engine.control.recovery` capability, version 1, admits only `GET` and `POST /_container-family/recovery`; it is not a Docker compatibility claim. Native controls retain method/API-version validation and the same authenticated private provider session. Unsupported capability versions and unknown control routes remain unavailable; the gateway never substitutes its own quiescence or cleanup result for the provider's.
 
 Use the modules in this package to build a runtime provider without importing Compose policy, Dev Container policy, or Apple Container implementation types into the Engine transport layer.
 

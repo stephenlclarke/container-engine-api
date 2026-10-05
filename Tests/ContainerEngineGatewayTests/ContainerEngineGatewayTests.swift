@@ -10,6 +10,42 @@ import Foundation
 import Testing
 
 @Test
+func `recovery control requires the exact supported provider capability`() async throws {
+    for (version, status, supported) in [
+        (1, ContainerEngineCapabilityStatus.native, true),
+        (1, .emulated, true),
+        (1, .unavailable, false),
+        (2, .native, false)
+    ] {
+        let fingerprint = try ContainerEngineProviderFingerprint(
+            declaration: ContainerEngineProviderDeclaration(
+                profile: .stock, kind: .devcontainerStock, implementationVersion: "1.0.0",
+                runtimeRevisions: ["runtime": "test"], stateSchemaVersion: 1,
+                capabilities: [ContainerEngineProviderCapability(
+                    identifier: "engine.control.recovery", version: UInt32(version), status: status
+                )]
+            ), stateRootUUID: UUID()
+        )
+        let gateway = try ContainerEngineGatewayResponder(
+            providerSocketPath: "/tmp/missing-provider.sock", fingerprint: fingerprint
+        )
+        for target in ["/_container-family/recovery", "/v1.53/_container-family/recovery"] {
+            for method in [DockerHTTPMethod.get, .post] {
+                let response = await gateway.respond(to: .init(method: method, target: target))
+                // An admitted route reaches the unavailable test provider, not 404.
+                #expect(response.status == (supported ? 503 : 404))
+            }
+        }
+        #expect(await gateway.respond(to: .init(method: .delete, target: "/_container-family/recovery")).status == 404)
+        #expect(await gateway.respond(to: .init(method: .get, target: "/_container-family/unknown")).status == 404)
+        if supported {
+            #expect(await gateway.respond(to: .init(method: .get, target: "/v1.99/_container-family/recovery"))
+                .status == 400)
+        }
+    }
+}
+
+@Test
 func `gateway advertises only declared provider routes`() async throws {
     let fingerprint = try ContainerEngineProviderFingerprint(
         declaration: ContainerEngineProviderDeclaration(
@@ -67,6 +103,7 @@ func `gateway advertises only declared provider routes`() async throws {
         to: DockerHTTPRequest(method: .get, target: "/not-an-engine-route")
     )
     #expect(unknown.status == 404)
+    #expect(await gateway.respond(to: .init(method: .get, target: "/_container-family/recovery")).status == 404)
 
     let ping = await gateway.respond(
         to: DockerHTTPRequest(method: .get, target: "/_ping")

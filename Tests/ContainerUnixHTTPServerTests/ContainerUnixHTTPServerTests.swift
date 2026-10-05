@@ -97,6 +97,93 @@ struct ContainerUnixHTTPServerTests {
     }
 
     @Test
+    func `raw exec stdin backpressures a slow session without losing large uploads`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = SlowInputHijackSession()
+        let server = fixture.server(responder: FixtureResponder(session: session))
+        try await server.start()
+
+        do {
+            let client = try UnixSocketClient(path: fixture.socketPath)
+            defer { client.close() }
+            try client.write(
+                "POST /hijack HTTP/1.1\r\n"
+                    + "Host: localhost\r\n"
+                    + "Connection: Upgrade\r\n"
+                    + "Upgrade: tcp\r\n"
+                    + "Content-Length: 0\r\n\r\n"
+            )
+            let response = try client.readUntil(Data("\r\n\r\n".utf8))
+            #expect(String(decoding: response, as: UTF8.self).contains("101 Switching Protocols"))
+
+            let payload = Data(repeating: 0x5A, count: 32 * 1024 * 1024)
+            try client.write(Data(payload.prefix(1)))
+            try await session.waitForFirstWrite()
+
+            let remainingPayload = Data(payload.dropFirst())
+            let accepted = try client.writeUntilBackpressured(remainingPayload)
+            #expect(accepted > 0)
+            #expect(accepted < remainingPayload.count)
+
+            await session.releaseInput()
+            try client.setBlocking()
+            try client.write(Data(remainingPayload.dropFirst(accepted)))
+            try client.closeWrite()
+            try await session.waitForInputClose()
+            #expect(session.input == payload)
+            #expect(!session.cancelled)
+        } catch {
+            await session.releaseInput()
+            try? await server.shutdown()
+            throw error
+        }
+
+        try await server.shutdown()
+    }
+
+    @Test
+    func `raw upgrade resumes later input after an early prefix drains`() async throws {
+        let fixture = try ServerFixture()
+        defer { fixture.cleanup() }
+        let session = EchoHijackSession()
+        let server = fixture.server(responder: FixtureResponder(session: session))
+        try await server.start()
+
+        do {
+            let client = try UnixSocketClient(path: fixture.socketPath)
+            defer { client.close() }
+            var earlyRequest = Data(
+                (
+                    "POST /hijack HTTP/1.1\r\n"
+                        + "Host: localhost\r\n"
+                        + "Connection: Upgrade\r\n"
+                        + "Upgrade: tcp\r\n"
+                        + "Content-Length: 0\r\n\r\n"
+                ).utf8
+            )
+            let earlyPrefix = Data([0x11, 0x22, 0x33])
+            earlyRequest.append(earlyPrefix)
+            try client.write(earlyRequest)
+
+            let response = try client.readUntil(Data("\r\n\r\n".utf8))
+            #expect(String(decoding: response, as: UTF8.self).contains("101 Switching Protocols"))
+            try await session.waitForInput(earlyPrefix)
+
+            let laterBytes = Data([0x44, 0x55, 0x66])
+            try client.write(laterBytes)
+            try await session.waitForInput(earlyPrefix + laterBytes)
+            try client.closeWrite()
+            try await session.waitForInputClose()
+        } catch {
+            try? await server.shutdown()
+            throw error
+        }
+
+        try await server.shutdown()
+    }
+
+    @Test
     func `server performs a binary websocket handshake and forwards unframed bytes`() async throws {
         let fixture = try ServerFixture()
         defer { fixture.cleanup() }
@@ -1381,6 +1468,64 @@ private final class UnixSocketClient {
         }
     }
 
+    func writeUntilBackpressured(_ data: Data) throws -> Int {
+        let originalFlags = fcntl(descriptor, F_GETFL)
+        guard originalFlags >= 0,
+              fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0
+        else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return try data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else {
+                return 0
+            }
+            var written = 0
+            let deadline = DispatchTime.now().uptimeNanoseconds + 5_000_000_000
+            while written < bytes.count {
+                guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                    throw FixtureError("upload did not reach sustained socket backpressure")
+                }
+                let result = Darwin.write(
+                    descriptor,
+                    baseAddress.advanced(by: written),
+                    bytes.count - written
+                )
+                if result > 0 {
+                    written += result
+                    continue
+                }
+                if result < 0, errno == EINTR {
+                    continue
+                }
+                if result < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                    var writable = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+                    let ready = Darwin.poll(&writable, 1, 200)
+                    if ready == 0 {
+                        return written
+                    }
+                    if ready < 0, errno == EINTR {
+                        continue
+                    }
+                    guard ready > 0,
+                          writable.revents & Int16(POLLNVAL) == 0
+                    else {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    continue
+                }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return written
+        }
+    }
+
+    func setBlocking() throws {
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
     func readUntil(
         _ marker: Data,
         timeoutMilliseconds: Int32 = 1000
@@ -1429,6 +1574,108 @@ private final class UnixSocketClient {
     func closeWrite() throws {
         guard Darwin.shutdown(descriptor, SHUT_WR) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+}
+
+private actor InputWriteGate {
+    private var open = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !open else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        open = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
+}
+
+private final class SlowInputHijackSession: DockerHijackSession, @unchecked Sendable {
+    let frames: AsyncThrowingStream<DockerStreamFrame, any Error>
+    private let frameContinuation: AsyncThrowingStream<DockerStreamFrame, any Error>.Continuation
+    private let firstWrite: AsyncStream<Void>
+    private let firstWriteContinuation: AsyncStream<Void>.Continuation
+    private let inputClosed: AsyncStream<Void>
+    private let inputClosedContinuation: AsyncStream<Void>.Continuation
+    private let gate = InputWriteGate()
+    private let lock = NSLock()
+    private var bytes = Data()
+    private var didCancel = false
+
+    init() {
+        (frames, frameContinuation) = AsyncThrowingStream.makeStream()
+        (firstWrite, firstWriteContinuation) = AsyncStream.makeStream()
+        (inputClosed, inputClosedContinuation) = AsyncStream.makeStream()
+    }
+
+    var input: Data {
+        lock.withLock { bytes }
+    }
+
+    var cancelled: Bool {
+        lock.withLock { didCancel }
+    }
+
+    func write(_ data: Data) async throws {
+        firstWriteContinuation.yield(())
+        await gate.wait()
+        lock.withLock { bytes.append(data) }
+    }
+
+    func closeStandardInput() {
+        inputClosedContinuation.yield(())
+        frameContinuation.finish()
+    }
+
+    func wait() async throws -> Int32 {
+        0
+    }
+
+    func cancel() {
+        lock.withLock { didCancel = true }
+        frameContinuation.finish()
+    }
+
+    func waitForFirstWrite() async throws {
+        try await waitForSignal(firstWrite, diagnostic: "session did not receive initial input")
+    }
+
+    func waitForInputClose() async throws {
+        try await waitForSignal(inputClosed, diagnostic: "session did not observe input EOF")
+    }
+
+    func releaseInput() async {
+        await gate.release()
+    }
+
+    private func waitForSignal(
+        _ stream: AsyncStream<Void>,
+        diagnostic: String
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                guard await iterator.next() != nil else {
+                    throw FixtureError(diagnostic)
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(5))
+                throw FixtureError(diagnostic)
+            }
+            _ = try await group.next()
+            group.cancelAll()
         }
     }
 }
@@ -1491,6 +1738,26 @@ private final class EchoHijackSession: DockerHijackSession, @unchecked Sendable 
 
     func wait() async -> Int32 {
         await completionTask.value
+    }
+
+    func waitForInput(_ expected: Data) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while input != expected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard input == expected else {
+            throw FixtureError("session did not receive the expected input bytes")
+        }
+    }
+
+    func waitForInputClose() async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !inputClosed, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard inputClosed else {
+            throw FixtureError("session did not observe input EOF")
+        }
     }
 
     func cancel() {

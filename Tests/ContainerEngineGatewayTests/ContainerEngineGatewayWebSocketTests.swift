@@ -14,6 +14,41 @@ import Logging
 import Testing
 
 @Test
+func `public gateway relays recovery requests through the selected provider`() async throws {
+    try await withPublicGateway(
+        capabilityIdentifier: "engine.control.recovery", capabilityStatus: .native
+    ) { publicSocket in
+        for (method, path, body) in [
+            ("GET", "/_container-family/recovery", ""),
+            ("POST", "/v1.53/_container-family/recovery", #"{"epoch":"exact-epoch","owner":"exact-owner"}"#)
+        ] {
+            let client = try GatewayUnixSocketClient(path: publicSocket)
+            defer { client.close() }
+            try client.write("\(method) \(path) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                + "Content-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n\r\n" + body)
+            let response = try client.readUntil(Data("recovery-response-end".utf8))
+            let text = try #require(String(data: response, encoding: .utf8))
+            #expect(text.contains("200 OK"))
+            #expect(text.hasSuffix("\(method)\n\(path)\n\(body)\nrecovery-response-end"))
+        }
+    }
+}
+
+@Test
+func `recovery refuses a replacement provider identity`() async throws {
+    try await withPublicGateway(
+        capabilityIdentifier: "engine.control.recovery", capabilityStatus: .native,
+        matchingProvider: false
+    ) { publicSocket in
+        let client = try GatewayUnixSocketClient(path: publicSocket)
+        defer { client.close() }
+        try client.write("GET /_container-family/recovery HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        let response = try client.readUntil(Data("selected Engine provider unavailable".utf8))
+        #expect(try #require(String(data: response, encoding: .utf8)).contains("503 Service Unavailable"))
+    }
+}
+
+@Test
 func `public gateway owns Docker ping negotiation`() async throws {
     try await withPublicGateway(
         capabilityIdentifier: "engine.route.ContainerLogs",
@@ -169,9 +204,12 @@ func `public gateway preserves four MiB raw duplex input`() async throws {
 private func withPublicGateway(
     capabilityIdentifier: String,
     capabilityStatus: ContainerEngineCapabilityStatus,
+    matchingProvider: Bool = true,
     operation: (String) async throws -> Void
 ) async throws {
-    let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+    let environment = ProcessInfo.processInfo.environment
+    let parent = environment["TEST_TMPDIR"] ?? environment["TMPDIR"] ?? NSTemporaryDirectory()
+    let root = URL(fileURLWithPath: parent, isDirectory: true)
         .appendingPathComponent(
             "ceg-\(UUID().uuidString.prefix(8))",
             isDirectory: true
@@ -205,7 +243,7 @@ private func withPublicGateway(
         responder: GatewayStreamingResponder(),
         socketPath: providerSocket,
         declaration: fingerprint.declaration,
-        stateRootUUID: fingerprint.stateRootUUID
+        stateRootUUID: matchingProvider ? fingerprint.stateRootUUID : UUID()
     )
     try provider.start()
     let publicServer = try ContainerUnixHTTPServer(
@@ -233,6 +271,13 @@ private func withPublicGateway(
 
 private struct GatewayStreamingResponder: DockerHTTPResponder {
     func respond(to request: DockerHTTPRequest) async -> DockerHTTPResponse {
+        if request.target == "/_container-family/recovery" || request.target == "/v1.53/_container-family/recovery" {
+            guard let body = String(data: request.body, encoding: .utf8) else {
+                return .text("invalid recovery fixture input", status: 400)
+            }
+            return .text("\(request.method.rawValue)\n\(request.target)\n"
+                + body + "\nrecovery-response-end")
+        }
         if
             request.method == .post,
             request.target == "/v1.53/volumes/create"
